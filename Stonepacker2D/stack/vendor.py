@@ -8,10 +8,12 @@ from sklearn.preprocessing import StandardScaler,RobustScaler
 from sklearn.cluster import KMeans, SpectralClustering, DBSCAN, MeanShift, estimate_bandwidth,AgglomerativeClustering
 import cv2
 import matplotlib.pyplot as plt
+import scienceplots
+import sys
 import random
 import pandas as pd
 np.random.seed(1307)
-plt.style.use('science')
+plt.style.use(['science', 'no-latex'] if sys.platform == 'win32' else 'science')
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
 tab20_cm = cm.get_cmap('tab20')

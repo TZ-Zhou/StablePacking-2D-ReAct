@@ -22,19 +22,21 @@ classifiers = [
 # Environment settings
 requires-python = ">=3.8"
 dependencies = [
-	"scikit-image",
-	"opencv-python",
-	"matplotlib",
-	"mosek",
+    "scikit-image",
+    "opencv-python",
+    "matplotlib",
+    "SciencePlots==2.1.1",
+    "mosek",
     "geometry3d",
-    "pickle5",
+    "pickle5; python_version < '3.8'",
     "pandas",
     "networkx",
-    "pyMetaheuristic",
-    "numpy==1.21.6",
+    "pyMetaheuristic==1.9.5",
+    # Windows CPython 3.10 wheels require a newer NumPy ABI; see baseline/REPORT.md.
+    "numpy==1.23.5; sys_platform == 'win32' and python_version == '3.10'",
+    "numpy==1.21.6; sys_platform != 'win32' or python_version != '3.10'",
     "scikit-learn"
 ]
-
 
 [project.optional-dependencies]
 dev = [
