@@ -143,6 +143,17 @@ class MetricHelpers(unittest.TestCase):
             self.assertEqual(metrics.mechanism_lambdas(tmp), {'left': 0.3225, 'right': 0.5})
 
 
+class OrderAgreement(unittest.TestCase):
+    def test_agreement_and_prefix(self):
+        import pandas as pd
+        import order_agreement
+        choice = pd.DataFrame({'a': [1, 2, 3, 4], 'b': [1, 2, 3, 5], 'c': [9, 9, 3, 4]})
+        a = order_agreement.agreement(choice)
+        self.assertEqual((a.at['a', 'b'], a.at['a', 'c'], a.at['b', 'c'], a.at['a', 'a']), (0.75, 0.5, 0.25, 1.0))
+        self.assertEqual([order_agreement.shared_prefix('3-0-2-1-4', o) for o in ('0-3-2-1-4', '3-0-1-2-4', '3-0-2-4-1')],
+                         [0, 2, 3])
+
+
 @unittest.skipUnless(THANGAVELU.exists() and PR_RIGHT.exists(), 'existing run directories not present')
 class ExistingRuns(unittest.TestCase):
     def test_checks_pass_on_recorded_walls(self):
