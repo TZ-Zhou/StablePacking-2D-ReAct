@@ -150,6 +150,7 @@ def analyze_commits(commits, decisions):
 
         live = action(lambda d: d['live'])
         actions = [action(lambda d, k=k: d['picks'][k]) for k in range(len(ALL_ORDERS))]
+        paper = actions[ALL_ORDERS.index(PAPER_ORDER)]
         real = [a for a in actions if a is not None]
         recorded = (c.get('chosen_side'), c.get('stone_id'))
         rows.append({
@@ -159,6 +160,14 @@ def analyze_commits(commits, decisions):
             'n_distinct_cluster': len({a[3] for a in real}), 'n_distinct_side': len({a[0] for a in real}),
             'orders_without_action': len(actions) - len(real),
             'orders_same_placement_as_live': sum(live is not None and a is not None and a[1] == live[1] for a in actions),
+            'orders_same_stone_as_live': sum(live is not None and a is not None and a[2] == live[2] for a in actions),
+            'orders_same_cluster_as_live': sum(live is not None and a is not None and a[3] == live[3] for a in actions),
+            'orders_same_placement_as_paper': sum(paper is not None and a is not None and a[1] == paper[1] for a in actions),
+            # both None (no order can place anything) counts as the same action
+            **{f'paper_same_{name}_as_live': (paper is None and live is None) or
+               (paper is not None and live is not None and paper[k] == live[k])
+               for name, k in (('placement', 1), ('stone', 2), ('cluster', 3))},
+            'live_side': live[0] if live else '', 'paper_side': paper[0] if paper else '',
         })
     return rows
 
@@ -210,6 +219,11 @@ def summarize_steps(steps):
                          'distinct_cluster_histogram': hist('n_distinct_cluster', rs),
                          'attempts_with_more_than_one_placement': sum(r['n_distinct_placement'] > 1 for r in rs),
                          'attempts_with_more_than_one_stone': sum(r['n_distinct_stone'] > 1 for r in rs),
+                         'attempts_with_more_than_one_cluster': sum(r['n_distinct_cluster'] > 1 for r in rs),
+                         'paper_differs_from_live_placement': sum(not r['paper_same_placement_as_live'] for r in rs),
+                         'paper_differs_from_live_stone': sum(not r['paper_same_stone_as_live'] for r in rs),
+                         'paper_differs_from_live_cluster': sum(not r['paper_same_cluster_as_live'] for r in rs),
+                         'mean_orders_same_placement_as_paper': float(np.mean([r['orders_same_placement_as_paper'] for r in rs])),
                          'mean_orders_same_placement_as_live': float(np.mean([r['orders_same_placement_as_live'] for r in rs]))}
                for outcome, rs in by_phase.items()}}
 
