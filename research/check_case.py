@@ -5,6 +5,8 @@ Usage: python -B research/check_case.py <run dir> [--compare <other run dir>]
 check_run: trace replay, commits vs chosen candidates, placed rocks in base.pkl vs recorded
 world poses (unstabilized rocks must match pixel for pixel), right-side rotations against the
 same stone's left-side candidates. compare_runs: identical outputs, base.pkl and trace.
+differing_files: every file of the result directories byte for byte (time.txt holds timings and
+the PDFs embed creation dates, so those are expected to differ between identical runs).
 """
 import argparse
 import json
@@ -115,6 +117,20 @@ def compare_runs(a, b):
     return diffs
 
 
+def differing_files(a, b):
+    """Paths relative to the result directory present in only one run or with different bytes."""
+    ra, rb = result_dirs(a), result_dirs(b)
+    if len(ra) != len(rb):
+        return [f'{len(ra)} vs {len(rb)} result directories']
+    out = []
+    for x, y in zip(ra, rb):
+        fx = {p.relative_to(x).as_posix(): p for p in x.rglob('*') if p.is_file()}
+        fy = {p.relative_to(y).as_posix(): p for p in y.rglob('*') if p.is_file()}
+        out += sorted(set(fx) ^ set(fy))
+        out += sorted(k for k in set(fx) & set(fy) if fx[k].read_bytes() != fy[k].read_bytes())
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('run', type=Path)
@@ -122,7 +138,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     report = check_run(args.run)
     if args.compare:
-        report['differences_to'] = {'run': str(args.compare), 'differences': compare_runs(args.run, args.compare)}
+        report['differences_to'] = {'run': str(args.compare), 'differences': compare_runs(args.run, args.compare),
+                                    'differing_files': differing_files(args.run, args.compare)}
     print(json.dumps(report, indent=2))
     return 0 if report['ok'] and not report.get('differences_to', {}).get('differences') else 1
 

@@ -252,15 +252,21 @@ def get_selection_weights():
 # Hierarchical filtering policy, see Stonepacker2D/stack/selection.py.
 # Default reproduces the author's cascade; order=None means the policy's default order.
 FILTER_POLICY = {'policy': 'code_original', 'order': None, 'tol': 1e-9}
+# Counterfactual branches: {construction step: order} used instead of FILTER_POLICY's order at
+# those steps only (every sampling trial of the step); empty = no switch.
+FILTER_SWITCH = {}
 # Run id when candidate score matrices are traced to <dump dir>/trace/, None = off.
 TRACE_RUN_ID = None
 
-def set_filter_policy(policy='code_original', order=None, tol=1e-9):
-    global FILTER_POLICY
+def set_filter_policy(policy='code_original', order=None, tol=1e-9, switch=None):
+    global FILTER_POLICY, FILTER_SWITCH
     FILTER_POLICY = {'policy': policy, 'order': None if order is None else tuple(order), 'tol': tol}
+    FILTER_SWITCH = {int(step): tuple(o) for step, o in (switch or {}).items()}
 
-def get_filter_policy():
+def get_filter_policy(step=None):
     global FILTER_POLICY
+    if step in FILTER_SWITCH:
+        return {**FILTER_POLICY, 'order': FILTER_SWITCH[step]}
     return FILTER_POLICY
 
 def set_trace(run_id):

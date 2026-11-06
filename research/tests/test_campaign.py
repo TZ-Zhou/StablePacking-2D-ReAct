@@ -36,6 +36,76 @@ class SeedStaging(unittest.TestCase):
             self.assertEqual(changed, ['-    seed_everything()', '+    seed_everything(1234)'], case)
 
 
+class DifferingFiles(unittest.TestCase):
+    def test_lists_changed_and_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for run, extra in (('a', b'1'), ('b', b'2')):
+                r = Path(tmp) / run / 'result_x_wall0'
+                (r / 'img').mkdir(parents=True)
+                (r / 'decisions.txt').write_bytes(b'same')
+                (r / 'img' / 'time.txt').write_bytes(extra)
+            (Path(tmp) / 'b' / 'result_x_wall0' / 'only_b.txt').write_bytes(b'')
+            self.assertEqual(check_case.differing_files(Path(tmp) / 'a', Path(tmp) / 'b'), ['only_b.txt', 'img/time.txt'])
+
+
+class BranchRunner(unittest.TestCase):
+    def test_stops_at_first_failure_and_refuses_changed_code(self):
+        import counterfactual
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_case, 'RUNS', Path(tmp)), \
+                mock.patch.object(counterfactual, 'PLANS', Path(tmp) / 'branches'):
+            branch = {'name': 'b1', 'run': 'orig', 'seed': 7, 'target': 13, 'step': 10, 'kind': 'target',
+                      'pose': [13, 0, 1, 2], 'order': '0-1-2-3-4', 'recorded_order': '3-0-2-1-4'}
+            plan = {'id': 'p', 'case': 'thangavelu-noise80', 'timeout_seconds': 2400, 'code_sha256': run_case.code_fingerprint(),
+                    'branches': [branch, {**branch, 'name': 'b2'}]}
+            (Path(tmp) / 'branches' / 'p').mkdir(parents=True)
+            calls = []
+
+            def launch(argv):
+                calls.append(argv)
+                out = run_case.RUNS / argv[1]
+                out.mkdir(parents=True)
+                (out / 'receipt.json').write_text(json.dumps({'status': 'TIMEOUT'}))
+            self.assertFalse(counterfactual.run_plan(plan, launch=launch))
+            self.assertEqual(len(calls), 1)                              # stopped after the failed wall
+            self.assertEqual(calls[0][calls[0].index('--switch') + 1], '10=0,1,2,3,4')
+            self.assertEqual(calls[0][calls[0].index('--order') + 1], '3,0,2,1,4')
+            calls.clear()
+            self.assertFalse(counterfactual.run_plan(plan, launch=launch))  # b1 kept, b2 runs (and fails) next
+            self.assertEqual([c[1] for c in calls], ['branches/p/b2'])
+            with self.assertRaises(RuntimeError):
+                counterfactual.run_plan({**plan, 'code_sha256': {}}, launch=launch)
+
+
+class OrderSwitch(unittest.TestCase):
+    def tearDown(self):
+        from Stonepacker2D.utils import constant
+        constant.set_filter_policy()
+
+    def test_switch_applies_only_at_its_step(self):
+        from Stonepacker2D.utils import constant
+        constant.set_filter_policy('paper', (3, 0, 2, 1, 4), 1e-9, switch={'14': [2, 4, 3, 1, 0]})
+        base = constant.get_filter_policy()
+        self.assertEqual(constant.get_filter_policy(14), {'policy': 'paper', 'order': (2, 4, 3, 1, 0), 'tol': 1e-9})
+        self.assertIs(constant.get_filter_policy(13), base)
+        self.assertIs(constant.get_filter_policy(None), base)
+        constant.set_filter_policy('paper', (3, 0, 2, 1, 4))            # no switch: every step the same object
+        self.assertIs(constant.get_filter_policy(14), constant.get_filter_policy())
+
+    def test_parse_and_stage(self):
+        self.assertEqual(run_case.parse_switch(['14=2,4,3,1,0', '20=0,1,2,3,4']), {14: (2, 4, 3, 1, 0), 20: (0, 1, 2, 3, 4)})
+        for bad in (['14=2,4,3,1,1'], ['14=2,4,3,1,0', '14=0,1,2,3,4']):
+            with self.assertRaises(ValueError):
+                run_case.parse_switch(bad)
+        source = (REPO / run_case.CASES['thangavelu-noise80'][0]).read_text(encoding='utf-8')
+        policy = {'policy': 'paper', 'order': (3, 0, 2, 1, 4), 'tol': 1e-9}
+        plain = run_case.stage(source, {'filter': policy, 'run_id': 'x'}, seed=5)
+        branch = run_case.stage(source, {'filter': {**policy, 'switch': {14: (2, 4, 3, 1, 0)}}, 'run_id': 'x'}, seed=5)
+        changed = [l for l in difflib.unified_diff(plain.splitlines(), branch.splitlines(), lineterm='', n=0)
+                   if l[:1] in '+-' and not l.startswith(('+++', '---'))]
+        self.assertEqual(len(changed), 2)
+        self.assertIn("'switch': {14: (2, 4, 3, 1, 0)}", changed[1])
+
+
 def registered(**kw):
     args = dict(campaign_id='c', case='thangavelu-noise80', arm_texts=['code_original', 'paper=3,0,2,1,4',
                 'alt=2,4,3,1,0', 'random'], n_seeds=3, master_seed=20261106, timeout=1200)
@@ -244,6 +314,30 @@ class FailureOnRecordedWall(unittest.TestCase):
         self.assertEqual((a.outcome == 'placed').sum(), 17)
         self.assertEqual(set(s[(s.stone == 13) & (a.set_index('event').loc[s.event, 'outcome'].to_numpy() == 'placed')]
                              .eliminated_by) - {'LLC', 'NHR', 'IWR', 'final_argmax'}, set())
+
+
+FAILED_PAPER_2 = FAILED_PAPER.parent / 'seed184947496'
+
+
+@unittest.skipUnless(FAILED_PAPER_2.exists(), 'existing run directories not present')
+class CounterfactualPlanning(unittest.TestCase):
+    def test_orders_that_pick_the_target_and_branch_check(self):
+        import counterfactual
+        result = check_case.result_dirs(FAILED_PAPER_2)[0]
+        options = counterfactual.step_options(result, {13})
+        recorded = options[options.order == options.recorded_order]
+        self.assertEqual(len(options), 120 * len(recorded))
+        self.assertTrue(recorded.same_as_recorded.all())
+        s = counterfactual.summarize(options).set_index('step')
+        self.assertEqual(s.n_picks_target[s.n_picks_target > 0].to_dict(), {10: 5})
+        self.assertEqual((s.n_picks_target + s.n_neutral + s.n_control == 119).all(), True)
+        plan = counterfactual.make_plan('p', [(str(FAILED_PAPER_2.relative_to(run_case.RUNS)), 184947496, 13)], 2400)
+        got = [(b['kind'], b['step'], b['pose'], b['order']) for b in plan['branches']]
+        self.assertEqual(got, [('target', 10, [13, 180, 204, 58], '3-2-0-1-4'), ('control', 10, [19, 0, 207, 57], '0-3-1-4-2'),
+                               ('control', 10, [19, 90, 26, 43], '3-2-0-4-1'), ('control', 10, [19, 180, 204, 58], '3-4-0-1-2')])
+        same = counterfactual.check_branch(result, result, {10: (3, 0, 2, 1, 4)})
+        self.assertEqual((same['ok'], same['identical_prefix_attempts']), (True, 9))
+        self.assertFalse(counterfactual.check_branch(result, result, {10: (0, 1, 2, 3, 4)})['ok'])
 
 
 @unittest.skipUnless(THANGAVELU.exists() and PR_RIGHT.exists(), 'existing run directories not present')

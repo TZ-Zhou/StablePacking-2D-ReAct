@@ -33,7 +33,7 @@ def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distance
     rotation = np.arange(len(all_bricks)) // len(current_bricks) * 90
     width = np.array([b.width for b in all_bricks])
     x_world, rotation_world = to_world(meta['side'], np.array(xs), rotation, width, all_bricks[0]._w)
-    meta = {**meta, 'run_id': get_trace(), 'event': event, 'policy': get_filter_policy(),
+    meta = {**meta, 'run_id': get_trace(), 'event': event, 'policy': get_filter_policy(meta['step']),
             'frame': 'mirrored' if meta['side'] == 'right' else 'world', 'world_width': all_bricks[0]._w,
             'branch': selection.branch, 'stages': [s.tolist() for s in selection.stages],
             'np_rng': {'pos': int(np_state[2]), 'has_gauss': int(np_state[3]), 'cached_gaussian': float(np_state[4])},
@@ -416,7 +416,7 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             filters_matrix_ori = filters_matrix.copy()
             selection_weights = get_selection_weights()
             weights = [selection_weights[name] for name in FEATURE_NAMES]
-            selection = select(filters_matrix_ori, weights, **get_filter_policy())
+            selection = select(filters_matrix_ori, weights, **get_filter_policy(construction_step_i))
             if get_trace() is not None:
                 _side = 'right' if from_right else 'left'
                 _attempt_events[_side] = trace_event({'step': construction_step_i, 'side': _side,

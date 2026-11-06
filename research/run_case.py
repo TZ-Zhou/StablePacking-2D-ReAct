@@ -2,11 +2,14 @@
 
 Usage: python -B research/run_case.py <case> <run name> [--policy code_original|paper]
                                       [--order 3,0,2,1,4] [--tol 1e-9] [--placements N]
+                                      [--seed S] [--switch STEP=a,b,c,d,e ...]
 
 Staging follows baseline/validation/run_original_case.py (copied inputs, Windows main guard,
 shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py);
 those baseline files stay frozen and are only read. Output goes to a new research/runs/<name>.
 With --placements N the case is stopped once decisions.txt has N committed placements.
+--switch makes a one-step counterfactual branch: same seed and code, so every decision before
+STEP should repeat the run without it; verify that with check_case.py --compare.
 """
 import argparse
 import hashlib
@@ -72,6 +75,17 @@ def stage(source, policy, seed=None):
         assert body.startswith(call), body[:40]
         body = f'    seed_everything({int(seed)})\n' + body[len(call):]
     return safe[:boundary] + header + body
+
+
+def parse_switch(texts):
+    switch = {}
+    for text in texts:
+        step, order = text.split('=')
+        order = tuple(int(c) for c in order.split(','))
+        if sorted(order) != [0, 1, 2, 3, 4] or int(step) in switch:
+            raise ValueError(f'bad --switch {text}')
+        switch[int(step)] = order
+    return switch
 
 
 def committed_placements(output):
@@ -185,6 +199,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=1800)
     parser.add_argument('--no-trace', action='store_true', help='control run: logging off, outputs only')
     parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
+    parser.add_argument('--switch', action='append', default=[], metavar='STEP=a,b,c,d,e',
+                        help='paper policy only: use this order at construction step STEP (every sampling trial of that step), the --order elsewhere; repeatable')
     args = parser.parse_args(argv)
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
@@ -197,6 +213,10 @@ def main(argv=None):
     source_name, replicates = CASES[args.case]
     original = REPO / source_name
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
+    if args.switch:
+        filter_policy['switch'] = parse_switch(args.switch)
+        if args.policy != 'paper':
+            parser.error('--switch needs --policy paper')
     staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name},
                    seed=args.seed)
     target = output / original.name
