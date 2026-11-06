@@ -9,13 +9,33 @@ from ..entity import Brick,Stone
 from .place_stone import place_one_stone
 from multiprocessing import Pool
 import pickle
-from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement
+from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace
+from .selection import select, filter_log, write_trace, next_event, FEATURE_NAMES
 from ..utils.logger import get_main_logger
 from ..utils.plot import save_matrix_plot, save_matrix
 from ..evaluate import evaluate_kine
 import time
-import pandas as pd  
+import random
+import pandas as pd
 sequential_run = False
+
+def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection):
+    """Snapshot of one selection decision (inputs + live result) for offline replay."""
+    np_state = np.random.get_state()
+    py_state = random.getstate()
+    meta = {**meta, 'run_id': get_trace(), 'event': next_event(), 'policy': get_filter_policy(),
+            'branch': selection.branch, 'stages': [s.tolist() for s in selection.stages],
+            'np_rng': {'pos': int(np_state[2]), 'has_gauss': int(np_state[3]), 'cached_gaussian': float(np_state[4])},
+            'py_rng': {'version': py_state[0], 'gauss_next': py_state[2]}}
+    write_trace(get_dir()+"trace", meta,
+                features_raw=features, weights=np.asarray(weights, dtype=float),
+                stone_id=np.array([b.id for b in all_bricks]),
+                rotation=np.arange(len(all_bricks)) // len(current_bricks) * 90,
+                x=np.array(xs), y=np.array(ys), distance=np.array(distances, dtype=float),
+                wall=base.matrix, inventory_ids=np.array(list(vendor.stones.keys())),
+                sampled_ids=np.array([b.id for b in current_bricks]),
+                np_rng_keys=np_state[1], py_rng_state=np.array(py_state[1]),
+                selected=np.array(-1 if selection.index is None else selection.index))
 
 def get_cut_stone(base,min_area = 9, max_area = 100,max_width = 10,add_element_type = 'flexible'):
     # find the largest hole in the base
@@ -364,100 +384,31 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             # min_y = min_y_list[min_index]
             # min_distance = min_distance_list[min_index]
 
-            # hierarchical filter
-            #if construction_order != "two_sides":
-            ## height, density, interlocking, kine, local_void
-            #density,interlocking,height,kine,local_void
+            # hierarchical filter, see selection.py. The default policy 'code_original' is the
+            # author's cascade with filter_order = [1,2,3,4,0] ("brick wall width 24*12").
             #0 course_height, 1 global_density, 2 interlocking, 3 kinematic, 4 local_void, 5 local_void_center
-            #filter_order = [2,1,0,3,4]#brick wall width 216
-            # filter_order = [1,2,3,0,4]#brick wall width 216
-            # filter_order = [3,1,2,0,4]#brick wall width 190
-            # filter_order = [2,3,1,0,4]
-            #filter_order = [2,3,4,1,0]#brick wall width 216
-            filter_order = [1,2,3,4,0]#brick wall width 24*12
-            # filter_order = [3,2,1,0,4]
-            # filter_order = [1,3,2,0,4]
-            # filter_order = [2,1,3,0,4]
-            with open(get_dir()+"filter.txt", "a+") as f:
-                filters_matrix_ori = filters_matrix.copy()
-                result_0 = np.argwhere(filters_matrix[:, 3] >0).reshape((1, -1))
-                if result_0[0].shape[0]>0:
-                    f.write(f"{construction_step_i};result0;")
-                    for index_ in result_0[0]:
-                        f.write(f"{all_bricks[index_].id};")
-                    f.write('\n')
-                    weight_matrix = np.zeros((6,6))#diagnal matrix
-                    selection_weights = get_selection_weights()
-                    weight_matrix[0,0] = selection_weights['course_height']
-                    weight_matrix[1,1] = selection_weights['global_density']
-                    weight_matrix[2,2] = selection_weights['interlocking']
-                    weight_matrix[3,3] = selection_weights['kinematic']
-                    weight_matrix[4,4] = selection_weights['local_void']
-                    weight_matrix[5,5] = selection_weights['local_void_center']
-                    filters_matrix = np.matmul(filters_matrix, weight_matrix)
-                    #kine_ok_filter_matrix = filters_matrix[filters_matrix[:, 3]>=0]
-                    #filter3 = np.argwhere(filters_matrix[:, 3] >= np.average(
-                    #    kine_ok_filter_matrix[:, 3])).reshape((1, -1))
-                    filter3 = np.argwhere(filters_matrix[:, filter_order[0]] >= np.average(
-                        filters_matrix[result_0, filter_order[0]])).reshape((1, -1))
-                    result_0_1 = np.intersect1d(result_0, filter3)
-                    #course height filter
-                    filter0 = np.argwhere(filters_matrix[:, filter_order[0]] >= np.average(
-                        filters_matrix[result_0_1, filter_order[0]])).reshape((1, -1))
-                    result_1 = np.intersect1d(filter0, result_0_1)
-                    #result_1 = np.intersect1d(result_1, result_0)
-                
-                    if result_1.shape[0] > 0:
-                        # write to text
-                        f.write(f"{construction_step_i};result1;")
-                        for index_ in result_1:
-                            f.write(f"{all_bricks[index_].id};")
-                        f.write('\n')
-                        filter2 = np.argwhere(filters_matrix[:, filter_order[1]] >= np.average(
-                            filters_matrix[result_1, filter_order[1]])).reshape((1, -1))
-                        #filter2 = np.argwhere(filters_matrix[:, 2] >= 0.2)#! hard code
-                        result_2 = np.intersect1d(result_1, filter2)
-                        if result_2.shape[0] > 0:
-                            f.write(f"{construction_step_i};result2;")
-                            for index_ in result_2:
-                                f.write(f"{all_bricks[index_].id};")
-                            f.write('\n')
-                            filter1 = np.argwhere(filters_matrix[:, filter_order[2]] >= np.average(
-                                filters_matrix[result_2, filter_order[2]])).reshape((1, -1))
-                            result_3 = np.intersect1d(result_2, filter1)
-                            if result_3.shape[0] > 0:
-                                f.write(f"{construction_step_i};result3;")
-                                for index_ in result_3:
-                                    f.write(f"{all_bricks[index_].id};")
-                                f.write('\n')
-                                filter4 = np.argwhere(filters_matrix[:, filter_order[3]] >= np.average(
-                                    filters_matrix[result_3, filter_order[3]])).reshape((1, -1))
-                                
-                                result_4 = np.intersect1d(result_3, filter4)
-                                if result_4.shape[0] > 0:
-                                    f.write(f"{construction_step_i};result4;")
-                                    for index_ in result_4:
-                                        f.write(f"{all_bricks[index_].id};")
-                                    f.write('\n')
-                                    min_index = result_4[np.argmax(
-                                        filters_matrix[result_4, 3]+filters_matrix[result_4,0]+filters_matrix[result_4,2]+filters_matrix[result_4,1]+filters_matrix[result_4,4])]
-                                    
-                                else:
-                                    min_index = result_3[np.argmax(
-                                        filters_matrix[result_3, 3]+filters_matrix[result_3,0]+filters_matrix[result_3,2]+filters_matrix[result_3,1])]
-                            else:
-                                min_index = result_2[np.argmax(
-                                    filters_matrix[result_2, 3]+filters_matrix[result_2,0]+filters_matrix[result_2,2])]
-                        else:
-                            min_index = result_1[np.argmax(filters_matrix[result_1, 3]+filters_matrix[result_1, 0])]
-                    else:
-                        min_index = np.argmax(filters_matrix[:, 3])
-
-                    f.write(f"{construction_step_i};select;{all_bricks[min_index].id}\n")
+            filters_matrix_ori = filters_matrix.copy()
+            selection_weights = get_selection_weights()
+            weights = [selection_weights[name] for name in FEATURE_NAMES]
+            selection = select(filters_matrix_ori, weights, **get_filter_policy())
+            if get_trace() is not None:
+                if vendor_type == 'sample_twice':
+                    phase = 'probe' if _sample_times % 2 == 1 else 'place'
                 else:
-                    get_main_logger().warning(
-                        f"No possible placement for any of the {nb_stones} given")
-                    return False,None,None,None,None,-np.inf,-1*np.ones((filters_matrix.shape[1]))
+                    phase = 'single'
+                trace_event({'step': construction_step_i, 'side': 'right' if from_right else 'left',
+                             'phase': phase, 'sample_trial': sample_trial, 'vendor_type': vendor_type,
+                             'construction_order': construction_order, 'nb_stones': nb_stones},
+                            base, vendor, current_bricks, all_bricks, min_x_list, min_y_list,
+                            min_distance_list, filters_matrix_ori, weights, selection)
+            filters_matrix = selection.weighted
+            min_index = selection.index
+            with open(get_dir()+"filter.txt", "a+") as f:
+                f.write(filter_log(construction_step_i, [b.id for b in all_bricks], selection))
+            if min_index is None:
+                get_main_logger().warning(
+                    f"No possible placement for any of the {nb_stones} given")
+                return False,None,None,None,None,-np.inf,-1*np.ones((filters_matrix.shape[1]))
 
             # else:
             #     ## height, density, interlocking, kine, local_void,local_void_center

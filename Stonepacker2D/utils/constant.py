@@ -249,6 +249,28 @@ def get_selection_weights():
     global SELECTION_WEIGHTS
     return SELECTION_WEIGHTS
 
+# Hierarchical filtering policy, see Stonepacker2D/stack/selection.py.
+# Default reproduces the author's cascade; order=None means the policy's default order.
+FILTER_POLICY = {'policy': 'code_original', 'order': None, 'tol': 1e-9}
+# Run id when candidate score matrices are traced to <dump dir>/trace/, None = off.
+TRACE_RUN_ID = None
+
+def set_filter_policy(policy='code_original', order=None, tol=1e-9):
+    global FILTER_POLICY
+    FILTER_POLICY = {'policy': policy, 'order': None if order is None else tuple(order), 'tol': tol}
+
+def get_filter_policy():
+    global FILTER_POLICY
+    return FILTER_POLICY
+
+def set_trace(run_id):
+    global TRACE_RUN_ID
+    TRACE_RUN_ID = run_id
+
+def get_trace():
+    global TRACE_RUN_ID
+    return TRACE_RUN_ID
+
 def get_placement_optimization():
     global PLACEMENT_OPTIMIZATION
     return PLACEMENT_OPTIMIZATION
