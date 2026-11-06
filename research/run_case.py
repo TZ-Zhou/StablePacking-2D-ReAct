@@ -46,7 +46,9 @@ def prepare_output(name):
     return output
 
 
-def stage(source, policy):
+def stage(source, policy, seed=None):
+    """seed=None keeps the source's seed_everything() call (default 20); an int replaces only its
+    argument, so every run initialises its own RNG before reading stones and sampling."""
     lines = source.splitlines(keepends=True)
     for i, line in enumerate(lines):
         if 'os.system(' in line and 'rm -rf' in line and not line.lstrip().startswith('#'):
@@ -65,6 +67,10 @@ def stage(source, policy):
               f"    set_filter_policy(**{policy['filter']!r})\n"
               f"    set_trace({policy['run_id']!r})\n")
     body = ''.join('    ' + l if l.strip() else l for l in safe[boundary:].splitlines(keepends=True))
+    if seed is not None:
+        call = '    seed_everything()\n'
+        assert body.startswith(call), body[:40]
+        body = f'    seed_everything({int(seed)})\n' + body[len(call):]
     return safe[:boundary] + header + body
 
 
@@ -178,6 +184,7 @@ def main(argv=None):
     parser.add_argument('--placements', type=int, default=0, help='stop after N placements (0 = run to the end)')
     parser.add_argument('--timeout', type=int, default=1800)
     parser.add_argument('--no-trace', action='store_true', help='control run: logging off, outputs only')
+    parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
     args = parser.parse_args(argv)
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
@@ -190,7 +197,8 @@ def main(argv=None):
     source_name, replicates = CASES[args.case]
     original = REPO / source_name
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
-    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name})
+    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name},
+                   seed=args.seed)
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
@@ -202,7 +210,8 @@ def main(argv=None):
     receipt = {
         'case': args.case, 'run_id': args.name, 'source': source_name, 'source_sha256': digest(original),
         'staged_sha256': digest(target), 'filter_policy': filter_policy, 'trace': not args.no_trace,
-        'seed': 'seed_everything() default in source (20)', 'placements_limit': args.placements,
+        'seed': 'seed_everything() default in source (20)' if args.seed is None else args.seed,
+        'python_hash_seed_launcher': 20, 'placements_limit': args.placements,
         'git_head': git('rev-parse', 'HEAD'), 'git_branch': git('branch', '--show-current'),
         'git_status': git('status', '--porcelain').splitlines(),
         'git_tracked_diff_sha256': hashlib.sha256(git('diff', 'HEAD').encode()).hexdigest(),
