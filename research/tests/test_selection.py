@@ -19,7 +19,7 @@ import numpy as np
 import json
 
 from Stonepacker2D.stack.selection import (ALL_ORDERS, PAPER_ORDER, filter_log, load_trace,
-                                           select, tie_count, to_world, write_trace)
+                                           footprint, select, tie_count, to_world, write_trace)
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'research'))
@@ -408,6 +408,8 @@ class MirrorFrame(unittest.TestCase):
                     xw, rw = to_world('right', [x], [k * 90], [evaluated.width], stone._w)
                     np.testing.assert_array_equal(placed, pixels(turned(stone, int(rw[0]) // 90), int(xw[0]), y))
                     swapped += not np.array_equal(placed, pixels(turned(stone, k), int(xw[0]), y))
+                    self.assertEqual(footprint(evaluated.matrix, 'right'),
+                                     footprint(turned(stone, int(rw[0]) // 90).matrix, 'left'))
         # every PR stone differs under 90 vs 270, so labels 90/270 never equal the world turn
         self.assertEqual(swapped, len(stones) * 2 * 3)
 
@@ -468,6 +470,54 @@ def commits_case(directory, decisions, placed):
                'outcome': 'placed', 'sides': {'left': {'event': 0}}} for step, sid, x, y, r in placed]
     (result / 'trace' / 'commits.jsonl').write_text(''.join(json.dumps(l) + '\n' for l in lines), encoding='utf-8')
     return Path(directory)
+
+
+class Geometry(unittest.TestCase):
+    def test_footprint(self):
+        rect = np.zeros((6, 8))
+        rect[0:2, 0:4] = 1
+        self.assertEqual(footprint(rect, 'left'), footprint(np.flipud(np.fliplr(rect)), 'left'))  # 0 vs 180
+        ell = rect.copy()
+        ell[2, 0] = 1
+        self.assertNotEqual(footprint(ell, 'left'), footprint(np.fliplr(ell), 'left'))
+        self.assertEqual(footprint(ell, 'right'), footprint(np.fliplr(ell), 'left'))       # mirrored back
+        self.assertEqual(footprint(np.zeros((3, 3)), 'left'), '')
+
+    def test_same_footprint_is_one_placement(self):
+        # rows 0 and 1: different pose ids (rotation 0 vs 180), identical pixels at the same place
+        raw = np.array([[-0.1, 1.0, 0.5, 0.5, -0.1, 0],
+                        [-0.1, 1.0, 0.5, 0.5, -0.1, 0],
+                        [-0.1, 0.9, 0.5, 0.5, -0.1, 0]])
+        meta = {'run_id': 'u', 'event': 0, 'step': 1, 'side': 'left', 'phase': 'single',
+                'policy': {'policy': 'code_original', 'order': None, 'tol': 1e-9}}
+        arrays = dict(features_raw=raw, weights=np.ones(6), stone_id=np.array([5, 5, 6]),
+                      rotation=np.array([0, 180, 0]), x=np.array([1, 1, 1]), y=np.array([2, 2, 2]),
+                      x_world=np.array([1, 1, 1]), rotation_world=np.array([0, 180, 0]),
+                      footprint=np.array(['a', 'a', 'b']), cluster=np.array([0, 0, 1]),
+                      selected=np.array(select(raw, np.ones(6)).index))
+        rows, event, _, _ = sensitivity.analyze_event(meta, arrays, 1e-9)
+        self.assertEqual(event['live_final_ties'], 2)
+        self.assertEqual(event['live_final_tie_placements'], 1)
+        self.assertEqual(len({r['placement_id'] for r in rows}), 1)
+
+    def test_step_actions_follow_the_side_rule(self):
+        # left pick GDS 0.5, right pick GDS 0.8 -> right; with ties -> left
+        def event(e, side, gds_pick):
+            raw = np.array([[-0.1, gds_pick, 0.5, 0.5, -0.1, 0], [-0.9, 0.0, 0.1, 0.1, -0.9, 0]])
+            meta = {'run_id': 'u', 'event': e, 'step': 1, 'side': side, 'phase': 'place',
+                    'policy': {'policy': 'code_original', 'order': None, 'tol': 1e-9}}
+            arrays = dict(features_raw=raw, weights=np.ones(6), stone_id=np.array([10 + e, 20 + e]),
+                          rotation=np.zeros(2, int), x=np.array([3, 4]), y=np.array([2, 2]),
+                          x_world=np.array([3, 4]), rotation_world=np.zeros(2, int),
+                          footprint=np.array(['f', 'g']), cluster=np.array([e, 9]), selected=np.array(0))
+            return sensitivity.analyze_event(meta, arrays, 1e-9)[3]
+        for right_gds, side, stone in ((0.8, 'right', 11), (0.5, 'left', 10)):
+            decisions = {0: event(0, 'left', 0.5), 1: event(1, 'right', right_gds)}
+            commit = {'step': 1, 'phase': 'place', 'outcome': 'placed', 'chosen_side': side, 'stone_id': stone,
+                      'sides': {'left': {'event': 0}, 'right': {'event': 1}}}
+            row, = sensitivity.analyze_commits([commit], decisions)
+            self.assertTrue(row['live_reproduced'], (right_gds, row))
+            self.assertEqual((row['n_distinct_side'], row['orders_same_placement_as_live']), (1, 120))
 
 
 class CommitRecords(unittest.TestCase):

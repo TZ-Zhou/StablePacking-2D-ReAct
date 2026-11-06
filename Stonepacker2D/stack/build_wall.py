@@ -10,7 +10,7 @@ from .place_stone import place_one_stone
 from multiprocessing import Pool
 import pickle
 from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace
-from .selection import select, filter_log, write_trace, next_event, to_world, FEATURE_NAMES
+from .selection import select, filter_log, write_trace, next_event, to_world, footprint, FEATURE_NAMES
 from ..utils.logger import get_main_logger
 from ..utils.plot import save_matrix_plot, save_matrix
 from ..evaluate import evaluate_kine
@@ -42,6 +42,8 @@ def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distance
                 features_raw=features, weights=np.asarray(weights, dtype=float),
                 stone_id=np.array([b.id for b in all_bricks]), rotation=rotation, width=width,
                 height=np.array([b.height for b in all_bricks]),
+                footprint=np.array([footprint(b.matrix, meta['side']) for b in all_bricks]),
+                cluster=np.array([b.cluster for b in all_bricks]),
                 x=np.array(xs), y=np.array(ys), x_world=x_world, rotation_world=rotation_world,
                 distance=np.array(distances, dtype=float),
                 wall=base.matrix, inventory_ids=np.array(list(vendor.stones.keys())),

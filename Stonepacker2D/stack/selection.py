@@ -9,6 +9,7 @@ baseline-author-original): filter order[0] is applied twice, order[4] is never r
 fallback/final sums use fixed columns. policy="paper" follows Algorithm 2 of Wang et al.
 (EJOR 2024): fixed LLC>0 gate, then each of the five filters once in the given order.
 """
+import hashlib
 import itertools
 import json
 import os
@@ -127,15 +128,36 @@ def to_world(side, x, rotation, width, world_width):
     return np.where(x < 0, x, world_width - x - np.asarray(width)), (360 - rotation) % 360
 
 
+def footprint(matrix, side):
+    """Shape fingerprint of a candidate's pixels in the world frame (position excluded).
+
+    Equal fingerprints at equal (x_world, y) occupy exactly the same pixels, e.g. a
+    rectangle at rotation 0 and 180, or two identical bricks with different ids.
+    """
+    pixels = np.asarray(matrix) != 0
+    if not pixels.any():
+        return ''
+    rows, cols = np.nonzero(pixels)
+    crop = pixels[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    if side == 'right':
+        crop = np.fliplr(crop)
+    return hashlib.sha1(np.packbits(crop).tobytes() + str(crop.shape).encode()).hexdigest()[:16]
+
+
 def tie_count(raw, weights, selection, policy='code_original', order=None, tol=1e-9):
     """How many candidates share the maximum of the score the final argmax was taken over.
 
     >1 means the pick was decided by candidate index order (np.argmax takes the first).
     Rebuilds the argmax's candidate set and score from selection.branch; 0 if none.
     """
+    return len(tied_candidates(raw, weights, selection, policy, order, tol))
+
+
+def tied_candidates(raw, weights, selection, policy='code_original', order=None, tol=1e-9):
+    """Row indices sharing the final argmax maximum (see tie_count)."""
     w, branch = selection.weighted, selection.branch
     if branch == 'no_feasible':
-        return 0
+        return np.array([], dtype=int)
     if policy == 'code_original':
         cols = [3, 0, 2, 1, 4]
         if branch == 'fallback_1':
@@ -149,7 +171,7 @@ def tie_count(raw, weights, selection, policy='code_original', order=None, tol=1
         pool, used = selection.stages[-1], cols[:k]
     score = w[np.ix_(pool, used)].sum(axis=1)
     best = score.max()
-    return int((score >= best - tol * max(1.0, abs(best))).sum())
+    return np.asarray(pool)[score >= best - tol * max(1.0, abs(best))]
 
 
 def filter_log(step, ids, selection):

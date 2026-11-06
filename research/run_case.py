@@ -177,6 +177,7 @@ def main(argv=None):
     parser.add_argument('--tol', type=float, default=1e-9)
     parser.add_argument('--placements', type=int, default=0, help='stop after N placements (0 = run to the end)')
     parser.add_argument('--timeout', type=int, default=1800)
+    parser.add_argument('--no-trace', action='store_true', help='control run: logging off, outputs only')
     args = parser.parse_args(argv)
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
@@ -189,7 +190,7 @@ def main(argv=None):
     source_name, replicates = CASES[args.case]
     original = REPO / source_name
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
-    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': args.name})
+    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name})
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
@@ -200,7 +201,7 @@ def main(argv=None):
     git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
     receipt = {
         'case': args.case, 'run_id': args.name, 'source': source_name, 'source_sha256': digest(original),
-        'staged_sha256': digest(target), 'filter_policy': filter_policy, 'trace': True,
+        'staged_sha256': digest(target), 'filter_policy': filter_policy, 'trace': not args.no_trace,
         'seed': 'seed_everything() default in source (20)', 'placements_limit': args.placements,
         'git_head': git('rev-parse', 'HEAD'), 'git_branch': git('branch', '--show-current'),
         'git_status': git('status', '--porcelain').splitlines(),
@@ -231,7 +232,8 @@ def main(argv=None):
                 # A trace write failure raises inside the case and lands here as a non-zero exit.
                 process_status = 'PROCESS_PASS' if process.returncode == 0 else 'FAILED'
     finally:
-        trace = check_trace(output, stopped=termination is not None)
+        trace = ({'ok': True, 'skipped': 'no-trace control run'} if args.no_trace
+                 else check_trace(output, stopped=termination is not None))
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
                        elapsed_seconds=round(time.monotonic() - start, 3),
