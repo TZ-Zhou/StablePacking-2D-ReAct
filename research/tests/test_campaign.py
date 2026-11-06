@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'research'))
 import campaign  # noqa: E402
@@ -172,6 +174,35 @@ class OrderAgreement(unittest.TestCase):
         self.assertEqual((a.at['a', 'b'], a.at['a', 'c'], a.at['b', 'c'], a.at['a', 'a']), (0.75, 0.5, 0.25, 1.0))
         self.assertEqual([order_agreement.shared_prefix('3-0-2-1-4', o) for o in ('0-3-2-1-4', '3-0-1-2-4', '3-0-2-4-1')],
                          [0, 2, 3])
+
+
+class ArmComparison(unittest.TestCase):
+    def manifest(self):
+        import pandas as pd
+        base = {20: 0.50, 21: 0.60, 22: 0.55, 23: 0.65}            # seed effect
+        rows = []
+        for seed, v in base.items():
+            rows += [{'arm': 'code_original', 'seed': seed, 'wall_density': v, 'n_placed': 18},
+                     {'arm': 'b', 'seed': seed, 'wall_density': v + 0.10, 'n_placed': 18},        # constant +0.10
+                     {'arm': 'c', 'seed': seed, 'wall_density': v - 0.01 * (seed % 2), 'n_placed': 17 + seed % 2}]
+        m = pd.DataFrame(rows).assign(n_input=18)
+        return m.assign(wall_height=1 / m.wall_density, lambda_min=0.1, stone_filling=m.wall_density / 2)
+
+    def test_paired_shares_and_ties(self):
+        import arm_comparison
+        out = arm_comparison.compare(self.manifest(), n_boot=200)
+        p = out['wall_density']['paired'].set_index('arm')
+        self.assertAlmostEqual(p.at['b', 'mean_diff'], 0.10)
+        self.assertAlmostEqual(p.at['b', 'ci_low'], 0.10)               # no spread in a constant difference
+        self.assertEqual((p.at['b', 'better_in'], p.at['b', 'worse_in']), (4, 0))
+        self.assertEqual((p.at['c', 'better_in'], p.at['c', 'worse_in']), (0, 2))
+        self.assertEqual(out['wall_height']['paired'].set_index('arm').at['b', 'better_in'], 4)  # lower is better
+        s = out['wall_density']['shares']
+        self.assertAlmostEqual(s['arm'] + s['seed'] + s['residual'], 1.0)
+        self.assertEqual(out['wall_density']['best_per_seed'], {'b': 4})
+        self.assertEqual(out['complete']['per_arm'].at['c', 'mean'], 0.5)
+        self.assertEqual(out['complete']['best_per_seed'], {'tie': 4})  # never credited to the first arm
+        self.assertTrue(np.isnan(out['lambda_min']['shares']['arm']))   # constant metric
 
 
 @unittest.skipUnless(THANGAVELU.exists() and PR_RIGHT.exists(), 'existing run directories not present')
