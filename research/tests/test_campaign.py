@@ -205,6 +205,47 @@ class ArmComparison(unittest.TestCase):
         self.assertTrue(np.isnan(out['lambda_min']['shares']['arm']))   # constant metric
 
 
+class FailureAnalysis(unittest.TestCase):
+    def test_wall_state(self):
+        import failure_analysis
+        wall = np.zeros((10, 6))
+        wall[:2], wall[-1], wall[:, [0, -1]] = 1, 255, 255     # ground, top boundary, side columns
+        wall[2:5, 1] = wall[2:4, 2] = 7                       # columns 1-2 built 3 and 2 px high
+        wall[4, 3] = 8                                        # column 3: overhang above a 2 px void
+        s = failure_analysis.wall_state(wall)
+        self.assertEqual((s['h_max'], s['h_min'], s['h_range']), (3, 0, 3))
+        self.assertEqual(s['void_under_skyline_px'], 2)
+        self.assertAlmostEqual(s['fill_under_hmax'], 6 / 12)
+
+    def test_eliminated_by(self):
+        from failure_analysis import eliminated_by
+        order = (3, 0, 2, 1, 4)                               # paper order: gate, LLC, NHR, IWR, ...
+        stages = [[0, 1, 2, 3], [0, 1, 2], [0, 1], [0]]
+        self.assertEqual([eliminated_by(r, stages, order, 0) for r in ([0], [1], [2], [3], [4, 5])],
+                         ['selected', 'IWR', 'NHR', 'LLC', 'infeasible'])
+        fallback = [[0, 1, 2, 3], [0, 1, 2], [0, 1]]          # IWR stage emptied: argmax over [0, 1]
+        self.assertEqual(eliminated_by([1], fallback, order, 0), 'final_argmax')
+
+
+FAILED_PAPER = REPO / 'research' / 'runs' / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed490861164'
+
+
+@unittest.skipUnless(FAILED_PAPER.exists(), 'existing run directories not present')
+class FailureOnRecordedWall(unittest.TestCase):
+    def test_unplaced_stone_has_positions_but_no_stable_one(self):
+        import pandas as pd
+        import failure_analysis
+        a, s = failure_analysis.attempt_rows(check_case.result_dirs(FAILED_PAPER)[0])
+        a, s = pd.DataFrame(a), pd.DataFrame(s)
+        summary = failure_analysis.wall_summary(a, s, hard=(8, 9, 13))
+        self.assertEqual((summary['unplaced'], summary['n_no_placement']), ('13', 6))
+        last = s[s.event == a.event.iloc[-1]].iloc[0]
+        self.assertEqual((last.stone, last.geom_rotations, last.feasible_rotations, last.eliminated_by), (13, 4, 0, 'infeasible'))
+        self.assertEqual((a.outcome == 'placed').sum(), 17)
+        self.assertEqual(set(s[(s.stone == 13) & (a.set_index('event').loc[s.event, 'outcome'].to_numpy() == 'placed')]
+                             .eliminated_by) - {'LLC', 'NHR', 'IWR', 'final_argmax'}, set())
+
+
 @unittest.skipUnless(THANGAVELU.exists() and PR_RIGHT.exists(), 'existing run directories not present')
 class ExistingRuns(unittest.TestCase):
     def test_checks_pass_on_recorded_walls(self):
