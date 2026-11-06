@@ -110,6 +110,48 @@ def _paper(raw, weighted, order, tol):
     return survivors[np.argmax(score)], stages, 'full'
 
 
+def to_world(side, x, rotation, width, world_width):
+    """Candidate poses from the evaluation frame to the wall (world) frame.
+
+    World frame: columns of base.matrix from the left, rows from the ground; (x, y) is the
+    Stone.transformed() translation of the pose's bounding box; rotation r means r/90
+    applications of Stone.rotated_by_90 to the vendor stone. Right-side candidates are
+    evaluated on np.fliplr(wall) with mirrored stones; build_wall maps them back with
+    x_world = W - x - width (as the author's code does) and the mirror reverses the turn
+    direction, so rotation_world = (360 - r) % 360 (90 <-> 270). y is unchanged. Infeasible
+    candidates keep x = -1. decisions.txt writes x_world but the evaluation-frame label r.
+    """
+    x, rotation = np.asarray(x), np.asarray(rotation)
+    if side == 'left':
+        return x, rotation
+    return np.where(x < 0, x, world_width - x - np.asarray(width)), (360 - rotation) % 360
+
+
+def tie_count(raw, weights, selection, policy='code_original', order=None, tol=1e-9):
+    """How many candidates share the maximum of the score the final argmax was taken over.
+
+    >1 means the pick was decided by candidate index order (np.argmax takes the first).
+    Rebuilds the argmax's candidate set and score from selection.branch; 0 if none.
+    """
+    w, branch = selection.weighted, selection.branch
+    if branch == 'no_feasible':
+        return 0
+    if policy == 'code_original':
+        cols = [3, 0, 2, 1, 4]
+        if branch == 'fallback_1':
+            pool, used = np.arange(len(w)), cols[:1]
+        else:
+            k = 5 if branch == 'full' else int(branch[-1])
+            pool, used = selection.stages[k - 1 if branch != 'full' else 4], cols[:k]
+    else:
+        cols = list(order or PAPER_ORDER)
+        k = 5 if branch == 'full' else int(branch[-1])
+        pool, used = selection.stages[-1], cols[:k]
+    score = w[np.ix_(pool, used)].sum(axis=1)
+    best = score.max()
+    return int((score >= best - tol * max(1.0, abs(best))).sum())
+
+
 def filter_log(step, ids, selection):
     """filter.txt lines exactly as the author's build_wall.py writes them."""
     lines = [f"{step};result{k};" + "".join(f"{ids[i]};" for i in survivors) + "\n"

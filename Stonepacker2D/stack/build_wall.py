@@ -10,32 +10,51 @@ from .place_stone import place_one_stone
 from multiprocessing import Pool
 import pickle
 from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace
-from .selection import select, filter_log, write_trace, next_event, FEATURE_NAMES
+from .selection import select, filter_log, write_trace, next_event, to_world, FEATURE_NAMES
 from ..utils.logger import get_main_logger
 from ..utils.plot import save_matrix_plot, save_matrix
 from ..evaluate import evaluate_kine
 import time
 import random
+import json
+import os
 import pandas as pd
 sequential_run = False
 
 def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection):
-    """Snapshot of one selection decision (inputs + live result) for offline replay."""
+    """Snapshot of one selection decision (inputs + live result) for offline replay; returns its event id.
+
+    x, y, rotation and wall are in the evaluation frame (np.fliplr for side='right');
+    x_world and rotation_world are the same poses in the wall frame (selection.to_world).
+    """
     np_state = np.random.get_state()
     py_state = random.getstate()
-    meta = {**meta, 'run_id': get_trace(), 'event': next_event(), 'policy': get_filter_policy(),
+    event = next_event()
+    rotation = np.arange(len(all_bricks)) // len(current_bricks) * 90
+    width = np.array([b.width for b in all_bricks])
+    x_world, rotation_world = to_world(meta['side'], np.array(xs), rotation, width, all_bricks[0]._w)
+    meta = {**meta, 'run_id': get_trace(), 'event': event, 'policy': get_filter_policy(),
+            'frame': 'mirrored' if meta['side'] == 'right' else 'world', 'world_width': all_bricks[0]._w,
             'branch': selection.branch, 'stages': [s.tolist() for s in selection.stages],
             'np_rng': {'pos': int(np_state[2]), 'has_gauss': int(np_state[3]), 'cached_gaussian': float(np_state[4])},
             'py_rng': {'version': py_state[0], 'gauss_next': py_state[2]}}
     write_trace(get_dir()+"trace", meta,
                 features_raw=features, weights=np.asarray(weights, dtype=float),
-                stone_id=np.array([b.id for b in all_bricks]),
-                rotation=np.arange(len(all_bricks)) // len(current_bricks) * 90,
-                x=np.array(xs), y=np.array(ys), distance=np.array(distances, dtype=float),
+                stone_id=np.array([b.id for b in all_bricks]), rotation=rotation, width=width,
+                height=np.array([b.height for b in all_bricks]),
+                x=np.array(xs), y=np.array(ys), x_world=x_world, rotation_world=rotation_world,
+                distance=np.array(distances, dtype=float),
                 wall=base.matrix, inventory_ids=np.array(list(vendor.stones.keys())),
                 sampled_ids=np.array([b.id for b in current_bricks]),
                 np_rng_keys=np_state[1], py_rng_state=np.array(py_state[1]),
                 selected=np.array(-1 if selection.index is None else selection.index))
+    return event
+
+def trace_commit(record):
+    """One line per sampling attempt in trace/commits.jsonl: joins its filter events to the outcome."""
+    os.makedirs(get_dir()+"trace", exist_ok=True)
+    with open(get_dir()+"trace/commits.jsonl", "a") as f:
+        f.write(json.dumps(record, default=lambda v: v.item()) + "\n")
 
 def get_cut_stone(base,min_area = 9, max_area = 100,max_width = 10,add_element_type = 'flexible'):
     # find the largest hole in the base
@@ -236,6 +255,11 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
         
         #_______________________________________________________________________________________PLACEMENT
         construction_step_i = len(base.placed_bricks)
+        _attempt_events = {}  # trace: side -> filter event id of this sampling attempt
+        if vendor_type == 'sample_twice':
+            _phase = 'probe' if _sample_times % 2 == 1 else 'place'
+        else:
+            _phase = 'single'
         def construct_one_step(base, current_bricks, from_right=False):
             if from_right:
                 base = base.create_mirrored_base()
@@ -392,12 +416,9 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             weights = [selection_weights[name] for name in FEATURE_NAMES]
             selection = select(filters_matrix_ori, weights, **get_filter_policy())
             if get_trace() is not None:
-                if vendor_type == 'sample_twice':
-                    phase = 'probe' if _sample_times % 2 == 1 else 'place'
-                else:
-                    phase = 'single'
-                trace_event({'step': construction_step_i, 'side': 'right' if from_right else 'left',
-                             'phase': phase, 'sample_trial': sample_trial, 'vendor_type': vendor_type,
+                _side = 'right' if from_right else 'left'
+                _attempt_events[_side] = trace_event({'step': construction_step_i, 'side': _side,
+                             'phase': _phase, 'sample_trial': sample_trial, 'vendor_type': vendor_type,
                              'construction_order': construction_order, 'nb_stones': nb_stones},
                             base, vendor, current_bricks, all_bricks, min_x_list, min_y_list,
                             min_distance_list, filters_matrix_ori, weights, selection)
@@ -520,7 +541,32 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
         elif construction_order == "from_left":
             continue_construction,brick, min_index, min_x, min_y,_ ,features_best= construct_one_step(_test_base, _test_bricks,from_right=False)
 
+        if get_trace() is not None:
+            # side choice above: right only if its weighted GDS is strictly greater (ties -> left)
+            if construction_order == "two_sides":
+                _sides = {'left': [continue_construction_left, min_index_left, features_left[1]],
+                          'right': [continue_construction_right, min_index_right, features_right[1]]}
+                _chosen = 'right' if features_right[1] > features_left[1] else 'left'
+            else:
+                _chosen = 'right' if construction_order == "from_right" else 'left'
+                _sides = {_chosen: [continue_construction, min_index, features_best[1]]}
+            _attempt = {'step': construction_step_i, 'phase': _phase, 'sample_trial': sample_trial,
+                        'vendor_type': vendor_type, 'construction_order': construction_order,
+                        'sampled_ids': [b.id for b in current_bricks],
+                        'sides': {s: {'event': _attempt_events.get(s), 'ok': v[0], 'index': v[1], 'gds_weighted': v[2]}
+                                  for s, v in _sides.items()},
+                        'chosen_side': _chosen,
+                        'side_tie': construction_order == "two_sides" and features_right[1] == features_left[1]}
+            if continue_construction:
+                _label = min_index // len(current_bricks) * 90
+                _attempt.update(stone_id=brick.id, cluster=brick.cluster, rotation_label=_label,
+                                rotation_world=_label if _chosen == 'left' else (360 - _label) % 360,
+                                x_world=min_x, y=min_y)
+
         if not continue_construction:
+            if get_trace() is not None:
+                trace_commit({**_attempt, 'outcome': 'no_placement',
+                              'termination': None if sample_trial < max_sample_trial else 'sample_trials_exhausted'})
             if sample_trial<max_sample_trial:
                 #break
                 sample_trial+=1
@@ -538,6 +584,8 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
         if vendor_type == "sample_twice" and _sample_times%2==1:
             _pre_label = brick.cluster
             vendor.return_stones(current_bricks)
+            if get_trace() is not None:
+                trace_commit({**_attempt, 'outcome': 'probe', 'probe_cluster': _pre_label, 'termination': None})
         else:
             place_the_solution = True
 
@@ -560,6 +608,8 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
                     _sample_times-=2
                     vendor.return_stones(current_bricks)
                     place_the_solution = False
+                    if get_trace() is not None:
+                        trace_commit({**_attempt, 'outcome': 'cut', 'termination': None})
                 else:
                     #place the solved stone
                     place_the_solution = True
@@ -570,6 +620,14 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
                 adding_ok = base.add_stone(brick, [min_x, min_y])
                 _pre_label = brick.cluster
                 _new_nb_stones = len(base.placed_bricks)
+                if get_trace() is not None:
+                    # the placed rock can differ from the requested pose (overlap clipping, stabilization)
+                    _rock = base.placed_rocks[-1] if base.placed_rocks else None
+                    _placed = {'add_stone_ok': adding_ok, 'bricks_added': _new_nb_stones - _pre_nb_stones}
+                    if adding_ok and _rock is not None and _rock.id == brick.id:
+                        _rows, _cols = np.nonzero(_rock.matrix)
+                        _placed.update(placed_bbox=[_cols.min(), _rows.min(), _cols.max(), _rows.max()],
+                                       placed_rot_angle=_rock.rot_angle, placed_rotate_from_ori=_rock.rotate_from_ori)
                 if _new_nb_stones-_pre_nb_stones > 1:
                     get_main_logger().critical(
                         f'Add wedge to stone {brick.id}')
@@ -633,6 +691,10 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
                     vendor.return_stones(current_bricks)
                     get_main_logger().critical(f"{len(vendor.stones.keys())} stones remaining in the set")
                 #check termination
+                if get_trace() is not None:
+                    trace_commit({**_attempt, **_placed, 'outcome': 'placed',
+                                  'termination': 'inventory_empty' if vendor.get_number_stones() == 0 else
+                                  'filled' if base.get_filling()/(base._w*base._h) > 0.999 else None})
                 if vendor.get_number_stones() == 0:
                     break
                 if base.get_filling()/(base._w*base._h) > 0.999:

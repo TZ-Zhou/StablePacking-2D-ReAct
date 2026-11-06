@@ -16,8 +16,10 @@ from unittest import mock
 
 import numpy as np
 
+import json
+
 from Stonepacker2D.stack.selection import (ALL_ORDERS, PAPER_ORDER, filter_log, load_trace,
-                                           select, write_trace)
+                                           select, tie_count, to_world, write_trace)
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'research'))
@@ -370,6 +372,123 @@ class LauncherSafety(unittest.TestCase):
         self.assertIn('research/run_case.py', real)
 
 
+class MirrorFrame(unittest.TestCase):
+    """Right-side candidates: Wang's mirror chain versus selection.to_world, pixel by pixel."""
+
+    def test_to_world_matches_the_pixels_build_wall_places(self):
+        from Stonepacker2D import Stone, get_world_size_from_label_img
+        from Stonepacker2D.utils.constant import set_world_size
+        image = str(REPO / 'Tests' / 'Almeida' / 'PR' / 'data' / 'wall_labels.png')
+        w, h = get_world_size_from_label_img(image, scale=0.5)
+        set_world_size(int(w + 2), int(h + 3))  # PR config: plus 2/3, times 1
+        stones = []
+        for label in range(1, 256):
+            stone = Stone()
+            if stone.from_labeled_img(label, image, 0.5) and stone.height > 3 and stone.width > 3:
+                stones.append(stone)
+        self.assertGreater(len(stones), 20)
+
+        def turned(stone, k):
+            for _ in range(k):
+                stone = stone.rotated_by_90()
+            return stone
+
+        def pixels(stone, x, y):
+            return stone.transformed([x, y]).matrix != 0
+
+        swapped = 0
+        for stone in stones:
+            for k in range(4):
+                # build_wall right side: mirror, rotate k times, evaluate at (x, y), mirror back
+                evaluated = turned(stone.create_mirrored_stone(align_to_right=True), k)
+                back = evaluated.create_mirrored_stone(align_to_right=True)
+                for x, y in [(1, 2), (37, 5), (stone._w - evaluated.width - 2, 3)]:
+                    placed = pixels(back, back._w - x - back.width, y)  # author's x conversion
+                    np.testing.assert_array_equal(placed, np.fliplr(pixels(evaluated, x, y)))
+                    xw, rw = to_world('right', [x], [k * 90], [evaluated.width], stone._w)
+                    np.testing.assert_array_equal(placed, pixels(turned(stone, int(rw[0]) // 90), int(xw[0]), y))
+                    swapped += not np.array_equal(placed, pixels(turned(stone, k), int(xw[0]), y))
+        # every PR stone differs under 90 vs 270, so labels 90/270 never equal the world turn
+        self.assertEqual(swapped, len(stones) * 2 * 3)
+
+    def test_left_is_identity_and_infeasible_kept(self):
+        x, r = to_world('left', [3, -1], [90, 270], [5, 5], 100)
+        self.assertEqual((x.tolist(), r.tolist()), ([3, -1], [90, 270]))
+        x, r = to_world('right', [3, -1], [0, 90], [5, 5], 100)
+        self.assertEqual((x.tolist(), r.tolist()), ([92, -1], [0, 270]))
+
+
+class Ties(unittest.TestCase):
+    def test_hand_computed(self):
+        raw = np.array([[-0.1, 1.0, 0.5, 0.5, -0.1, 0],
+                        [-0.1, 1.0, 0.5, 0.5, -0.1, 0],   # identical to row 0
+                        [-0.9, 0.2, 0.1, 0.1, -0.9, 0]])
+        for policy in ('code_original', 'paper'):
+            sel = select(raw, np.ones(6), policy)
+            self.assertEqual((sel.index, tie_count(raw, np.ones(6), sel, policy)), (0, 2), policy)
+        raw[1, 4] = -0.2
+        sel = select(raw, np.ones(6), 'paper')
+        self.assertEqual(tie_count(raw, np.ones(6), sel, 'paper'), 1)
+        none = np.array([[-0.1, 0, 0.5, -0.2, -0.1, 0]])
+        self.assertEqual(tie_count(none, np.ones(6), select(none, np.ones(6)), 'code_original'), 0)
+
+    def test_pick_changes_with_argmax_direction_only_when_tied(self):
+        # tie_count rebuilds the argmax pool from the branch; if taking the last maximum instead
+        # of the first changes the pick, that pool must have had a tie.
+        rng = np.random.default_rng(3)
+        branches = set()
+        real_argmax = np.argmax
+        last_max = lambda a: int(np.flatnonzero(a == np.max(a))[-1])
+        for _ in range(3000):
+            raw, weights = random_matrix(rng)
+            raw = np.where(np.isfinite(raw), raw, 0.0)
+            for policy, order in (('code_original', None), ('paper', PAPER_ORDER), ('paper', (1, 4, 0, 2, 3))):
+                sel = select(raw, weights, policy, order)
+                ties = tie_count(raw, weights, sel, policy, order)
+                branches.add((policy, sel.branch))
+                if sel.index is None:
+                    self.assertEqual(ties, 0)
+                    continue
+                self.assertGreaterEqual(ties, 1)
+                with mock.patch.object(np, 'argmax', side_effect=last_max):
+                    last = select(raw, weights, policy, order).index
+                if last != sel.index:
+                    self.assertGreater(ties, 1)
+        self.assertIs(np.argmax, real_argmax)
+        self.assertEqual(len(branches), 8, branches)  # 6 code_original + paper full/no_feasible
+
+
+def commits_case(directory, decisions, placed):
+    result = Path(directory) / 'result'
+    (result / 'trace').mkdir(parents=True)
+    (result / 'decisions.txt').write_text(decisions, encoding='utf-8')
+    (result / 'trace' / 'e00000.npz').write_bytes(b'')
+    lines = [{'outcome': 'probe', 'sides': {'left': {'event': 0}, 'right': {'event': 0}}}]
+    lines += [{'step': step, 'stone_id': sid, 'x_world': x, 'y': y, 'rotation_label': r,
+               'outcome': 'placed', 'sides': {'left': {'event': 0}}} for step, sid, x, y, r in placed]
+    (result / 'trace' / 'commits.jsonl').write_text(''.join(json.dumps(l) + '\n' for l in lines), encoding='utf-8')
+    return Path(directory)
+
+
+class CommitRecords(unittest.TestCase):
+    def test_placed_commits_must_match_decisions(self):
+        decisions = '1;7;1;2;0\n2;10;250;2;90\n'
+        both = [(1, 7, 1, 2, 0), (2, 10, 250, 2, 90)]
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(run_case.check_commits(commits_case(tmp, decisions, both)), [])
+        with tempfile.TemporaryDirectory() as tmp:  # wrong x
+            out = commits_case(tmp, decisions, [(1, 7, 1, 2, 0), (2, 10, 251, 2, 90)])
+            self.assertEqual(len(run_case.check_commits(out)), 1)
+        with tempfile.TemporaryDirectory() as tmp:  # last placement not recorded
+            out = commits_case(tmp, decisions, both[:1])
+            self.assertEqual(len(run_case.check_commits(out)), 1)
+            self.assertEqual(run_case.check_commits(out, stopped=True), [])
+        with tempfile.TemporaryDirectory() as tmp:  # reference to a missing event file
+            out = commits_case(tmp, decisions, both)
+            (out / 'result' / 'trace' / 'e00000.npz').unlink()
+            self.assertIn('missing events', run_case.check_commits(out)[0])
+
+
 class OutputProtection(unittest.TestCase):
     def test_launcher_refuses_baseline_and_existing_directories(self):
         for name in ['../../baseline/cross-case/runs/almeida-pr-20261106-01', '..', '../../baseline']:
@@ -379,6 +498,22 @@ class OutputProtection(unittest.TestCase):
             run_case.prepare_output('x')
             with self.assertRaises(FileExistsError):
                 run_case.prepare_output('x')
+
+    def test_staged_cleanup_never_deletes(self):
+        # Every original rm -rf line is staged as a guard: empty target passes, files raise.
+        for case, (script, _) in run_case.CASES.items():
+            source = (REPO / script).read_text(encoding='utf-8')
+            staged = run_case.stage(source, {'filter': {'policy': 'code_original'}, 'run_id': 'x'})
+            live = [l for l in staged.splitlines() if not l.lstrip().startswith('#')]
+            self.assertFalse([l for l in live if 'rm -rf' in l and 'glob' not in l], case)
+        line = run_case.stage("os.system('rm -rf '+d+'/*')\nseed_everything()\n",
+                              {'filter': {}, 'run_id': 'x'}).splitlines()[0]
+        with tempfile.TemporaryDirectory() as d:
+            exec(line, {'d': d})                       # empty: proceeds
+            (Path(d) / 'keep.txt').write_text('data')
+            with self.assertRaises(FileExistsError):
+                exec(line, {'d': d})
+            self.assertTrue((Path(d) / 'keep.txt').exists())
 
 
 if __name__ == '__main__':

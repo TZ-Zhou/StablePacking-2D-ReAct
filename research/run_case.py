@@ -23,6 +23,7 @@ RUNS = REPO / 'research' / 'runs'
 VALIDATION = REPO / 'baseline' / 'validation'
 ENV_PREFIX = Path(r'C:\Users\user\miniconda3\envs\stablepacking-baseline')
 CASES = {  # case -> (entry script, original number of walls in its batch)
+    'bricks': ('Tests/Bricks/run.py', 1),
     'almeida-r': ('Tests/Almeida/R/run.py', 1),
     'almeida-pr': ('Tests/Almeida/PR/run.py', 1),
     'almeida-ir': ('Tests/Almeida/IR/run.py', 1),
@@ -49,8 +50,12 @@ def stage(source, policy):
     lines = source.splitlines(keepends=True)
     for i, line in enumerate(lines):
         if 'os.system(' in line and 'rm -rf' in line and not line.lstrip().startswith('#'):
-            indent = line[:len(line) - len(line.lstrip())]
-            lines[i] = indent + "raise FileExistsError('Refusing to clean an existing result directory')\n"
+            # 'rm -rf <dir>/*' becomes: proceed only if <dir>/* matches nothing (Bricks cleans the
+            # directory it has just created); never delete anything.
+            indent, stripped = line[:len(line) - len(line.lstrip())], line.strip()
+            assert stripped.startswith("os.system('rm -rf '+") and stripped.endswith(')'), line
+            lines[i] = (indent + "if __import__('glob').glob((" + stripped[len('os.system('):-1] + ")[7:]): "
+                        "raise FileExistsError('Refusing to clean a non-empty result directory')\n")
     safe = ''.join(lines)
     boundary = safe.index('seed_everything()\n')
     header = ("\nfrom windows_case_runtime import configure\n"
@@ -112,7 +117,30 @@ def terminate(pid, settle_seconds=30):
     return record
 
 
-def check_trace(output):
+def check_commits(output, stopped=False):
+    """Placed attempts in trace/commits.jsonl must match decisions.txt line for line and point
+    at existing filter events. A run stopped by the launcher may lag decisions.txt by one line."""
+    problems = []
+    for decisions in output.rglob('decisions.txt'):
+        commits_file = decisions.parent / 'trace' / 'commits.jsonl'
+        if not commits_file.exists():
+            problems.append(f'{commits_file.parent}: no commits.jsonl')
+            continue
+        commits = [json.loads(line) for line in commits_file.read_text(encoding='utf-8').splitlines()]
+        rows = [line.split(';') for line in decisions.read_text(encoding='utf-8').splitlines()]
+        placed = [[str(c[k]) for k in ('step', 'stone_id', 'x_world', 'y', 'rotation_label')]
+                  for c in commits if c['outcome'] == 'placed']
+        if placed != rows[:len(placed)] or not 0 <= len(rows) - len(placed) <= int(stopped):
+            problems.append(f'{decisions}: {len(placed)} placed commits do not match {len(rows)} decisions')
+        events = {int(p.stem[1:]) for p in (decisions.parent / 'trace').glob('e*.npz')
+                  if not p.name.endswith('.tmp.npz')}
+        missing = {side['event'] for c in commits for side in c['sides'].values()} - events
+        if missing:
+            problems.append(f'{commits_file}: references missing events {sorted(missing)[:5]}')
+    return problems
+
+
+def check_trace(output, stopped=False):
     """Trace files must exist, be numbered without gaps and load; otherwise the data is incomplete."""
     from Stonepacker2D.stack.selection import load_trace
     files = sorted(output.rglob('trace/e*.npz'))
@@ -128,6 +156,7 @@ def check_trace(output):
             load_trace(f)
         except Exception as error:  # any unreadable file makes the run incomplete
             problems.append(f'{f.name}: {error!r}')
+    problems += check_commits(output, stopped)
     return {'files': len(files), 'ok': not problems, 'problems': problems}
 
 
@@ -202,7 +231,7 @@ def main(argv=None):
                 # A trace write failure raises inside the case and lands here as a non-zero exit.
                 process_status = 'PROCESS_PASS' if process.returncode == 0 else 'FAILED'
     finally:
-        trace = check_trace(output)
+        trace = check_trace(output, stopped=termination is not None)
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
                        elapsed_seconds=round(time.monotonic() - start, 3),

@@ -5,6 +5,9 @@ Usage: python -B research/sensitivity.py <trace dir> <new output dir> [--tol 1e-
 Reads only trace/*.npz written during construction (no convolution, placement or kinematics
 is re-run) and replays every permutation of the five filters with the paper-style cascade on
 the identical matrix. Writes orders.csv, events.csv, candidates.csv and summary.json.
+Poses (pose_id, rotation) are in the wall frame (selection.to_world); traces written before
+x_world existed fall back to evaluation-frame values suffixed with the side.
+final_ties counts candidates sharing the maximum score of the final argmax (>1: index decides).
 """
 import argparse
 import csv
@@ -14,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, load_trace, select
+from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, load_trace, select, tie_count
 
 
 def order_name(order):
@@ -37,11 +40,15 @@ def analyze_event(meta, arrays, tol):
     weights = arrays['weights']
     run_id, event, side = meta['run_id'], meta['event'], meta['side']
 
+    xw, rw = arrays.get('x_world', arrays['x']), arrays.get('rotation_world', arrays['rotation'])
+    suffix = '' if 'x_world' in arrays else f':{side}'
+
     def pose(i):
-        return f"{arrays['stone_id'][i]}@{arrays['rotation'][i]}:{arrays['x'][i]},{arrays['y'][i]}:{side}"
+        return f"{arrays['stone_id'][i]}@{rw[i]}:{xw[i]},{arrays['y'][i]}{suffix}"
 
     live = meta['policy']
-    live_replay = select(raw, weights, live['policy'], live['order'], live['tol']).index
+    live_sel = select(raw, weights, live['policy'], live['order'], live['tol'])
+    live_replay = live_sel.index
     live_selected = int(arrays['selected'])
     live_ok = (live_replay is None and live_selected == -1) or live_replay == live_selected
 
@@ -62,8 +69,9 @@ def analyze_event(meta, arrays, tol):
             'candidate_id': '' if i is None else f'{run_id}/{event}/{i}',
             'pose_id': '' if i is None else pose(i),
             'stone_id': '' if i is None else int(arrays['stone_id'][i]),
-            'rotation': '' if i is None else int(arrays['rotation'][i]),
-            'branch': sel.branch, 'same_as_paper': bool(i == paper.index),
+            'rotation': '' if i is None else int(rw[i]),
+            'branch': sel.branch, 'final_ties': tie_count(raw, weights, sel, 'paper', order, tol),
+            'same_as_paper': bool(i == paper.index),
             'first_divergence_stage': first_divergence(sel.stages, paper.stages) or '',
         })
     votes = Counter(sel.index for sel in sels if sel.index is not None)
@@ -84,10 +92,13 @@ def analyze_event(meta, arrays, tol):
         'code_original_same_as_paper': bool(code_original.index == paper.index),
         **{f'distinct_sets_after_filter_{d}': n for d, n in enumerate(depth_sets, start=1)},
         'live_policy': live['policy'], 'live_matches_replay': live_ok,
+        'live_final_ties': tie_count(raw, weights, live_sel, live['policy'], live['order'], live['tol']),
+        'paper_final_ties': tie_count(raw, weights, paper, 'paper', PAPER_ORDER, tol),
+        'orders_with_final_tie': sum(r['final_ties'] > 1 for r in rows),
     }
     candidate_rows = [{'run_id': run_id, 'event': event, 'candidate_id': f'{run_id}/{event}/{i}',
                        'pose_id': pose(i), 'stone_id': int(arrays['stone_id'][i]),
-                       'rotation': int(arrays['rotation'][i]), 'votes': n}
+                       'rotation': int(rw[i]), 'votes': n}
                       for i, n in votes.most_common()]
     return rows, event_row, candidate_rows
 
@@ -109,6 +120,9 @@ def summarize(events, orders):
         'events_where_tol0_changes_distinct_count': sum(e['n_distinct_pose'] != e['n_distinct_pose_tol0'] for e in events),
         'events_where_code_original_differs_from_paper': sum(not e['code_original_same_as_paper'] for e in events),
         'live_replay_consistent': all(e['live_matches_replay'] for e in events),
+        'events_with_live_final_tie': sum(e['live_final_ties'] > 1 for e in events),
+        'events_with_paper_final_tie': sum(e['paper_final_ties'] > 1 for e in events),
+        'events_with_any_order_final_tie': sum(e['orders_with_final_tie'] > 0 for e in events),
         'per_step': {str(step): {'events': len(es),
                                  'max_distinct_pose': max(e['n_distinct_pose'] for e in es),
                                  'min_orders_same_as_paper': min(e['orders_same_as_paper'] for e in es)}
