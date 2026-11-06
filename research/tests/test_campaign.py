@@ -121,6 +121,26 @@ class CampaignRunner(unittest.TestCase):
             campaign.run_campaign(changed, launch=self.launcher({}))
         self.assertEqual(self.calls, [])
 
+    def test_extension_reuses_parent_runs(self):
+        (campaign.CAMPAIGNS / 'c' / 'campaign.json').write_text(json.dumps(self.c))
+        campaign.run_campaign(self.c, launch=self.launcher({}))
+        random = next(a['order'] for a in self.c['arms'] if a['name'].startswith('random'))
+        arms = ['code_original', 'paper=3,0,2,1,4', 'alt=2,4,3,1,0', 'random=' + ','.join(map(str, random)),
+                'mainstream=4,1,0,3,2']
+        child = registered(campaign_id='d', arm_texts=arms, n_seeds=5, extends='c')
+        self.assertEqual(child['seeds'][:3], self.c['seeds'])
+        self.assertEqual(len(child['reused_runs']), 12)
+        (campaign.CAMPAIGNS / 'd').mkdir()
+        self.calls.clear()
+        campaign.run_campaign(child, launch=self.launcher({}))
+        self.assertEqual(len(self.calls), 25 - 12)
+        self.assertTrue(all(a[1].startswith('campaigns/d/') for a in self.calls))
+        self.assertEqual(sum(n.startswith('campaigns/c/') for _, _, n in campaign.planned_runs(child)), 12)
+        with self.assertRaises(ValueError):
+            registered(campaign_id='e', arm_texts=arms, n_seeds=5, extends='c', timeout=2400)
+        with self.assertRaises(ValueError):
+            registered(campaign_id='e', arm_texts=arms, n_seeds=5, extends='c', master_seed=1)
+
     def test_dry_run_launches_nothing(self):
         planned = campaign.run_campaign(self.c, dry_run=True, launch=self.launcher({}))
         self.assertEqual((len(planned), self.calls), (12, []))

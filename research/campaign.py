@@ -2,6 +2,7 @@
 
   python -B research/campaign.py init <id> --case thangavelu-noise80 --arms code_original \
       paper=3,0,2,1,4 alt=2,4,3,1,0 random --n-seeds 3 [--master-seed 20261106] [--timeout 1200]
+      [--extends <parent id>] [--note TEXT]
   python -B research/campaign.py run <id> [--dry-run] [--max-runs N]
   python -B research/campaign.py summarize <id>
 
@@ -12,6 +13,9 @@ git head and the SHA256 of every executed source file. run refuses to start if t
 changed, so all arms share convolution, candidates, scores and stability analysis and differ
 only in the filter priority. Each wall is its own process with seed_everything(seed) and only
 the first wall of a batch case. Runs already present are never rerun or overwritten.
+--extends reuses the parent's runs for every (arm, seed) it shares; it requires the same case,
+timeout and executed code, and parent seeds that are a prefix of the new seed list (same
+master seed). Give the parent's random order explicitly (random=a,b,c,d,e) to reuse it.
 Stopping rules: FAILED stops the campaign; TERMINATION_FAILED raises; TIMEOUT and
 INCOMPLETE_TRACE are recorded and the campaign continues.
 summarize (re)writes the derived manifest.csv and steps.csv from the run directories.
@@ -47,7 +51,7 @@ def parse_arm(text):
     return {'name': f"{name}_{'-'.join(map(str, order))}", 'policy': 'paper', 'order': order}
 
 
-def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout):
+def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, extends=None, notes=()):
     if case not in run_case.CASES:
         raise ValueError(f'unknown case {case}')
     rng = np.random.default_rng(master_seed)
@@ -67,6 +71,17 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout):
     names = [a['name'] for a in arms]
     if len(set(names)) != len(names):
         raise ValueError(f'duplicate arms {names}')
+    reused = []
+    if extends:
+        parent = load(extends)
+        if (parent['case'], parent['timeout_seconds'], parent['code_sha256']) != (case, timeout, run_case.code_fingerprint()):
+            raise ValueError(f'{extends}: case, timeout or executed code differs; its runs cannot be reused')
+        if seeds[:len(parent['seeds'])] != parent['seeds']:
+            raise ValueError(f"{extends}: seeds {parent['seeds']} are not a prefix of {seeds}")
+        for seed, arm, run in planned_runs(parent):
+            same = [a for a in arms if (a['name'], a['policy'], a['order']) == (arm['name'], arm['policy'], arm['order'])]
+            if same:
+                reused.append({'seed': seed, 'arm': arm['name'], 'run': run})
     git = lambda *a: subprocess.run(['git', *a], cwd=run_case.REPO, capture_output=True, text=True).stdout.strip()
     return {
         'id': campaign_id, 'created': datetime.now().isoformat(timespec='seconds'), 'case': case,
@@ -75,13 +90,15 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout):
                      'random arm order drawn afterwards from the same RNG among orders unused by other arms',
         'python_hash_seed': 20, 'paper_order': list(PAPER_ORDER), 'code_original_order': list(CODE_ORIGINAL_ORDER),
         'git_head': git('rev-parse', 'HEAD'), 'git_status': git('status', '--porcelain').splitlines(),
-        'code_sha256': run_case.code_fingerprint(),
+        'code_sha256': run_case.code_fingerprint(), 'extends': extends, 'reused_runs': reused, 'notes': list(notes),
     }
 
 
 def planned_runs(campaign):
-    """Seed-major order, so a stopped campaign has every arm on the same seeds."""
-    return [(seed, arm, f"campaigns/{campaign['id']}/{campaign['case']}/{arm['name']}/seed{seed}")
+    """Seed-major order, so a stopped campaign has every arm on the same seeds. Runs reused from
+    the parent campaign keep their directory there."""
+    reused = {(r['seed'], r['arm']): r['run'] for r in campaign.get('reused_runs', [])}
+    return [(seed, arm, reused.get((seed, arm['name']), f"campaigns/{campaign['id']}/{campaign['case']}/{arm['name']}/seed{seed}"))
             for seed in campaign['seeds'] for arm in campaign['arms']]
 
 
@@ -129,6 +146,7 @@ def summarize(campaign):
     from check_case import check_run, result_dirs
     root = CAMPAIGNS / campaign['id']
     manifest, steps, by_key = [], [], {}
+    names = {(seed, arm['name']): name for seed, arm, name in planned_runs(campaign)}
     for seed, arm, name in planned_runs(campaign):
         run = run_case.RUNS / name
         row = {'campaign': campaign['id'], 'case': campaign['case'], 'arm': arm['name'], 'policy': arm['policy'],
@@ -147,20 +165,19 @@ def summarize(campaign):
         mine = by_key.get((row['seed'], row['arm']))
         if ref is not None and mine is not None:
             row['first_divergence_step_vs_code_original'] = metrics.first_divergence(mine, ref)
-            row['first_candidates_same_as_code_original'] = same_first_candidates(campaign, row['seed'], row['arm'])
+            row['first_candidates_same_as_code_original'] = same_first_candidates(
+                names[(row['seed'], row['arm'])], names[(row['seed'], 'code_original')])
     write_rows(root / 'manifest.csv', manifest)
     write_rows(root / 'steps.csv', steps)
     return manifest
 
 
-def same_first_candidates(campaign, seed, arm_name):
+def same_first_candidates(run, reference):
     """First filter event of the wall: identical raw score matrix and poses across arms."""
     from Stonepacker2D.stack.selection import load_trace
-    def first(arm):
-        name = f"campaigns/{campaign['id']}/{campaign['case']}/{arm}/seed{seed}"
-        path = next((run_case.RUNS / name).rglob('trace/e00000.npz'))
-        return load_trace(path)[1]
-    a, b = first(arm_name), first('code_original')
+    def first(name):
+        return load_trace(next((run_case.RUNS / name).rglob('trace/e00000.npz')))[1]
+    a, b = first(run), first(reference)
     keys = ['features_raw', 'stone_id', 'rotation', 'x', 'y', 'wall', 'footprint']
     return all(np.array_equal(a[k], b[k]) for k in keys)
 
@@ -189,6 +206,8 @@ def main(argv=None):
     init.add_argument('--n-seeds', type=int, required=True)
     init.add_argument('--master-seed', type=int, default=20261106)
     init.add_argument('--timeout', type=int, default=1200)
+    init.add_argument('--extends', help='reuse runs of this campaign for arms and seeds it shares')
+    init.add_argument('--note', action='append', default=[], help='recorded in campaign.json, e.g. why an arm was chosen')
     run = sub.add_parser('run')
     run.add_argument('id')
     run.add_argument('--dry-run', action='store_true')
@@ -197,7 +216,8 @@ def main(argv=None):
     summ.add_argument('id')
     args = parser.parse_args(argv)
     if args.command == 'init':
-        campaign = make_campaign(args.id, args.case, args.arms, args.n_seeds, args.master_seed, args.timeout)
+        campaign = make_campaign(args.id, args.case, args.arms, args.n_seeds, args.master_seed, args.timeout,
+                                 args.extends, args.note)
         root = CAMPAIGNS / args.id
         root.mkdir(parents=True, exist_ok=False)
         (root / 'campaign.json').write_text(json.dumps(campaign, indent=2), encoding='utf-8')
