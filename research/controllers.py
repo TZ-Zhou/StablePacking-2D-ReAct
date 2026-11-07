@@ -854,11 +854,23 @@ def base_policy(run):
     return {'policy': 'paper', 'order': None if fp['order'] is None else tuple(fp['order']), 'tol': fp['tol']}
 
 
+def refuse_paid(spec, what):
+    """Raises if spec's LLM is a paid API: offline work only replays recorded replies (check())."""
+    spec = full_spec(spec)
+    if spec['kind'] == 'react' and spec['llm']['kind'] == 'api':
+        import llm_adapter
+        if llm_adapter.paid(spec['llm']):
+            raise ValueError(f"{what} never calls a paid API ({spec['llm']['provider']}); check() replays a wall's recorded replies")
+
+
 def rerun(result, spec, base, transport='inline', geometry=None, ledger=None):
     """The records a controller writes when it sees the traced selections of one result directory;
     transport: 'inline', 'process' or a transport object (check() replays LLM walls with one);
+    a paid API spec is refused unless the transport is given (it then decides what is called);
     geometry: a LiveGeometry giving the observations the live outcome geometry; ledger: a list
     that receives the ledger lines (discarded by default)."""
+    if isinstance(transport, str):
+        refuse_paid(spec, 'rerun')
     records, ledger = [], [] if ledger is None else ledger
     controller = make_controller(spec, records.append, transport, ledger.append) if isinstance(transport, str) else \
         ControllerClient(spec, transport, records.append, ledger.append)
@@ -874,7 +886,9 @@ def rerun(result, spec, base, transport='inline', geometry=None, ledger=None):
 def replay(result, spec):
     """Evaluate a controller offline on a wall built with the base policy alone (the wall keeps its
     recorded path whatever the controller chooses). Walls with interventions are refused: their
-    traced orders are applied, not base, and their states carry the earlier controller's actions."""
+    traced orders are applied, not base, and their states carry the earlier controller's actions.
+    A paid API spec is refused: an offline evaluation never calls a real API."""
+    refuse_paid(spec, 'replay')
     run = run_of(result)
     if json.loads((run / 'receipt.json').read_text(encoding='utf-8')).get('controller') is not None:
         raise ValueError(f'{run} was built with a controller; replay needs a base-policy wall')

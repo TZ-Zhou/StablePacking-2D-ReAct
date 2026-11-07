@@ -8,9 +8,13 @@ An API LLM spec names the provider, the model and the call parameters, e.g.
   {"kind": "api", "provider": "fake", "model": "fake-1", "fake_mode": "max_llc"}
 APILLM(messages, tools) sends one request per attempt through the provider's sender and returns
 the reply text, which ReActPolicy parses and validates (only a legal filter order can be
-committed). Errors are classified by the sender: a TransientError (rate limit, overload,
-timeout, dropped connection, 5xx) is retried up to max_retries times with exponential backoff,
-any other error fails the call at once (fallback:llm_error). The whole call, retries included,
+committed). Errors are classified by the sender. Only a failure the provider did not process
+(a TransientError billed 'none': rate limit, overload) is retried, up to max_retries times with
+exponential backoff; any other error fails the call at once (fallback:llm_error). The first
+attempt whose usage is unknown (timeout, dropped connection, 5xx, a reply without usage, any
+unclassified error) halts the LLM: that call fails at once with the reason (no retry, and the
+reply's tool call, if any, is not executed) and every later call of it fails before sending
+anything; the client also skips every later API decision. The whole call, retries included,
 is bounded by ReActPolicy's llm_timeout, after which the worker is killed with the call in it;
 for a paid provider validate_spec requires llm_timeout to cover every attempt (call_bound).
 
@@ -412,6 +416,7 @@ class APILLM:
             enabled(llm)
             sender = PROVIDERS[spec['provider']](spec)
         self.send, self.usage, self.attempts, self.exchange = sender, None, None, None
+        self.halted = None  # why no request is sent any more: set by the first attempt of unknown usage
         self.begin(None)
 
     def begin(self, budget):
@@ -448,6 +453,11 @@ class APILLM:
             self.spent_tokens += sum(self.usage.get(k, 0) for k in USAGE_KEYS)
             self.spent_usd += 0.0 if self.prices is None else cost(self.prices, self.usage)
 
+    def halt(self, attempt, why):
+        """The failure of a call whose attempt had unknown usage; no request is sent any more."""
+        self.halted = f'attempt {attempt} of a call had unknown usage ({why})'
+        return LLMFailure('error', f'stopped: {self.halted}; no further request is sent')
+
     def __call__(self, messages, tools):
         self.usage, self.attempts, self.exchange = None, [], None
         payload = {'model': self.model, **self.params, 'messages': messages, 'tools': tools}
@@ -455,27 +465,35 @@ class APILLM:
         body = request(payload) if request else payload
         if request:  # the provider's request, recorded whether or not an attempt gets a reply
             self.exchange = {'payload': body, 'payload_sha256': sha256(body), 'request_id': None, 'response': None}
+        if self.halted:
+            raise LLMFailure('error', f'stopped before sending: {self.halted}')
         for attempt in range(self.max_retries + 1):
             if attempt:
                 time.sleep(self.backoff * 2 ** (attempt - 1))
             reserved, start = self.reserve(body), time.monotonic()
             try:
                 out = self.send(body, attempt)
-            except TransientError as error:
-                self.record(attempt, start, 'retried', error.billed, reserved, error)
-                continue
-            except Exception as error:  # not worth a retry: the call fails (fallback:llm_error)
-                self.record(attempt, start, 'failed', getattr(error, 'billed', 'unknown'), reserved, error)
-                raise
+            except Exception as error:
+                billed = getattr(error, 'billed', 'unknown')
+                retry = isinstance(error, TransientError) and billed == 'none' and attempt < self.max_retries  # unprocessed only
+                self.record(attempt, start, 'retried' if retry else 'failed', billed, reserved, error)
+                if retry:
+                    continue
+                if billed == 'unknown':
+                    raise self.halt(attempt, error_text(error))
+                if isinstance(error, TransientError):
+                    raise LLMFailure('error', f'no reply after {attempt + 1} attempts: {self.attempts[-1]["error"]}')
+                raise  # not worth a retry: the call fails (fallback:llm_error)
             out = out if isinstance(out, dict) else {}
             self.usage = out.get('usage')
             if request:
                 self.exchange.update(request_id=out.get('request_id'), response=out.get('response'))
-            self.record(attempt, start, 'reply', 'reported' if usage_ok(self.usage) else 'unknown', reserved,
-                        request_id=out.get('request_id'))
+            billed = 'reported' if usage_ok(self.usage) else 'unknown'
+            self.record(attempt, start, 'reply', billed, reserved, request_id=out.get('request_id'))
+            if billed == 'unknown':  # its tool call is not executed
+                raise self.halt(attempt, 'a reply without usage')
             if out.get('problem'):
                 raise LLMFailure('error', out['problem'])
             if not isinstance(out.get('text'), str):
                 raise LLMFailure('error', 'the provider reply has no text')
             return out['text']
-        raise LLMFailure('error', f"no reply after {self.max_retries + 1} attempts: {self.attempts[-1]['error']}")

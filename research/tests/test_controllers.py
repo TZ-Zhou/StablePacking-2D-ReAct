@@ -7,6 +7,7 @@ GeometryReplay G1..G6 covers the live outcome geometry of Mock wall 4, FourthRev
 fourth review, FifthReview R5-1..R5-6 the fifth, APIAdapter the fake-provider API adapter and
 AnthropicProvider / OpenAIProvider the paid senders against stand-in SDKs (no SDK, network or paid call).
 SixthReview       the sixth review's gaps (R6-1..R6-10).
+SeventhReview     the seventh review's: unknown usage stops every request, retries, paid replay (R7-1..R7-3).
 """
 import base64
 import copy
@@ -1481,7 +1482,7 @@ class APIAdapter(unittest.TestCase):
     def test_illegal_truncated_or_huge_replies_never_commit(self):
         for text in ('{"tool": "commit_order", "arguments": {"order": "0-0-1-2-3"', '{"tool": "commit_order", "arguments": {"order": [3,0,2,1,4]}}',
                      '"' + 'x' * 200_000 + '"', '{"tool": "commit_order", "arguments": {"order": "0-1-2-3-4", "stone": "S1"}}', ''):
-            llm = llm_adapter.APILLM(SAMPLE, sender=lambda payload, attempt, text=text: {'text': text, 'usage': None})
+            llm = llm_adapter.APILLM(SAMPLE, sender=lambda payload, attempt, text=text: {'text': text, 'usage': {'input_tokens': 1, 'output_tokens': 1}})
             client = controllers.ControllerClient({'kind': 'react', 'llm': SAMPLE}, controllers.InlineTransport(
                 lambda: controllers.ReActPolicy(llm, max_tool_calls=2)), ledger=[].append)
             record = self.call(client)
@@ -1790,8 +1791,8 @@ class AnthropicProvider(unittest.TestCase):
         e = FakeSDK
         cases = [([e.RateLimitError('429', 429)], 'llm', ['none', 'reported']),
                  ([e.APIStatusError('overloaded', 529)], 'llm', ['none', 'reported']),
-                 ([e.APIStatusError('internal', 500)], 'llm', ['unknown', 'reported']),
-                 ([e.APITimeoutError(f'timed out with key {SECRET}')], 'llm', ['unknown', 'reported']),
+                 ([e.APIStatusError('internal', 500)], 'fallback:llm_error', ['unknown']),  # unknown usage: stopped, no retry
+                 ([e.APITimeoutError(f'timed out with key {SECRET}')], 'fallback:llm_error', ['unknown']),
                  ([e.APIStatusError('bad request', 400)], 'fallback:llm_error', ['none']),
                  ([e.APIStatusError('auth', 401)], 'fallback:llm_error', ['none']),
                  ([e.RateLimitError('429', 429)] * 3, 'fallback:llm_error', ['none'] * 3)]
@@ -1860,8 +1861,9 @@ class FakeOpenAISDK(FakeSDK):
     answers from the same script with Responses API output items (reasoning, message, function_call)."""
 
     def __init__(self, errors=(), model='gpt-test-2026-01-01', status='completed', refusal=False, bad_args=False, encrypted=True,
-                 extra_call=False, cache_write=0, encrypted_size=None):
+                 extra_call=False, cache_write=0, encrypted_size=None, no_usage=False):
         super().__init__(errors, extra_call=extra_call)
+        self.no_usage = no_usage
         self.model, self.status, self.refusal, self.bad_args, self.encrypted = model, status, refusal, bad_args, encrypted
         self.cache_write, self.encrypted_size = cache_write, encrypted_size
         sdk = self
@@ -1892,6 +1894,8 @@ class FakeOpenAISDK(FakeSDK):
                 'usage': {'input_tokens': 1000, 'input_tokens_details': {'cached_tokens': 200, 'cache_write_tokens': self.cache_write},
                           'output_tokens': 80,
                           'output_tokens_details': {'reasoning_tokens': 50}, 'total_tokens': 1080}}
+        if self.no_usage:
+            data['usage'] = None
         return SimpleNamespace(to_dict=lambda: copy.deepcopy(data), _request_id=f'req_{n}')
 
 
@@ -1940,8 +1944,8 @@ class OpenAIProvider(unittest.TestCase):
         quota.code = 'insufficient_quota'
         cases = [([e.RateLimitError('429', 429)], 'llm', ['none', 'reported']),
                  ([quota], 'fallback:llm_error', ['none']),  # an exhausted quota is not retried
-                 ([e.APIStatusError('internal', 500)], 'llm', ['unknown', 'reported']),
-                 ([e.APITimeoutError(f'timed out, key {SECRET}')], 'llm', ['unknown', 'reported']),
+                 ([e.APIStatusError('internal', 500)], 'fallback:llm_error', ['unknown']),  # unknown usage: stopped, no retry
+                 ([e.APITimeoutError(f'timed out, key {SECRET}')], 'fallback:llm_error', ['unknown']),
                  ([e.APIStatusError('bad request', 400)], 'fallback:llm_error', ['none']),
                  ([ValueError(f'unexpected {SECRET}')], 'fallback:llm_error', ['unknown'])]
         for errors, source, billed in cases:
@@ -2198,6 +2202,76 @@ class SixthReview(unittest.TestCase):
             llm_adapter.OpenAISender(llm_adapter.full(GPT), sdk=sdk)
             self.assertEqual(sdk.clients[0]['api_key'], SECRET)
             self.assertIn(SECRET, controllers.SECRETS)  # registered for masking before the client was built
+
+@mock.patch.dict(os.environ, {'OPENAI_API_KEY': SECRET})
+class SeventhReview(unittest.TestCase):
+    """Regression tests of the seventh review: the first attempt of unknown usage stops every later
+    request (R7-1), only unprocessed failures are retried and an exhausted retry ends 'failed'
+    (R7-2), offline replay refuses paid API specs (R7-3)."""
+
+    call = FifthReview.call
+    openai = SixthReview.openai
+
+    def two_decisions(self, sdk):
+        client, api = self.openai(sdk)
+        _, first = self.call(client)
+        sent = len(sdk.bodies)
+        _, second = self.call(client)
+        return client, api, first, second, sent
+
+    def test_r7_1_the_first_unknown_usage_stops_every_later_request(self):
+        e = FakeOpenAISDK
+        cases = {'timeout': FakeOpenAISDK([e.APITimeoutError('read timed out')]),
+                 'connection': FakeOpenAISDK([e.APIConnectionError('connection reset')]),
+                 '500': FakeOpenAISDK([e.APIStatusError('internal', 500)]), '503': FakeOpenAISDK([e.APIStatusError('unavailable', 503)]),
+                 'unclassified': FakeOpenAISDK([ValueError('unexpected')]), 'missing usage': FakeOpenAISDK(no_usage=True)}
+        for name, sdk in cases.items():
+            client, api, first, second, sent = self.two_decisions(sdk)
+            self.assertEqual(sent, 1, name)  # Codex: was up to 3 (retries) or 2 (the next tool call)
+            self.assertEqual(len(sdk.bodies), 1, name)  # the next decision sent nothing either
+            self.assertEqual((first['source'], first['final']['order']), ('fallback:llm_error', '3-0-2-1-4'), name)
+            self.assertEqual(second['source'], 'skip:usage_unknown', name)
+            self.assertEqual(len(first['react']), 1, name)  # no second round of function calling
+            self.assertIn('stopped: attempt 0 of a call had unknown usage', first['react'][0]['error'], name)
+            t = first['transcripts'][0]['response']
+            self.assertEqual([(a['attempt'], a['outcome'], a['billed']) for a in t['attempts']],
+                             [(0, 'reply' if name == 'missing usage' else 'failed', 'unknown')], name)
+            self.assertEqual(t['exchange']['payload'], sdk.bodies[0], name)  # what was sent is on record
+            with self.assertRaisesRegex(controllers.LLMFailure, 'stopped before sending'):
+                api(*[[{'role': 'system', 'content': 's'}, {'role': 'user', 'content': '{}'}], []])  # the LLM itself is halted
+            self.assertEqual(len(sdk.bodies), 1, name)
+            self.assertNotIn(SECRET, json.dumps([first, second]))
+
+    def test_r7_2_only_unprocessed_failures_are_retried_and_an_exhausted_retry_fails(self):
+        e = FakeOpenAISDK
+        sdk = FakeOpenAISDK([e.RateLimitError('429', 429), e.RateLimitError('429', 429)])
+        client, _, first, _, sent = self.two_decisions(sdk)
+        self.assertEqual((first['source'], client.unknown_usage), ('llm', 0))
+        self.assertEqual([a['outcome'] for a in first['transcripts'][0]['response']['attempts']], ['retried', 'retried', 'reply'])
+        sdk = FakeOpenAISDK([e.RateLimitError('429', 429)] * 3 + [e.APIStatusError('overloaded', 529)] * 3)
+        client, _, first, second, sent = self.two_decisions(sdk)
+        for record, status in ((first, 429), (second, 529)):
+            attempts = record['transcripts'][0]['response']['attempts']
+            self.assertEqual([(a['outcome'], a['billed'], a['status_code']) for a in attempts],
+                             [('retried', 'none', status), ('retried', 'none', status), ('failed', 'none', status)])  # Codex: last was 'retried'
+            self.assertIn('no reply after 3 attempts', record['react'][0]['error'])
+        self.assertEqual((sent, len(sdk.bodies), client.unknown_usage), (3, 6, 0))  # nothing unknown: later decisions may still call
+        quota = e.RateLimitError('quota', 429)
+        quota.code = 'insufficient_quota'
+        sdk = FakeOpenAISDK([quota])
+        _, _, first, _, sent = self.two_decisions(sdk)
+        self.assertEqual((sent, [a['outcome'] for a in first['transcripts'][0]['response']['attempts']]), (1, ['failed']))
+
+    def test_r7_3_offline_replay_refuses_paid_api_specs(self):
+        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}), \
+                mock.patch.object(llm_adapter.OpenAISender, '__init__', side_effect=AssertionError('an API client was built')):
+            for spec in (GPT_SPEC, OPUS_SPEC):
+                with self.assertRaisesRegex(ValueError, 'never calls a paid API'):
+                    controllers.replay(Path('no-such-wall'), spec)
+                with self.assertRaisesRegex(ValueError, 'never calls a paid API'):
+                    controllers.rerun(Path('no-such-wall'), spec, PAPER, 'process')
+        controllers.refuse_paid({'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}}, 'replay')  # local: allowed
+        controllers.refuse_paid({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, 'replay')
 
 if __name__ == '__main__':
     unittest.main()
