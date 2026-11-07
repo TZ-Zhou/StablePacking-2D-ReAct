@@ -24,7 +24,10 @@ these departures from the paper's Eqs. 25-28:
   leave out the division by mu.
 The author renders the label image at the stones' original resolution
 (02_view_transformation_ori_reso.py); rock_labels is the simulation grid, so values differ by
-resolution, not by method.
+resolution, not by method. The formal metrics are wall_quality: 02's rendering (render_original)
+then 03, as 02 does it: a stone moved beyond its own canvas (the stone image's size, 400 rows for
+noise 80, under the 559-row wall) is cut silently, and one overlapping the stones before by
+200 px or more is left out; render_original reports both per stone.
 """
 import json
 import pickle
@@ -213,6 +216,88 @@ def wang_metrics(result, labels=None):
     lam_min = min(lam['left'], lam['right']) if None not in lam.values() else None
     out.update(lambda_min=lam_min, F_LR=None if lam_min is None else lam_min / MU, mu=MU)
     return out
+
+
+RESCALE = 0.5  # _rescale of Tests/Thangavelu/02_view_transformation_ori_reso.py
+
+
+def stone_source(run):
+    """The original-resolution stone label image a Thangavelu run read, as its 00_run.py names it;
+    refuses a run whose _rescale is not 02's 0.5."""
+    text = (Path(run) / '00_run.py').read_text(encoding='utf-8')
+    image = re.findall(r"/data/(stones_noise_\d+_labels\.png)", text)
+    rescale = re.findall(r"^\s*_rescale = ([0-9.]+)\s*$", text, re.M)
+    if len(set(image)) != 1 or [float(r) for r in rescale] != [RESCALE]:
+        raise ValueError(f'not a Thangavelu run with _rescale {RESCALE}: {image} {rescale}')
+    return Path(run) / 'data' / image[0]
+
+
+def render_original(run, result):
+    """02's stacked_wall_label.png of a wall, at the stones' original resolution: the wall size
+    from the stone label image (5 mean bounding boxes, + 2/rescale and 3/rescale), every stone
+    (region >= 50 px, holes filled) centered on a canvas of that image's size, then for each line
+    of transformation.txt in order turned by its angle about the canvas center, moved so its
+    centroid is at (d_x, d_y), cropped to the wall and drawn with its placement number, unless it
+    overlaps the stones drawn before by 200 px or more (then 02 leaves it out).
+    Returns the uint8 label image and, per stone, its drawn pixels, the pixels the canvas crop
+    lost (02 clips silently) and whether it was left out."""
+    from skimage.measure import label
+    image = label(cv2.imread(str(stone_source(run)), cv2.IMREAD_GRAYSCALE).astype(np.uint8))
+    regions = [r for r in regionprops(image) if r.area >= 50]
+    width = sum(r.bbox[3] - r.bbox[1] for r in regions) / len(regions) * 5
+    height = sum(r.bbox[2] - r.bbox[0] for r in regions) / len(regions) * 5
+    size = (int(width + 2 / RESCALE), int(height + 3 / RESCALE))
+    stones = {}
+    for r in regions:
+        m = np.zeros_like(image)
+        m[r.bbox[0]:r.bbox[2], r.bbox[1]:r.bbox[3]] = r.image_filled.astype(np.uint8)
+        c = regionprops(m.astype(np.uint8))[0].centroid
+        shift = np.float32([[1, 0, m.shape[1] // 2 - c[1]], [0, 1, m.shape[0] // 2 - c[0]]])
+        stones[r.label] = cv2.warpAffine(m, shift, (m.shape[1], m.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
+    lines = (Path(result) / 'transformation.txt').read_text().splitlines()[1:]
+    placed = [(int(f[0]), float(f[1]), float(f[2]), float(f[3])) for f in (line.split(';') for line in lines)]
+    ids = [p[0] for p in placed]
+    # ponytail: 02 keys these lines by id and turns stones[id % 1000] in place, so a repeated id or
+    # image would differ from this port; no recorded run has one, refuse instead of emulating
+    if len({i % 1000 for i in ids}) != len(ids) or not {i % 1000 for i in ids} <= set(stones):
+        raise ValueError(f'transformation.txt ids not one per stone image: {ids}')
+    drawn = np.zeros((size[1], size[0]), np.uint8)
+    labels, stones_out = np.zeros_like(drawn), []
+    for seq, (stone_id, x, y, angle) in enumerate(placed):
+        s = stones[stone_id % 1000]
+        turn = cv2.getRotationMatrix2D((s.shape[1] // 2, s.shape[0] // 2), angle, 1.0)
+        s = cv2.warpAffine(s, turn, (s.shape[1], s.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
+        c = regionprops(s.astype(np.uint8))[0].centroid
+        move = np.float32([[1, 0, x - c[1]], [0, 1, y - c[0]]])
+        before = np.count_nonzero(s)
+        s = cv2.warpAffine(s, move, (s.shape[1], s.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
+        s = s[:drawn.shape[0], :drawn.shape[1]]
+        s = np.pad(s, ((0, drawn.shape[0] - s.shape[0]), (0, drawn.shape[1] - s.shape[1])))
+        overlap = np.count_nonzero((s != 0) & (drawn != 0))
+        stones_out.append({'id': stone_id, 'seq': seq + 1, 'pixels': int(np.count_nonzero(s)),
+                           'lost_to_crop': int(before - np.count_nonzero(s)), 'overlap': int(overlap),
+                           'left_out': overlap >= 200})
+        if overlap >= 200:
+            continue
+        drawn = np.where(s != 0, s, drawn)
+        labels = np.where(s != 0, seq + 1, labels).astype(np.uint8)
+    return labels, {'size': [size[1], size[0]], 'canvas': list(image.shape), 'stones': stones_out}
+
+
+def wall_quality(run, result):
+    """The four formal metrics of a wall, by the author's method: 02's rendering at the original
+    resolution, then 03 (wang_metrics). Kept apart from wall_metrics; raw values, no total score."""
+    result = Path(result)
+    labels, render = render_original(run, result)
+    rocks = [r.id for r in pickle.load(open(result / 'base.pkl', 'rb')).placed_rocks]
+    if rocks != [s['id'] for s in render['stones']]:
+        raise ValueError(f'transformation.txt does not list the placed rocks of base.pkl: {rocks}')
+    m = wang_metrics(result, labels=labels.astype(int))
+    return {'F_SF': m['F_SF_author'], 'F_AH': m['F_AH'], 'F_AV': m['F_AV'], 'F_LR': m['F_LR'],
+            'lambda_min': m['lambda_min'], 'mu': m['mu'], 'method': 'Tests/Thangavelu 02 + 03, original resolution',
+            'F_AH_factors': [p['factor'] for p in m['F_AH_paths'] or []],
+            'F_AV_factors': [p['factor'] for p in m['F_AV_paths'] or []],
+            'render': render}
 
 
 def step_rows(result):
