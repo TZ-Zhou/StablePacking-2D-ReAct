@@ -11,8 +11,8 @@ the reply text, which ReActPolicy parses and validates (only a legal filter orde
 committed). Errors are classified by the sender. Only a failure the provider did not process
 (a TransientError billed 'none': rate limit, overload) is retried, up to max_retries times with
 exponential backoff; any other error fails the call at once (fallback:llm_error). The first
-attempt whose usage is unknown (timeout, dropped connection, 5xx, a reply without usage, any
-unclassified error) halts the LLM: that call fails at once with the reason (no retry, and the
+attempt whose usage is unknown (timeout, dropped connection, 5xx, a redirect, a reply without
+usage, any unclassified error) halts the LLM: that call fails at once with the reason (no retry, and the
 reply's tool call, if any, is not executed) and every later call of it fails before sending
 anything; the client also skips every later API decision. The whole call, retries included,
 is bounded by ReActPolicy's llm_timeout, after which the worker is killed with the call in it;
@@ -21,8 +21,11 @@ for a paid provider validate_spec requires llm_timeout to cover every attempt (c
 Every attempt is recorded (attempts: outcome reply/retried/failed, masked error, HTTP status and
 request id when given, latency, billed): 'reported' when the provider returned usage, 'none' when
 the provider rejected it unprocessed (rate limit, overload, a 4xx), 'unknown' when it may have
-been processed and billed without a usage (timeout, connection error, 5xx, a reply without
-usage). For a paid provider `exchange` holds the provider's own request (payload, payload_sha256:
+been processed and billed without a usage (timeout, connection error, 5xx, a redirect, a reply
+without usage). The real openai SDK client follows no redirect and reads no proxy or CA setting
+from the environment (one attempt is one POST, to the endpoint given), and it is not built while
+an environment setting of CONNECTION_ENV could change where a request goes, its TLS, its
+headers or its logging. For a paid provider `exchange` holds the provider's own request (payload, payload_sha256:
 the same for every attempt of a call) from before the first attempt, so a failed call keeps it
 too, and the request id and response (id, model, status, output or content with any reasoning,
 usage) of the reply; ReActPolicy writes usage, attempts and exchange into the transcript and
@@ -77,6 +80,12 @@ PAID_DEFAULTS = {'temperature': None, 'effort': None, 'request_timeout_s': 60.0,
 PROVIDER_DEFAULTS = {'fake': {'temperature': 0.0, 'fake_mode': None}, 'anthropic': PAID_DEFAULTS, 'openai': PAID_DEFAULTS}
 KEY_ENV = {'anthropic': 'ANTHROPIC_API_KEY', 'openai': 'OPENAI_API_KEY'}  # fixed: a spec cannot name another source
 PAID_GATE = 'STONEPACKING_ALLOW_PAID_API'
+# settings that change where a paid request goes, how its TLS is verified or logged, or what it
+# carries besides the key (read by the SDK, httpx2 or ssl); OPENAI_BASE_URL only on a loopback host
+CONNECTION_ENV = ('OPENAI_BASE_URL', 'OPENAI_CUSTOM_HEADERS', 'OPENAI_LOG', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID',
+                  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SSLKEYLOGFILE',
+                  'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE')
+LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 # the provider's documented values (openai: those of gpt-6.1-terra, a subset of the SDK's ReasoningEffort)
 EFFORTS = {'anthropic': (None, 'low', 'medium', 'high', 'xhigh', 'max'),
            'openai': (None, 'none', 'low', 'medium', 'high', 'xhigh', 'max')}
@@ -230,12 +239,21 @@ def classified(sdk, error):
     if isinstance(error, sdk.APIStatusError):
         if status == 529:
             return TransientError(text, 'none', **meta)  # overloaded: not processed
-        if type(status) is not int or status >= 500 or status in (408, 409):
-            return TransientError(text, 'unknown', **meta)
+        if type(status) is not int or status >= 500 or status in (408, 409) or 300 <= status < 400:
+            return TransientError(text, 'unknown', **meta)  # a redirect is not followed: where it went is unknown
         return ProviderError(text, 'none', **meta)
     if isinstance(error, sdk.APIConnectionError):  # timeouts included: the request may have been processed
         return TransientError(text, 'unknown', **meta)
     return ProviderError(text, 'unknown', **meta)  # anything else: not retried, never counted as free
+
+
+def connection_env(environ=None):
+    """The CONNECTION_ENV settings present in environ (any case; names only, never values), a
+    loopback OPENAI_BASE_URL (a local mock server) excepted."""
+    from urllib.parse import urlparse
+    environ = os.environ if environ is None else environ
+    return sorted(k for k, v in environ.items() if k.upper() in CONNECTION_ENV
+                  and not (k.upper() == 'OPENAI_BASE_URL' and urlparse(v).hostname in LOOPBACK))
 
 
 def api_key(provider):
@@ -321,8 +339,11 @@ class OpenAISender:
     def __init__(self, spec, sdk=None):
         if sdk is None:
             import openai as sdk
+            if connection_env():  # the real connection: nothing in the environment may redirect it
+                raise ValueError(f'paid requests refuse these environment settings: {", ".join(connection_env())}')
         self.sdk = sdk
-        self.client = sdk.OpenAI(api_key=api_key('openai'), max_retries=0, timeout=spec['request_timeout_s'])
+        http = sdk.DefaultHttpxClient(follow_redirects=False, trust_env=False)  # one attempt, one POST; no proxy or CA from the environment
+        self.client = sdk.OpenAI(api_key=api_key('openai'), max_retries=0, timeout=spec['request_timeout_s'], http_client=http)
         self.turns = []  # the output items of this decision's replies, sent back unchanged
 
     def request(self, payload):

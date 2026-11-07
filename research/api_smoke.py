@@ -13,14 +13,26 @@ stays untouched). What a run guarantees:
   most 3) and is checked against LIMITS before anything is sent; the worker is always a
   ProcessTransport (no inline paid calls); at most decisions * max_tool_calls HTTP requests;
 - the key comes only from OPENAI_API_KEY (read by the worker; this process reads it only to scan
-  the outputs for it); OPENAI_BASE_URL, OPENAI_CUSTOM_HEADERS and OPENAI_LOG must be unset for a
-  paid run (the key goes only to the official endpoint, the SDK logs nothing);
-- journal.json is created (exclusively) before the first request: a run name is used once, and
-  while any earlier run is not finished (started, aborted) no run starts at all; after a finished
+  the outputs for it); every setting of llm_adapter.CONNECTION_ENV (endpoint, headers, SDK log,
+  organization/project, proxies, CA files, TLS key log) must be unset; the SDK client follows no
+  redirect and reads no proxy or CA from the environment, so one attempt is one POST;
+- one run at a time: OUT/.lock is created exclusively before anything else and removed only after
+  the run's final journal state is written (a killed run leaves it: no run starts until a person
+  has looked); journal.json is created exclusively before the first request; a run name is used
+  once; a run ends 'finished' only if its billing is certain (no unknown usage, no worker failure,
+  every worker reaped) and no key was found, otherwise 'uncertain' (or 'aborted' on an exception),
+  and any run not finished blocks every later run until a person has looked; after a finished
   run the next one must name it (--after), so a request is never resent unknowingly;
-- the first attempt of unknown usage stops every later request (APILLM, ControllerClient);
+- the first attempt of unknown usage stops every later request (APILLM, ControllerClient), and
+  the run keeps the client's own counters (a worker that died after sending is unknown usage);
 - afterwards: the controller check with Transcript Replay (ReplayLLM: the API sender cannot even
   be built), ledger and manifest, a key scan of every output file, and the worker cleanup check.
+  The report keeps three results apart: api_success (a reply with known usage, a legal LLM
+  decision, the replay passed, billing certain, workers reaped), clean (the run ended safely and
+  checked, whether or not the API answered) and check.verdict (check()'s, once the expected
+  differences of switched decisions are set aside; the raw one is verdict_of_check), PARTIAL here:
+  the copied wall has no live outcome geometry, so the smoke validates the API flow, never
+  geometry or wall quality.
 --loopback is for tests only: it requires OPENAI_BASE_URL on 127.0.0.1/localhost (a mock server).
 """
 import argparse
@@ -34,9 +46,9 @@ import re
 import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
 from unittest import mock
-from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_case  # noqa: E402
@@ -53,6 +65,9 @@ MODEL = 'gpt-6.1-terra'
 PRICE = [1.00, 5.00, 2.50, 0.05]
 LIMITS = {'decisions': 3, 'max_cost_usd': 0.50, 'max_total_tokens': 100_000, 'max_tokens': 4096,
           'request_timeout_s': 60.0, 'llm_timeout': 120.0, 'max_tool_calls': 3}
+LOCK = '.lock'
+GEOMETRY = 'PARTIAL: an offline smoke on the copied Paper trajectory: no live outcome geometry, no new wall; ' \
+           'it validates the API flow, not the geometry, stability or quality of a wall built with the chosen orders'
 REPO_FILES = ('research/api_smoke.py', 'research/controllers.py', 'research/controller_worker.py', 'research/llm_adapter.py')
 
 
@@ -85,34 +100,36 @@ def spec_problems(spec):
              f"call_bound <= llm_timeout <= {LIMITS['llm_timeout']}": within(full['llm_timeout'], llm_adapter.call_bound(llm), LIMITS['llm_timeout']),
              f"1 <= max_tool_calls <= {LIMITS['max_tool_calls']}": 1 <= full['max_tool_calls'] <= LIMITS['max_tool_calls'],
              'max_llm_failures 1': full['max_llm_failures'] == 1,
-             'a price per million tokens (input, output, cache write, cached input)': llm['price_per_mtok'] is not None}
+             f'the price table PRICE {PRICE}': list(llm['price_per_mtok'] or []) == PRICE}
     return [f'spec: needs {rule}' for rule, ok in rules.items() if not ok]
 
 
 def env_problems(loopback, paid):
-    """Why this process may not send: the gate, the key variable, the endpoint, SDK logging, the SDK."""
+    """Why this process may not send: the gate, the key variable, any connection setting of
+    llm_adapter.CONNECTION_ENV (names only), the SDK. --loopback needs OPENAI_BASE_URL on a
+    loopback host (a mock server); otherwise it must be unset too."""
     problems, env = [], os.environ
     if paid and env.get(llm_adapter.PAID_GATE) != '1':
         problems.append(f'env: {llm_adapter.PAID_GATE}=1 is not set for this command')
     if 'OPENAI_API_KEY' not in env:
         problems.append('env: OPENAI_API_KEY is not set')
-    base = env.get('OPENAI_BASE_URL')
-    if loopback:
-        if base is None or urlparse(base).hostname not in ('127.0.0.1', 'localhost', '::1'):
-            problems.append('env: --loopback needs OPENAI_BASE_URL on 127.0.0.1 or localhost')
-    else:
-        problems += [f'env: {v} must be unset (the key goes to the official endpoint only)' for v in ('OPENAI_BASE_URL', 'OPENAI_CUSTOM_HEADERS') if v in env]
-    if 'OPENAI_LOG' in env:
-        problems.append('env: OPENAI_LOG must be unset (no SDK logging)')
+    refused = llm_adapter.connection_env() + ([] if loopback else [k for k in env if k.upper() == 'OPENAI_BASE_URL'])
+    problems += [f'env: {v} must be unset (it changes where a request goes, its TLS, headers or logging)' for v in sorted(set(refused))]
+    if loopback and not any(k.upper() == 'OPENAI_BASE_URL' for k in env if k not in refused):
+        problems.append('env: --loopback needs OPENAI_BASE_URL on 127.0.0.1 or localhost')
     if importlib.util.find_spec('openai') is None:
         problems.append(f'env: the openai SDK is not importable by {sys.executable} (use the isolated venv)')
     return problems
 
 
-def journal_problems(out, name, after, decisions):
-    """Why run `name` may not start: a used name, an unfinished earlier run, a missing --after."""
+def journal_problems(out, name, after, decisions, holding=False):
+    """Why run `name` may not start: another run's lock, a used name, an earlier run not finished
+    (started, aborted, uncertain), a missing --after. holding: this process holds the lock."""
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,40}', name):
         return [f'run: the name {name!r} is not [a-z0-9-]']
+    if not holding and (out / LOCK).exists():
+        return [f'run: {out / LOCK} exists: another run is starting or running, or one ended without releasing it; '
+                'inspect it (it is never removed automatically)']
     if (out / name).exists():
         return [f'run: {out / name} exists: a run name is used once, its requests are never resent']
     runs = {}
@@ -121,8 +138,8 @@ def journal_problems(out, name, after, decisions):
             runs[path.parent.name] = json.loads(path.read_text(encoding='utf-8'))
         except ValueError:
             runs[path.parent.name] = {'state': 'unreadable'}
-    problems = [f'run: {n} is {j.get("state")}: inspect it (its billing may be unknown) before any new run'
-                for n, j in runs.items() if j.get('state') != 'finished']
+    problems = [f'run: {n} is {j.get("state")}{" (" + "; ".join(j["reasons"]) + ")" if j.get("reasons") else ""}: '
+                'inspect it (its billing may be unknown) before any new run' for n, j in runs.items() if j.get('state') != 'finished']
     problems += [f'run: {d.name} has no journal: inspect it before any new run' for d in (out.iterdir() if out.is_dir() else [])
                  if d.is_dir() and d.name not in runs]
     latest = max(runs, key=lambda n: runs[n].get('started_at', ''), default=None)
@@ -143,10 +160,10 @@ def wall_problems():
     return problems
 
 
-def preflight(name, spec, out=OUT, after=None, loopback=False, paid=False):
+def preflight(name, spec, out=OUT, after=None, loopback=False, paid=False, holding=False):
     """Every problem that forbids the run; empty: it may send at most max_requests(spec) requests."""
     return spec_problems(spec) + env_problems(loopback, paid) + wall_problems() + \
-        journal_problems(out, name, after, spec.get('max_decisions', 0) if isinstance(spec, dict) else 0)
+        journal_problems(out, name, after, spec.get('max_decisions', 0) if isinstance(spec, dict) else 0, holding)
 
 
 def write_json(path, data, exclusive=False):
@@ -187,9 +204,14 @@ def copy_wall(dst):
 
 def requests_of(records, prices):
     """Every API request the records hold: decision, call, attempt, outcome, billing, HTTP status,
-    request id, latency, error, and per call the usage and its estimated cost."""
+    request id, latency, error, and per call the usage and its estimated cost; a decision whose
+    worker failed (no transcript came back, an API request may have been sent) is one row of
+    unknown billing."""
     rows = []
     for r in records:
+        if r.get('source', '').startswith('fallback:worker'):
+            rows.append({'event': r['event'], 'decision': list(controllers.decision_key(r)), 'outcome': 'worker_failure',
+                         'status': r['source'], 'billed': 'unknown', 'error': r.get('error')})
         for t in r.get('transcripts') or []:
             response = t.get('response') or {}
             usage = response.get('usage')
@@ -206,22 +228,51 @@ def requests_of(records, prices):
     return rows
 
 
+def expected_problems(result, records, base):
+    """The exact check() problems an LLM decision with an order other than Paper must produce on a
+    trajectory built with Paper ('traced policy': traced order Paper, controller order not;
+    'replay selects': the controller's pick differs from the traced one), for the decisions whose
+    structured fields show that nothing else differs: the source is 'llm', the traced policy is
+    the base policy in full (tol and every other key) with the Paper order, the traced pick is
+    select()'s with Paper, and the record's index is select()'s with its committed order. Each is
+    the full message check() writes for that event (format: controllers.check); anything else,
+    or the same message at any other event, stays a problem."""
+    paper, allowed = list(controllers.PAPER_ORDER), set()
+    rest = lambda p: {k: v for k, v in p.items() if k != 'order'}
+    plain = json.loads(json.dumps(base))
+    by_event = {r['event']: r for r in records if isinstance(r, dict) and isinstance(r.get('final'), dict)}
+    for meta, a in controllers.trace_events(result):
+        r = by_event.get(meta['event'])
+        if r is None or r.get('source') != 'llm' or r['final']['order'] == controllers.key(paper):
+            continue
+        if rest(meta['policy']) != rest(plain) or list(meta['policy']['order'] or paper) != paper or list(base['order'] or paper) != paper:
+            continue
+        pick = lambda order: controllers.select(a['features_raw'], a['weights'], 'paper', order, base['tol']).index
+        traced, by_paper, index = int(a['selected']), pick(paper), pick(controllers.parse_order(r['final']['order']))
+        if (-1 if by_paper is None else int(by_paper)) != traced or r['final']['index'] != (None if index is None else int(index)):
+            continue
+        where = f"event {meta['event']} (step {meta['step']} {meta['phase']} trial {meta['sample_trial']} {meta['side']})"
+        allowed.add(f"{where}: traced policy {meta['policy']}, base {base}, controller order {r['final']['order']}")
+        allowed.add(f"{where}: replay selects {index}, traced {traced}, controller {r['final']['index']}")
+    return allowed
+
+
 def offline_check(run, spec):
-    """The controller check with Transcript Replay; on a base-policy trajectory a decision whose
-    order differs from the traced Paper order is reported by check() as 'traced policy' and, if its
-    pick differs, 'replay selects': those two, at exactly those events, are expected (the wall
-    really was built with Paper) and listed apart. The API sender cannot be built meanwhile."""
+    """The controller check with Transcript Replay; the problems an LLM decision with another order
+    than the traced Paper one must produce (expected_problems, checked on structured fields) are
+    listed apart, every other problem fails the check. The API sender cannot be built meanwhile."""
     result = check_case.result_dirs(run)[0]
     records = [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
-    paper = controllers.key(controllers.PAPER_ORDER)
-    moved = {r['event'] for r in records if r.get('final', {}).get('order') != paper}
     env = {k: v for k, v in os.environ.items() if k != llm_adapter.PAID_GATE}
     with mock.patch.dict(os.environ, env, clear=True), \
             mock.patch.object(llm_adapter.OpenAISender, '__init__', side_effect=AssertionError('the API sender was built in a check')):
         report = controllers.check(result, None, spec)
-    expected = [p for p in report['problems'] if (m := re.match(r'event (\d+) \(.*?\): (traced policy|replay selects) ', p)) and int(m[1]) in moved]
-    other = [p for p in report['problems'] if p not in expected]
-    return {'ok': not other, 'problems': other, 'expected_on_base_trajectory': expected, 'verdict_of_check': report['verdict'],
+    allowed = expected_problems(result, records, controllers.base_policy(run))
+    expected = [p for p in report['problems'] if p in allowed]
+    other = [p for p in report['problems'] if p not in allowed]
+    verdict = 'FAIL' if other or not report['records'] else 'PARTIAL' if report.get('incomplete') else 'PASS'
+    return {'ok': not other and bool(report['records']), 'problems': other, 'expected_on_base_trajectory': expected,
+            'verdict': verdict, 'verdict_of_check': report['verdict'],
             'incomplete': report.get('incomplete'), 'geometry': report.get('geometry'), 'provenance': report.get('provenance'), 'records': report.get('records'),
             'decision_points': report.get('decision_points'), 'switches': report.get('switches')}
 
@@ -239,53 +290,90 @@ def key_scan(run):
     return hits
 
 
+def refuse(problems):
+    raise SystemExit('refused, nothing sent:\n  ' + '\n  '.join(problems))
+
+
 def run_smoke(name, spec, out=OUT, after=None, loopback=False):
-    """One smoke run (see the module docstring); returns its report, also written to report.json."""
+    """One smoke run (see the module docstring) under the lock; returns its report (report.json)."""
     problems = preflight(name, spec, out, after, loopback, paid=True)
     if problems:
-        raise SystemExit('refused, nothing sent:\n  ' + '\n  '.join(problems))
-    run = out / name
+        refuse(problems)
     out.mkdir(parents=True, exist_ok=True)
-    run.mkdir()  # fails if it exists: the name check above raced with another start
+    try:
+        write_json(out / LOCK, {'name': name, 'pid': os.getpid(), 'at': datetime.datetime.now().isoformat(timespec='seconds')}, exclusive=True)
+    except FileExistsError:
+        refuse(journal_problems(out, name, after, 0))
+    try:
+        problems = preflight(name, spec, out, after, loopback, paid=True, holding=True)  # again, under the lock
+        if problems:
+            refuse(problems)
+        return locked_run(name, spec, out, after, loopback)
+    finally:  # only after the run's final journal state is written (a killed run leaves the lock)
+        (out / LOCK).unlink()
+
+
+def locked_run(name, spec, out, after, loopback):
+    run = out / name
+    run.mkdir()
     full = controllers.full_spec(spec)
     journal = {'state': 'started', 'started_at': datetime.datetime.now().isoformat(timespec='seconds'), 'after': after,
                'wall': WALL.relative_to(run_case.REPO).as_posix(), 'spec': full, 'max_http_requests': max_requests(full),
                'mode': 'loopback mock' if loopback else 'paid', **provenance()}
     write_json(run / 'journal.json', journal, exclusive=True)  # before the first request
-    report, transport = {}, None
+    report, transport, reasons = {}, None, []
     try:
         result = copy_wall(run)
-        base, ledger = controllers.base_policy(run), []
+        base, ledger, records = controllers.base_policy(run), [], []
         transport = controller_worker.ProcessTransport(full)
-        records = controllers.rerun(result, full, base, transport=transport, ledger=ledger)
+        # controllers.rerun's loop, with the client kept: its own unknown_usage counts a worker
+        # failure after which no transcript came back (a request may have been sent)
+        client = controllers.ControllerClient(full, transport, records.append, ledger.append)
+        try:
+            for meta, a in controllers.trace_events(result):
+                client(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
+        finally:
+            transport.close()
+        records = json.loads(json.dumps(records, default=lambda v: v.item()))
         write_jsonl(result / 'trace' / 'controller.jsonl', records)
         write_jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
         write_json(run / 'receipt.json', {**receipt, 'controller': full, 'smoke_of': receipt.get('status'), 'manifest': run_case.manifest(run)})
         reaped = transport.process is None and transport.unreaped is None and not multiprocessing.active_children()
         worker = controllers.worker_problems(ledger, False)[0]
-        decisions = [r for r in records if r.get('transcripts')]
+        decisions = [r for r in records if r.get('decision_point') and not r['source'].startswith('skip')]
         spent = llm_adapter.spend(full['llm'], [t for r in records for t in r.get('transcripts') or []])
         rows = requests_of(records, llm_adapter.price(full['llm']))
-        report = {'http_requests_recorded': sum(1 for x in rows if x.get('outcome') != 'abandoned'), 'max_http_requests': max_requests(full),
+        failures = [x for x in ledger if x.get('type') == 'request' and x.get('status') != 'ok']
+        unknown = max(client.unknown_usage, spent['unknown'] + len(failures))  # the client's count, never less than the records'
+        report = {'http_requests_recorded': sum(1 for x in rows if x.get('outcome') in ('reply', 'retried', 'failed')),
+                  'max_http_requests': max_requests(full),
                   'decisions': [{'event': r['event'], 'source': r['source'], 'order': r['final']['order'], 'switched': r['final']['switched'],
-                                 'calls': len(r['transcripts'])} for r in decisions],
-                  'skips': sorted({r['source'] for r in records if not r.get('transcripts')}),
-                  'requests': rows, 'tokens_reported': spent['tokens'], 'cost_usd_estimate': spent['cost_usd'], 'unknown_usage': spent['unknown'],
-                  'workers': {'reaped': reaped, 'ledger_problems': worker}}
+                                 'calls': len(r.get('transcripts') or [])} for r in decisions],
+                  'skips': sorted({r['source'] for r in records if r not in decisions}),
+                  'requests': rows, 'tokens_reported': spent['tokens'], 'cost_usd_estimate': spent['cost_usd'],
+                  'unknown_usage': unknown, 'client': {'unknown_usage': client.unknown_usage, 'request_failures': client.request_failures,
+                                                       'llm_decisions': client.llm_decisions, 'tokens': client.tokens, 'cost_usd': client.cost_usd},
+                  'worker_failures': [{k: x.get(k) for k in ('event', 'status', 'error', 'worker_pid')} for x in failures],
+                  'workers': {'reaped': reaped, 'ledger_problems': worker}, 'geometry_validation': GEOMETRY}
         report['check'] = offline_check(run, full)
-        report['key_scan'] = key_scan(run)
-        report['clean'] = bool(report['check']['ok'] and not report['key_scan'] and reaped and not worker and spent['unknown'] == 0)
         write_json(run / 'report.json', report)
-        state = 'finished'
+        report['key_scan'] = key_scan(run)  # report.json included
+        reasons = [why for why, bad in (('unknown usage', unknown), ('a worker failure', failures), ('a worker not reaped', not reaped),
+                                        ('worker lifecycle problems', worker), ('the key in an output file', report['key_scan'])) if bad]
+        report['clean'] = bool(report['check']['ok'] and not reasons)
+        report['api_success'] = bool(report['clean'] and any(x.get('outcome') == 'reply' and x.get('billed') == 'reported' for x in rows)
+                                     and any(r['source'] == 'llm' for r in decisions))
+        write_json(run / 'report.json', report)
+        state = 'uncertain' if reasons else 'finished'
     except BaseException as error:  # the journal keeps the run blocked for inspection
-        state, report = 'aborted', {'error': controllers.error_text(error)}
+        state, report, reasons = 'aborted', {'error': controllers.error_text(error)}, ['an exception: ' + controllers.error_text(error)]
         raise
     finally:
         if transport is not None:
             transport.close('smoke_end')
-        write_json(run / 'journal.json', {**journal, 'state': state, 'ended_at': datetime.datetime.now().isoformat(timespec='seconds'),
-                                          'clean': report.get('clean'), 'error': report.get('error')})
+        write_json(run / 'journal.json', {**journal, 'state': state, 'reasons': reasons, 'ended_at': datetime.datetime.now().isoformat(timespec='seconds'),
+                                          'clean': report.get('clean'), 'api_success': report.get('api_success'), 'error': report.get('error')})
     return report
 
 
@@ -312,8 +400,10 @@ def main(argv=None):
     if not (args.confirm_paid or args.loopback):
         raise SystemExit('run needs --confirm-paid (real, paid requests)')
     report = run_smoke(args.name, spec, OUT, after=args.after, loopback=args.loopback)
-    print(json.dumps({k: v for k, v in report.items() if k != 'requests'}, indent=1))
-    return 0 if report.get('clean') else 1
+    summary = {'api_success': report['api_success'], 'clean': report['clean'], 'check_verdict': report['check']['verdict'],
+               'geometry_validation': report['geometry_validation']}
+    print(json.dumps({**summary, **{k: v for k, v in report.items() if k not in summary and k != 'requests'}}, indent=1))
+    return 0 if report['api_success'] else 1
 
 
 if __name__ == '__main__':

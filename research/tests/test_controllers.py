@@ -1873,6 +1873,7 @@ class FakeOpenAISDK(FakeSDK):
                 sdk.clients.append(kw)
                 self.responses = SimpleNamespace(create=sdk.create)
         self.OpenAI = OpenAI
+        self.DefaultHttpxClient = lambda **kw: SimpleNamespace(**kw)
 
     def create(self, **body):
         self.bodies.append(copy.deepcopy(body))
@@ -1919,7 +1920,8 @@ class OpenAIProvider(unittest.TestCase):
         sdk = FakeOpenAISDK()
         policy, record = self.call(self.client(sdk))
         self.assertEqual((record['source'], record['final']['order'], policy), ('llm', '3-0-2-1-4', PAPER))
-        self.assertEqual(sdk.clients, [{'api_key': SECRET, 'max_retries': 0, 'timeout': 20}])
+        self.assertEqual(sdk.clients, [{'api_key': SECRET, 'max_retries': 0, 'timeout': 20,  # no redirect, nothing from the environment
+                                        'http_client': SimpleNamespace(follow_redirects=False, trust_env=False)}])
         first, second = sdk.bodies
         self.assertEqual({k: first[k] for k in ('model', 'instructions', 'max_output_tokens', 'tool_choice', 'parallel_tool_calls', 'store',
                                                 'reasoning', 'include')},
