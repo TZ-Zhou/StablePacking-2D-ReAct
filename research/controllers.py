@@ -73,12 +73,15 @@ def parse_order(value):
 
 
 def context_from_trace(meta, a):
-    """The selection inputs of a trace event as a controller receives them live (detached, no stone pixels)."""
+    """The selection inputs of a trace event as a controller receives them live (detached, no stone
+    pixels), plus the candidates' traced bounding-box width and height (read by observation version 2
+    only; live, it takes them from the bricks)."""
     return detached_inputs({'step': meta['step'], 'side': meta['side'], 'phase': meta['phase'],
                             'sample_trial': meta['sample_trial'], 'wall': a['wall'], 'all_bricks': None,
                             'sampled_ids': a['sampled_ids'].tolist(), 'inventory_ids': a['inventory_ids'].tolist(),
                             'x': a['x'], 'y': a['y'], 'distance': a['distance'],
-                            'features_raw': a['features_raw'], 'weights': a['weights']})
+                            'features_raw': a['features_raw'], 'weights': a['weights'],
+                            'width': a['width'], 'height': a['height']})
 
 
 def plain(v):
@@ -126,12 +129,38 @@ def placement_geometry(wall, pixels):
     return plain({f'd_{k}': round(float(now[k] - before[k]), 4) for k in before} | {'stone_px': int(pixels.sum())})
 
 
-class Observer:
-    """Builds the controller-visible observation and keeps the controller's memory of earlier calls."""
+GEOMETRY_NOTES = {
+    'pixels': "outcome.geometry is the change of wall_state after pasting the candidate's own pixels at its pose: "
+              "a pre-stabilization proxy without physics. outcome.shape is the candidate's bounding box.",
+    'summary': "Only outcome.shape (bounding-box width and height of the candidate in its rotation) is known; there are "
+               "no stone pixels, so outcome.geometry is null. It is not the wall after placement.",
+    'none': 'No candidate pixels or sizes are available: outcome.geometry and outcome.shape are null.'}
 
-    def __init__(self, geometry=None):
+
+def candidate_sizes(ctx):
+    """(widths, heights) of every candidate's bounding box: from the bricks live, from the trace's
+    width/height arrays offline (context_from_trace; the same brick attributes); None without either."""
+    if ctx['all_bricks'] is not None:
+        return [int(b.width) for b in ctx['all_bricks']], [int(b.height) for b in ctx['all_bricks']]
+    if ctx.get('width') is not None and ctx.get('height') is not None:
+        return [int(w) for w in ctx['width']], [int(h) for h in ctx['height']]
+    return None
+
+
+class Observer:
+    """Builds the controller-visible observation and keeps the controller's memory of earlier calls.
+
+    version 1 is the observation of every wall built before observation_version existed. version 2
+    adds, from the current selection and the controller's own earlier calls only: the filter
+    weights, the wall size, each outcome's bounding box (shape), which geometry exists
+    (geometry_available: pixels live, summary offline, none) with its note, the remaining stones
+    (sizes of those already sampled, the count never seen), up to 10 earlier calls (history) and
+    the change since the last one (trend)."""
+
+    def __init__(self, geometry=None, version=1):
         self.labels, self.stones, self.recent = {}, {}, []
         self.geometry = geometry  # LiveGeometry when re-executing a live wall from its trace
+        self.version, self.sizes, self.history = version, {}, []
 
     def label(self, sid):
         return self.labels.setdefault(int(sid), f'S{len(self.labels) + 1}')
@@ -179,6 +208,8 @@ class Observer:
                                      if s in self.labels and self.label(s) in self.stones},
                           'recent': list(self.recent)},
                'outcomes': outcomes}
+        if self.version == 2:
+            obs = self.version_2(obs, ctx, classes, sampled, remaining, feasible, raw)
         obs = plain(obs)  # also detaches the memory entries updated below
         if self.geometry is not None:
             self.geometry.fill(obs, classes)
@@ -188,9 +219,39 @@ class Observer:
                      last_feasible_rotations=s['feasible_rotations'], last_best_llc=s['best_llc'],
                      min_feasible_rotations=min(m['min_feasible_rotations'], s['feasible_rotations']))
         self.recent = (self.recent + [{'step': obs['step'], **obs['now']}])[-3:]
+        if self.version == 2:
+            self.history = (self.history + [{'step': obs['step'], 'side': obs['side'], **obs['now'],
+                                             'n_outcomes': len(classes)}])[-10:]
         info = {'classes': classes, 'by_index': by_index, 'paper': paper, 'base': base, 'stone_ids': stone, 'tol': tol,
                 'selections': selections, 'n': n, 'pixels': pixels}
         return obs, info
+
+    def version_2(self, obs, ctx, classes, sampled, remaining, feasible, raw):
+        """obs with the version 2 fields; everything is from this selection or earlier calls."""
+        sizes, n = candidate_sizes(ctx), len(sampled)
+        live = ctx['all_bricks'] is not None or self.geometry is not None  # self.geometry: a live wall re-executed
+        mode = 'pixels' if live else 'summary' if sizes else 'none'
+        if sizes:
+            for j, s in enumerate(sampled):  # rotation 0 rows: a stone's own size as it was sampled
+                self.sizes[self.label(s)] = {'width': sizes[0][j], 'height': sizes[1][j]}
+        for o, i in zip(obs['outcomes'], classes):
+            o['shape'] = {'width': sizes[0][i], 'height': sizes[1][i]} if sizes else None
+        now = {**obs['now'], 'n_candidates': len(raw), 'n_feasible': int(feasible.sum()),
+               'max_feasible_llc': round(float(raw[feasible, 3].max()), 6) if feasible.any() else None}
+        last = self.history[-1] if self.history else None
+        delta = lambda k: None if last is None or now[k] is None or last[k] is None else round(now[k] - last[k], 6)
+        seen = sorted(({'stone': self.label(s), **self.sizes[self.label(s)]} for s in remaining
+                       if s in self.labels and self.label(s) in self.sizes), key=lambda e: int(e['stone'][1:]))  # label order, not stone ids
+        wall = np.asarray(ctx['wall'])
+        return {**obs, 'observation_version': 2, 'now': now,
+                'filter_weights': {FILTERS[c]: float(ctx['weights'][c]) for c in range(5)},
+                'wall_size': {'width': int(wall.shape[1]), 'height': int(wall.shape[0])},
+                'geometry_available': mode, 'geometry_note': GEOMETRY_NOTES[mode],
+                'remaining': {'n': len(remaining), 'n_sampled_before_or_now': len(seen),
+                              'n_never_sampled': len(remaining) - len(seen), 'sampled_sizes': seen},
+                'memory': {**obs['memory'], 'recent': list(self.history)},
+                'trend': {'since_step': None if last is None else last['step'],
+                          'feasible_share': delta('feasible_share'), 'mean_feasible_llc': delta('mean_feasible_llc')}}
 
 
 def decision_key(record):
@@ -213,9 +274,10 @@ def tool_table(info, label):
 SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
                            'llm_timeout': 60.0, 'max_llm_failures': 3}}
-# max_total_tokens, max_cost_usd (react, optional): only in specs that set them, so earlier walls keep their spec
+# max_total_tokens, max_cost_usd, observation_version (react, optional): only in specs that set them,
+# so earlier walls keep their spec; observation_version 1 (the default) or 2 (Observer, SYSTEM_V2, TOOLS_V2)
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
-             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd'}}
+             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version'}}
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
 SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
            'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
@@ -256,6 +318,8 @@ def validate_spec(spec):
         make_policy(spec)
     else:
         llm_identity(spec['llm'])
+        if spec.get('observation_version', 1) not in (1, 2) or type(spec.get('observation_version', 1)) is not int:
+            raise ValueError(f"observation_version is 1 or 2, got {spec['observation_version']!r}")
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -273,6 +337,11 @@ def validate_spec(spec):
             elif usd is not None and llm_adapter.price(spec['llm']) is None:
                 raise ValueError('max_cost_usd needs a price for the model')
     return spec
+
+
+def observation_version(spec):
+    """The observation and prompt version of a full spec: 1 unless a react spec sets 2."""
+    return spec.get('observation_version', 1) if spec['kind'] == 'react' else 1
 
 
 def tokens_of(reply):
@@ -324,7 +393,8 @@ class ControllerClient:
 
     def __init__(self, spec, transport, sink=None, ledger=None):
         self.spec_, self.transport = full_spec(spec), transport
-        self.observer, self.sink, self.ledger, self.calls = Observer(), sink or write_record, ledger or write_ledger, 0
+        self.observer = Observer(version=observation_version(self.spec_))
+        self.sink, self.ledger, self.calls = sink or write_record, ledger or write_ledger, 0
         self.request_failures = self.llm_decisions = self.tokens = self.unknown_usage = 0
         self.cost_usd, self.api = 0.0, self.spec_['kind'] == 'react' and self.spec_['llm'].get('kind') == 'api'
         if hasattr(transport, 'log'):
@@ -518,6 +588,59 @@ TOOLS = [{'name': 'list_order_outcomes', 'description': 'Distinct candidates the
                          'properties': {'order': {'type': 'string'}}}},
          COMMIT]
 
+# Version 2: the filters as Stonepacker2D/stack/place_stone.py computes them (place_one_stone) and the
+# cascade of selection._paper; the observation fields of Observer.version_2.
+SYSTEM_V2 = (
+    "You choose the filter order of Wang's hierarchical filtering for one stone placement. The candidates "
+    "(one per sampled stone and rotation, each at the position Wang's image convolution found), their scores and "
+    "the LLC > 0 gate are fixed; you only choose the order of the five filters (a permutation 'a-b-c-d-e' of "
+    "0 NHR, 1 GDS, 2 IWR, 3 LLC, 4 LFR) or keep the base order (keep_paper). You cannot pick a stone or a position.\n"
+    "Filters (raw scores; for every filter a higher score is better). Coordinates are in the evaluation frame: "
+    "mirrored when building from the right, so 'left' is the side the course is built from.\n"
+    "- 0 NHR course_height: -|top row of the stone - top row of its left neighbour| / stone height, the neighbour "
+    "being the placed stone left of its center whose top-right corner is nearest to its top-left corner; with no "
+    "placed stone to its left, -|median height of the sampled stones - stone height| / stone height. 0 = level with "
+    "its left neighbour.\n"
+    "- 1 GDS global_density: B = the box from the lowest to the highest occupied row of the current wall and from its "
+    "leftmost occupied column to the right edge (rows 0-2 on an empty wall); score = (|stone & B| / |stone | B|) / "
+    "(|stone| / |B|), set to 0 when it is 0.7 or less. Higher = the stone fits inside the current wall's band.\n"
+    "- 2 IWR interlocking: 'touching' a side = the lower half of that side of its bounding box is within 1 px of an "
+    "edge of the current wall. Touching both sides: 0.5. Touching only the left: the distance from its bottom-right "
+    "corner to the nearest top-left corner of a stone below (a placed stone whose center is lower than its bottom), "
+    "divided by that stone's width. Touching only the right: the same from its bottom-left corner to the nearest "
+    "top-right corner. Touching neither: the mean of the two. Each distance is 0.5 when no stone lies below. "
+    "Higher = its vertical joint is farther from the joints below.\n"
+    "- 3 LLC kinematic: the kinematic limit load (tilting table) of the wall with this stone added at its pose, before "
+    "stabilization, divided by the friction coefficient. Only candidates with LLC > 0 and five finite scores are feasible.\n"
+    "- 4 LFR local_void: -(sum over the stone's rows of the empty pixels between its left side and the wall to its "
+    "left). 0 = flush on the left.\n"
+    "Cascade: start from the feasible candidates; for each filter in the chosen order keep the candidates whose "
+    "weighted score (raw x filter_weights) is >= the mean over the candidates still kept; if a stage would keep "
+    "none, take the best sum of the filters applied so far; otherwise the final pick is the largest sum of all five "
+    "weighted scores among the survivors. The mean is taken over the current survivors, so the order decides which "
+    "candidates are compared with which; the base order is 3-0-2-1-4.\n"
+    "Data: geometry_available says what geometry exists (pixels: outcome.geometry from the stone's pixels, a "
+    "pre-stabilization proxy; summary: only bounding-box sizes, never the wall after placement; none). Never cite a "
+    "geometry value that is null. memory, history and trend are your own earlier calls; nothing about future "
+    "samples or the final wall is known.\n"
+    "Before committing, compare the main candidates on all five filters: in the rationale state each one's main "
+    "advantages and costs, not one score alone. Finish with commit_order.")
+COMMIT_V2 = {'name': 'commit_order', 'description': "Final action: an order 'a-b-c-d-e' or 'keep_paper'.",
+             'parameters': {'type': 'object', 'additionalProperties': False, 'required': ['order', 'rationale'],
+                            'properties': {'order': {'type': 'string'},
+                                           'rationale': {'type': 'string', 'description':
+                                                         'The main advantages and costs of the compared candidates '
+                                                         'on the five filters, and why this order.'}}}}
+TOOLS_V2 = [{'name': 'list_order_outcomes',
+             'description': 'Distinct candidates the 120 orders select: pose, the five raw scores, how many orders select '
+                            'each (n_orders, example_order), its bounding box (shape) and geometry as geometry_available says.',
+             'parameters': {'type': 'object', 'additionalProperties': False, 'required': [], 'properties': {}}},
+            {'name': 'explain_order', 'description': 'Survivors of each cascade stage for one order.',
+             'parameters': {'type': 'object', 'additionalProperties': False, 'required': ['order'],
+                            'properties': {'order': {'type': 'string'}}}},
+            COMMIT_V2]
+PROMPTS = {1: (SYSTEM, TOOLS, COMMIT), 2: (SYSTEM_V2, TOOLS_V2, COMMIT_V2)}
+
 
 def reply_problem(reply, tools):
     """Why an LLM reply is not a valid action under the tool schemas, None if it is. Nothing is
@@ -615,10 +738,11 @@ class ReActPolicy:
     The wall budget and the failure limit are the client's (ControllerClient).
     """
 
-    def __init__(self, llm, tool_feedback=True, max_tool_calls=4, llm_timeout=60.0):
+    def __init__(self, llm, tool_feedback=True, max_tool_calls=4, llm_timeout=60.0, observation_version=1):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
-        self.tools = TOOLS if tool_feedback else [COMMIT]
-        self.prompt_sha256 = hashlib.sha256(json.dumps([SYSTEM, self.tools]).encode()).hexdigest()
+        self.system, tools, commit = PROMPTS[observation_version]
+        self.tools = tools if tool_feedback else [commit]
+        self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
 
     def call_llm(self, messages, transcripts):
         """('ok', parsed reply) or ('timeout' | 'error', reason); appends the call's transcript."""
@@ -669,7 +793,7 @@ class ReActPolicy:
     def decide(self, request):
         obs, base = request['observation'], request['base_order']
         view = {k: v for k, v in obs.items() if k != 'outcomes'}  # outcomes only through list_order_outcomes
-        messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps(view)}]
+        messages = [{'role': 'system', 'content': self.system}, {'role': 'user', 'content': json.dumps(view)}]
         steps, transcripts = [], []
         meta = {'prompt_sha256': self.prompt_sha256, 'transcripts': transcripts}
         if callable(getattr(self.llm, 'begin', None)):  # an API LLM reserves this decision's budget per attempt
@@ -801,7 +925,7 @@ def make_policy(spec):
         llm = llm_adapter.APILLM(llm)  # its client is built here, in the process that calls it
     else:
         llm = MockLLM(llm['mode'])
-    return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']})
+    return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 
 def make_controller(spec, sink=None, transport='process', ledger=None):
@@ -1139,7 +1263,7 @@ def check(result, records=None, spec=None, stopped=None):
     llm, transport = None, 'inline'
     if full['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
         llm, worker = ReplayLLM(records, *llm_identity(full['llm'])), {k: full[k] for k in WORKER_KEYS['react']}
-        transport = ReplayedFailures(lambda: ReActPolicy(llm, **worker), records)
+        transport = ReplayedFailures(lambda: ReActPolicy(llm, **worker, observation_version=observation_version(full)), records)
     live = any(isinstance(r, dict) and isinstance(r.get('observation'), dict) and isinstance(r['observation'].get('outcomes'), list)
                and any(isinstance(o, dict) and o.get('geometry') is not None for o in r['observation']['outcomes']) for r in records)
     geometry, ledger = LiveGeometry(records, events) if live else None, []
