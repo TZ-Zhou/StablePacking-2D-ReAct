@@ -11,6 +11,7 @@ fallback/final sums use fixed columns. policy="paper" follows Algorithm 2 of Wan
 """
 import copy
 import hashlib
+import importlib
 import itertools
 import json
 import os
@@ -136,38 +137,56 @@ def detached_inputs(context):
     return out
 
 
+def _settings():
+    """Every global of Stonepacker2D.utils.constant (the filter policy and switch, selection weights,
+    sizes, the controller hook, the getters and setters themselves): (objects by name, pickled
+    values of the uppercase settings, which also exposes in-place edits)."""
+    module = importlib.import_module('Stonepacker2D.utils.constant')
+    names = {k: v for k, v in vars(module).items() if not k.startswith('__')}
+    return names, _digest({k: v for k, v in names.items() if k.isupper()})
+
+
+def _same(a, b):
+    return a is b or (type(a) is type(b) and a == b)
+
+
 def controlled_policy(policy, controller, context):
     """The filter policy of one selection after an optional controller.
 
     The controller gets a read-only copy of the base policy and detached copies of the selection
     inputs (detached_inputs) and returns a mapping equal to the base in every key but 'order', whose
     order is a permutation of 0..4 given as ints. Afterwards the base policy object, the real
-    inputs and the global numpy and Python RNGs (they drive stone sampling) must be unchanged.
-    Anything else raises. This catches mistakes; it is not a sandbox for in-process code.
+    inputs, the global numpy and Python RNGs (they drive stone sampling) and every global setting
+    of utils.constant (rebound by a setter or edited in place) must be unchanged. Anything else
+    raises. This catches mistakes; it is not a sandbox for in-process code.
     """
     if controller is None:
         return policy
     if policy['policy'] != 'paper':
         raise ValueError(f"a filter controller needs the paper policy, got {policy['policy']}")
     base = dict(policy)
-    np_state, py_state, inputs = np.random.get_state(), random.getstate(), _digest(context)
+    (names, values), np_state, py_state, inputs = _settings(), np.random.get_state(), random.getstate(), _digest(context)
     new = controller(types.MappingProxyType(dict(base)), detached_inputs(context))
     after = np.random.get_state()
     if not (np_state[0] == after[0] and np.array_equal(np_state[1], after[1]) and np_state[2:] == after[2:]
             and py_state == random.getstate()):
         raise RuntimeError('filter controller changed the global RNG state')
+    names_after, values_after = _settings()
+    changed = sorted(k for k in names.keys() | names_after.keys() if names.get(k) is not names_after.get(k))
+    if changed or values != values_after:
+        raise RuntimeError(f'filter controller changed the global settings {changed or "(in place)"}')
     if _digest(context) != inputs:
         raise RuntimeError('filter controller changed the selection inputs')
     if dict(policy) != base:
         raise RuntimeError('filter controller changed the base policy')
-    if not isinstance(new, Mapping) or set(new) != set(base) or any(new[k] != base[k] for k in base if k != 'order'):
+    if not isinstance(new, Mapping) or set(new) != set(base) or any(not _same(new[k], base[k]) for k in base if k != 'order'):
         raise ValueError(f'a filter controller may change only the order: {base} -> {new}')
     order = new['order']
-    if order == base['order']:
+    if order is base['order']:
         return policy
     if not isinstance(order, (tuple, list)) or any(type(c) is not int for c in order) or sorted(order) != [0, 1, 2, 3, 4]:
         raise ValueError(f'controller order must be a permutation of the ints 0..4, got {order!r}')
-    return {**base, 'order': tuple(order)}
+    return policy if tuple(order) == base['order'] else {**base, 'order': tuple(order)}
 
 
 def to_world(side, x, rotation, width, world_width):

@@ -28,8 +28,8 @@ import hashlib
 import json
 import re
 import sys
+import threading
 import types
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +37,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from failure_analysis import FILTERS, wall_state  # noqa: E402
 
-from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, load_trace, select  # noqa: E402
+from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, load_trace, select, to_world  # noqa: E402
 
 ORDER_TEXT = re.compile(r'[0-4](-[0-4]){4}')
 
@@ -262,18 +262,20 @@ def reply_problem(reply, tools):
     if not isinstance(reply, dict):
         return f'reply must be an object, got {type(reply).__name__}'
     if set(reply) - {'thought', 'tool', 'arguments'}:
-        return f"unexpected reply fields {sorted(set(reply) - {'thought', 'tool', 'arguments'})}"
+        return f"unexpected reply fields {sorted(map(repr, set(reply) - {'thought', 'tool', 'arguments'}))}"
     if not isinstance(reply.get('thought'), (str, type(None))):
         return 'thought must be a string'
-    schema = {t['name']: t['parameters'] for t in tools}.get(reply.get('tool'))
+    if not isinstance(reply.get('tool'), str):
+        return f"tool must be a tool name, got {type(reply.get('tool')).__name__}"
+    schema = {t['name']: t['parameters'] for t in tools}.get(reply['tool'])
     if schema is None:
-        return f"unknown tool {reply.get('tool')!r}"
+        return f"unknown tool {reply['tool']!r}"
     args = reply.get('arguments', {})
     if not isinstance(args, dict):
         return f'arguments must be an object, got {type(args).__name__}'
     missing, extra = set(schema['required']) - set(args), set(args) - set(schema['properties'])
     if missing or extra:
-        return f'missing arguments {sorted(missing)}, unexpected arguments {sorted(extra)}'
+        return f'missing arguments {sorted(missing)}, unexpected arguments {sorted(map(repr, extra))}'
     if any(not isinstance(v, str) for v in args.values()):
         return 'arguments must be strings'
     if 'order' in args and not (reply['tool'] == 'commit_order' and args['order'] == 'keep_paper') \
@@ -282,6 +284,15 @@ def reply_problem(reply, tools):
     if reply['tool'] == 'commit_order' and not args['rationale'].strip():
         return 'rationale must not be empty'
     return None
+
+
+def loggable(reply):
+    """A reply as a JSON object for the record and the next message; {'reply': repr} if it is not one."""
+    try:
+        said = json.loads(json.dumps(reply, default=repr))
+    except (TypeError, ValueError):  # non-string keys of mixed types, cycles
+        said = None
+    return said if isinstance(said, dict) and all(isinstance(k, str) for k in reply) else {'reply': repr(reply)}
 
 
 class ReActController(Controller):
@@ -295,10 +306,12 @@ class ReActController(Controller):
     - a reply that breaks the tool schema is rejected with the reason as feedback and counts as
       one of the max_tool_calls actions; no valid commit within them: fallback:no_valid_commit;
     - an LLM call that raises or gives no reply within llm_timeout seconds: fallback:llm_error /
-      fallback:llm_timeout at once, no retry; after max_llm_failures such failures in a wall every
-      later decision point: fallback:llm_unavailable;
+      fallback:llm_timeout at once, no retry; while a timed-out call is still running no new call
+      starts: fallback:llm_busy; after max_llm_failures such failures in a wall every later
+      decision point: fallback:llm_unavailable;
     - more than max_decisions LLM decisions in a wall: fallback:wall_budget.
-    A timed-out call is abandoned, not killed: the client must enforce its own deadline.
+    Calls run in a daemon thread, so a timed-out call holds up neither the wall nor process exit,
+    but it is abandoned, not killed: a real client must also set its own request deadline.
     """
     kind = 'react'
 
@@ -306,22 +319,30 @@ class ReActController(Controller):
                  llm_timeout=60.0, max_llm_failures=3, sink=None):
         super().__init__(sink, llm=llm_spec, tool_feedback=tool_feedback, max_tool_calls=max_tool_calls,
                          max_decisions=max_decisions, llm_timeout=llm_timeout, max_llm_failures=max_llm_failures)
-        self.llm, self.decisions, self.failures = llm, 0, 0
+        self.llm, self.decisions, self.failures, self.pending = llm, 0, 0, None
         self.tools = TOOLS if tool_feedback else [COMMIT]
         self.prompt_sha256 = hashlib.sha256(json.dumps([SYSTEM, self.tools]).encode()).hexdigest()
 
     def call_llm(self, messages):
-        """('ok', reply) or ('timeout' | 'error', reason)."""
-        pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self.llm, copy.deepcopy(messages), copy.deepcopy(self.tools))
-        try:
-            return 'ok', future.result(timeout=self.params['llm_timeout'])
-        except FutureTimeout:
+        """('ok', reply) or ('timeout' | 'error' | 'busy', reason)."""
+        if self.pending is not None and self.pending.is_alive():
+            return 'busy', 'an earlier timed-out call is still running'
+        box, args = {}, (copy.deepcopy(messages), copy.deepcopy(self.tools))
+
+        def call():
+            try:
+                box['reply'] = self.llm(*args)
+            except Exception as error:  # any client failure is a failed call, never a decision
+                box['error'] = f'{type(error).__name__}: {error}'
+        thread = threading.Thread(target=call, name='llm-call', daemon=True)
+        thread.start()
+        thread.join(self.params['llm_timeout'])
+        if thread.is_alive():
+            self.pending = thread
             return 'timeout', f"no reply within {self.params['llm_timeout']} s"
-        except Exception as error:  # any client failure is a failed call, never a decision
-            return 'error', f'{type(error).__name__}: {error}'
-        finally:
-            pool.shutdown(wait=False)
+        if 'reply' not in box:
+            return 'error', box.get('error', 'the call ended without a reply')
+        return 'ok', box['reply']
 
     def tool(self, name, args, obs, info, ctx):
         """(feedback, committed order or None) for a reply that passed reply_problem."""
@@ -352,15 +373,17 @@ class ReActController(Controller):
                 self.failures += 1
                 steps.append({'status': status, 'error': reply})
                 return info['base'], {'source': f'fallback:llm_{status}', **meta, 'react': steps}
-            problem = reply_problem(reply, self.tools)
-            said = reply if isinstance(reply, dict) else {'reply': repr(reply)}
+            try:
+                problem = reply_problem(reply, self.tools)
+            except Exception as error:  # the validator must never decide by crashing
+                problem = f'unreadable reply: {type(error).__name__}: {error}'
+            said = loggable(reply)
             if problem is None:
                 feedback, order = self.tool(reply['tool'], reply.get('arguments', {}), obs, info, ctx)
             else:
                 feedback, order = {'error': problem}, None
-            steps.append({'status': 'ok' if problem is None else 'rejected',
-                          **json.loads(json.dumps(said, default=repr)), 'feedback': feedback})
-            messages += [{'role': 'assistant', 'content': json.dumps(said, default=repr)},
+            steps.append({**said, 'status': 'ok' if problem is None else 'rejected', 'feedback': feedback})
+            messages += [{'role': 'assistant', 'content': json.dumps(said)},
                          {'role': 'tool', 'name': str(said.get('tool')), 'content': json.dumps(feedback)}]
             if order is not None:
                 return order, {'source': 'llm', **meta, 'react': steps}
@@ -475,24 +498,75 @@ def strip_geometry(v):
     return v
 
 
-def check(result, records=None, spec=None):
+def trace_problems(result, events, stopped=False):
+    """The trace a controller check relies on, independent of the controller: events numbered 0..n-1
+    and each part of a commit in commits.jsonl (a stopped run may end in events of an unfinished
+    attempt), candidate i is sampled stone i % n at rotation i // n * 90, the sampled and remaining
+    stones are the inventory left by earlier placements, world poses follow to_world, and each
+    placed commit names the pose of the candidate it points at."""
+    problems, numbers = [], [m['event'] for m, _ in events]
+    if numbers != list(range(len(events))):
+        problems.append(f'trace events are not numbered 0..{len(events) - 1}')
+    path = Path(result) / 'trace' / 'commits.jsonl'
+    commits = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
+    if not path.exists() and not stopped:
+        problems.append('no trace/commits.jsonl')
+    referenced = {s['event'] for c in commits for s in c['sides'].values()}
+    if referenced - set(numbers):
+        problems.append(f'commits reference missing events {sorted(referenced - set(numbers))[:5]}')
+    loose = set(numbers) - referenced
+    if loose and not (stopped and min(loose) > max(referenced, default=-1)):
+        problems.append(f'events {sorted(loose)[:5]} belong to no commit')
+    by_event = dict(zip(numbers, events))
+    placed = {max(s['event'] for s in c['sides'].values()): c for c in commits if c['outcome'] == 'placed'}
+    start, gone = None, set()
+    for meta, a in events:
+        where, n, i = f"event {meta['event']}", len(a['sampled_ids']), np.arange(len(a['stone_id']))
+        sampled, remaining = set(a['sampled_ids'].tolist()), set(a['inventory_ids'].tolist())
+        start = sampled | remaining if start is None else start
+        if not n or not ((a['stone_id'] == a['sampled_ids'][i % n]).all() and (a['rotation'] == i // n * 90).all()):
+            problems.append(f'{where}: candidate stones and rotations do not follow the sampled stones')
+        if sampled & remaining or sampled | remaining != start - gone:
+            problems.append(f'{where}: sampled and remaining stones are not the inventory left by earlier placements')
+        x_world, rotation_world = to_world(meta['side'], a['x'], a['rotation'], a['width'], meta['world_width'])
+        if not (np.array_equal(x_world, a['x_world']) and np.array_equal(rotation_world, a['rotation_world'])):
+            problems.append(f'{where}: world poses do not follow the evaluation-frame poses')
+        if meta['event'] in placed:
+            gone.add(placed[meta['event']]['stone_id'])
+    for c in placed.values():
+        side = c['sides'][c['chosen_side']]
+        if side['event'] in by_event:
+            a, k = by_event[side['event']][1], side['index']
+            pose = (int(a['stone_id'][k]), int(a['x_world'][k]), int(a['y'][k]), int(a['rotation_world'][k]))
+            if pose != (c['stone_id'], c['x_world'], c['y'], c['rotation_world']):
+                problems.append(f"step {c['step']}: commit pose differs from its candidate {pose}")
+    return problems
+
+
+def check(result, records=None, spec=None, stopped=None):
     """Controller records of a built wall against its receipt and trace. The controller named in
     the receipt (spec only for tests on walls without one) is re-executed on the traced inputs from
     the receipt's base policy; every record must equal its re-execution (geometry excluded: it
     needs stone pixels), the traced policy must be the base with the re-executed order, replaying
-    select with it must give the traced pick, and decision keys must be unique. Counts come from
-    the re-execution, not from the records."""
+    select with it must give the traced pick, decision keys must be unique and the trace itself
+    must be complete and consistent (trace_problems). A run stopped by the launcher (stopped; by
+    default read from the receipt) may hold one record more than events: the controller is called
+    before its event is written. Counts come from the re-execution, not from the records."""
     result, run = Path(result), run_of(result)
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
     spec = receipt.get('controller') if spec is None else spec
+    stopped = receipt.get('process_status') == 'STOPPED_AFTER_PLACEMENTS' if stopped is None else stopped
     if records is None:
-        records = [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
+        path = result / 'trace' / 'controller.jsonl'
+        records = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
     if spec is None:
         return {'ok': False, 'problems': ['the receipt names no controller'], 'records': len(records),
                 'decision_points': None, 'switches': None}
     base = base_policy(run)
     expected, events = rerun(result, spec, base), list(trace_events(result))
-    problems = [] if len(records) == len(events) else [f'{len(records)} records for {len(events)} selections']
+    problems = trace_problems(result, events, stopped)
+    if not len(events) <= len(records) <= len(events) + int(stopped):
+        problems.append(f'{len(records)} records for {len(events)} selections')
     keys = [decision_key(x) for x in expected]
     if len(set(keys)) != len(keys):
         problems.append('decision keys (step, phase, sample_trial, side) are not unique')
@@ -509,9 +583,12 @@ def check(result, records=None, spec=None):
             problems.append(f"{where}: replay selects {index}, traced {int(a['selected'])}, controller {x['final']['index']}")
         if strip_geometry(r) != strip_geometry(x):
             problems.append(f'{where}: record differs from the controller re-executed on the trace')
-    return {'ok': not problems, 'problems': problems, 'records': len(records),
-            'decision_points': sum(x['decision_point'] for x in expected),
-            'switches': sum(x['final']['switched'] for x in expected)}
+    report = {'ok': not problems, 'problems': problems, 'records': len(records),
+              'decision_points': sum(x['decision_point'] for x in expected),
+              'switches': sum(x['final']['switched'] for x in expected)}
+    if len(records) > len(events):
+        report['unverified_trailing_records'] = len(records) - len(events)
+    return report
 
 
 OFFLINE = [{'kind': 'null'}, {'kind': 'random', 'seed': 1}, {'kind': 'rule'},

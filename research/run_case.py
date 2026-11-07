@@ -189,18 +189,30 @@ def check_trace(output, stopped=False):
     return {'files': len(files), 'ok': not problems, 'problems': problems}
 
 
-def check_controller(output, trace):
+def check_controller(output, trace, stopped=False):
     """A controller run is complete only if every result's controller records equal the receipt's
     controller re-executed on the trace (controllers.check)."""
     import check_case
     import controllers
     try:
-        reports = [controllers.check(r) for r in check_case.result_dirs(output)]
+        reports = [controllers.check(r, stopped=stopped) for r in check_case.result_dirs(output)]
         problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
     except Exception as error:  # an unreadable record or trace leaves the run unverified
         reports, problems = [], [f'controller check failed: {error!r}']
     return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems,
-            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches')} for r in reports]}
+            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches', 'unverified_trailing_records')
+                            if k in r} for r in reports]}
+
+
+def verified_trace(output, args, process_status, termination):
+    """The trace check of a finished case: trace files and commits, and for a controller run that
+    ended successfully (complete or stopped after --placements) the controller check as well."""
+    if args.no_trace:
+        return {'ok': True, 'skipped': 'no-trace control run'}
+    trace = check_trace(output, stopped=termination is not None)
+    if args.controller is not None and process_status in ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS') and trace['ok']:
+        trace = check_controller(output, trace, stopped=process_status == 'STOPPED_AFTER_PLACEMENTS')
+    return trace
 
 
 def final_status(process_status, trace, termination):
@@ -295,10 +307,7 @@ def main(argv=None):
                 # A trace write failure raises inside the case and lands here as a non-zero exit.
                 process_status = 'PROCESS_PASS' if process.returncode == 0 else 'FAILED'
     finally:
-        trace = ({'ok': True, 'skipped': 'no-trace control run'} if args.no_trace
-                 else check_trace(output, stopped=termination is not None))
-        if args.controller is not None and process_status == 'PROCESS_PASS' and trace['ok']:
-            trace = check_controller(output, trace)
+        trace = verified_trace(output, args, process_status, termination)
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
                        elapsed_seconds=round(time.monotonic() - start, 3),

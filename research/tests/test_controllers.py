@@ -2,15 +2,22 @@
 
 Run from the repository root: python -B -m unittest discover -s research/tests
 Tests on a recorded wall replay its trace offline and are skipped when the run is absent.
-Regression tests for the P0/P1 review findings are marked R1..R8.
+Regression tests for the P0/P1 review findings are marked R1..R8, for the second review S1..S6.
 """
+import copy
 import json
 import random
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -27,6 +34,7 @@ from Stonepacker2D.utils import constant  # noqa: E402
 PAPER = {'policy': 'paper', 'order': (3, 0, 2, 1, 4), 'tol': 1e-9}
 WALL = REPO / 'research' / 'runs' / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
 RANDOM_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1' / 'random1-seed20-a'
+NULL_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1-r2' / 'null-seed20'
 
 
 class Brick:
@@ -94,10 +102,41 @@ class ControlledPolicy(unittest.TestCase):
         def mutate_global(p, c):
             constant.get_filter_policy()['tol'] = 1.0
             return p
-        with self.assertRaisesRegex(RuntimeError, 'base policy'):
+        with self.assertRaisesRegex(RuntimeError, 'global settings'):
             controlled_policy(constant.get_filter_policy(), mutate_global, context())
         constant.get_filter_policy()['tol'] = before['tol']
         self.assertEqual(constant.get_filter_policy(), before)
+
+    def test_s1_global_setters_and_rebinding_are_caught(self):
+        constant.set_filter_policy('paper', (3, 0, 2, 1, 4))
+        saved = {k: copy.deepcopy(v) if k.isupper() else v for k, v in vars(constant).items() if not k.startswith('__')}
+        attacks = {  # Codex's trigger first
+            'filter policy setter': lambda: constant.set_filter_policy('paper', (3, 0, 2, 1, 4), tol=123),
+            'weights setter': lambda: constant.set_selection_weights({'kinematic': -123}),
+            'weights in place': lambda: constant.get_selection_weights().update(kinematic=-123),
+            'switch': lambda: constant.set_filter_policy('paper', (3, 0, 2, 1, 4), switch={5: (0, 1, 2, 3, 4)}),
+            'friction': lambda: constant.set_mu(0.1),
+            'controller hook': lambda: constant.set_filter_controller(lambda p, c: p),
+            'getter rebound': lambda: setattr(constant, 'get_filter_policy', lambda step=None: PAPER),
+            'new global': lambda: setattr(constant, 'EXTRA_SETTING', 1)}
+        for name, attack in attacks.items():
+            def controller(p, c):
+                attack()
+                return p
+            with self.assertRaisesRegex(RuntimeError, 'global settings', msg=name):
+                controlled_policy(constant.get_filter_policy(), controller, context())
+            for k in set(vars(constant)) - set(saved) - {k for k in vars(constant) if k.startswith('__')}:
+                delattr(constant, k)
+            for k, v in saved.items():
+                setattr(constant, k, copy.deepcopy(v) if k.isupper() else v)
+        self.assertIs(controlled_policy(constant.get_filter_policy(), lambda p, c: p, context()), constant.get_filter_policy())
+
+    def test_s6_orders_equal_to_the_base_are_type_checked_too(self):
+        for bad in ({'order': (3.0, 0.0, 2.0, 1.0, 4.0)}, {'order': [3.0, 0.0, 2.0, 1.0, 4.0]},
+                    {'order': tuple(np.array([3, 0, 2, 1, 4]))}, {'tol': np.float64(1e-9)}, {'policy': np.str_('paper')}):
+            with self.assertRaises(ValueError, msg=bad):
+                controlled_policy(PAPER, lambda p, c: {**p, **bad}, context())
+        self.assertIs(controlled_policy(PAPER, lambda p, c: {**p, 'order': [3, 0, 2, 1, 4]}, context()), PAPER)
 
     def test_r2_controller_gets_detached_read_only_inputs(self):
         real = two_outcomes()
@@ -232,6 +271,58 @@ class LiveDecisions(unittest.TestCase):
         for steps in ([[1, 0, 'left']], [[1, 'place', 0, 'left'], [1, 'place', 0, 'left']]):
             with self.assertRaises(ValueError):
                 controllers.make_controller({'kind': 'random', 'seed': 3, 'steps': steps})
+
+    def test_s2_malformed_replies_of_any_json_type_fall_back_with_a_record(self):
+        commit = {'order': '0-1-2-3-4', 'rationale': 'r'}
+        replies = [{'tool': [], 'arguments': {}}, {'tool': {}, 'arguments': {}}, {'tool': None}, {'tool': 1}, {'tool': 1.5},
+                   {'tool': True}, {'tool': ['commit_order'], 'arguments': commit}, {'tool': {'commit_order': 1}},
+                   {'tool': 'commit_order', 'arguments': {1: 'x', 'order': '0-1-2-3-4', 'rationale': 'r'}},
+                   {'tool': 'commit_order', 'arguments': {(1, 2): 'x'}},
+                   {'tool': 'commit_order', 'arguments': {'order': None, 'rationale': 'r'}},
+                   {'tool': 'commit_order', 'arguments': {'order': {'a': 1}, 'rationale': ['r']}},
+                   {1: 'x', 'tool': 'commit_order', 'arguments': commit}, {(1, 2): 'x'},
+                   {'tool': 'commit_order', 'arguments': commit, 'status': 'ok'},
+                   {'thought': ['t'], 'tool': 'commit_order', 'arguments': commit}, [], 'commit_order', 3.5, None]
+        for reply in replies:
+            controller = controllers.ReActController(lambda m, t, r=reply: copy.deepcopy(r), {'kind': 'test'})
+            policy, record = self.call(controller)
+            self.assertIs(policy, PAPER, reply)
+            self.assertEqual(record['source'], 'fallback:no_valid_commit', reply)
+            self.assertEqual([s['status'] for s in record['react']], ['rejected'] * 4, reply)
+            self.assertTrue(all(s['feedback']['error'] for s in record['react']), reply)
+            json.dumps(record)
+        with mock.patch.object(controllers, 'reply_problem', side_effect=KeyError('validator bug')):
+            policy, record = self.call(controllers.ReActController(lambda m, t: {'tool': 'commit_order'}, {'kind': 'test'}))
+        self.assertEqual((record['source'], record['react'][0]['status']), ('fallback:no_valid_commit', 'rejected'))
+        self.assertIn('unreadable reply', record['react'][0]['feedback']['error'])
+
+    def test_s5_a_timed_out_call_neither_overlaps_nor_holds_up_exit(self):
+        gate, calls = threading.Event(), []
+
+        def llm(messages, tools):
+            calls.append(len(calls))
+            if len(calls) == 1:
+                gate.wait(10)
+            return {'tool': 'commit_order', 'arguments': {'order': '1-0-2-3-4', 'rationale': 'r'}}
+        controller = controllers.ReActController(llm, {'kind': 'test'}, llm_timeout=0.1, max_llm_failures=5)
+        sources = [self.call(controller)[1] for _ in range(2)]
+        self.assertEqual([r['source'] for r in sources], ['fallback:llm_timeout', 'fallback:llm_busy'])
+        self.assertEqual((sources[1]['react'][0]['status'], len(calls)), ('busy', 1))
+        gate.set()
+        controller.pending.join(5)
+        policy, record = self.call(controller)
+        self.assertEqual((record['source'], policy['order'], len(calls), controller.failures), ('llm', (1, 0, 2, 3, 4), 2, 2))
+
+        script = ("import sys, time; sys.path[:0] = [r'%s', r'%s']\n"
+                  "import test_controllers as t, controllers\n"
+                  "from Stonepacker2D.stack.selection import controlled_policy\n"
+                  "c = controllers.ReActController(lambda m, tools: time.sleep(30), {'kind': 'test'}, llm_timeout=0.2,"
+                  " sink=lambda r: print(r['source']))\n"
+                  "controlled_policy(t.PAPER, c, t.two_outcomes())\n") % (REPO, REPO / 'research' / 'tests')
+        start = time.monotonic()
+        done = subprocess.run([sys.executable, '-B', '-c', script], cwd=REPO, capture_output=True, text=True, timeout=25)
+        self.assertEqual(done.stdout.split(), ['fallback:llm_timeout'], done.stderr[-500:])
+        self.assertLess(time.monotonic() - start, 15)  # the 30 s call does not keep the process alive
 
     def test_r6_llm_timeout_error_and_bad_replies_fall_back_and_are_logged(self):
         calls = []
@@ -415,6 +506,81 @@ class InterventionTrace(unittest.TestCase):
                 edit(r)
             self.assertFalse(controllers.check(self.result, bad)['ok'])
         self.assertFalse(controllers.check(self.result, controllers.rerun(self.result, {'kind': 'null'}, self.base))['ok'])
+
+    def test_s3_missing_or_inconsistent_trace_fails_the_check(self):
+        spec = {'kind': 'random', 'seed': 1}
+        events = list(controllers.trace_events(self.result))
+
+        def report(evs, stopped=False):
+            with mock.patch.object(controllers, 'trace_events', lambda result: iter(copy.deepcopy(evs))):
+                return controllers.check(self.result, controllers.rerun(self.result, spec, self.base)[:len(evs)],
+                                         stopped=stopped)
+
+        def edit(k, **arrays):
+            return [(m, {**a, **arrays}) if m['event'] == k else (m, a) for m, a in events]
+        self.assertTrue(report(events)['ok'])
+        first = events[0][1]
+        other = int(first['inventory_ids'][0])
+        cases = {  # Codex's two triggers first
+            'last record and event removed': events[:-1],
+            'stone ids of event 0 rewritten': edit(0, stone_id=np.full_like(first['stone_id'], -987654)),
+            'sampled stone swapped consistently': edit(0, stone_id=np.full_like(first['stone_id'], other),
+                                                       sampled_ids=np.array([other])),
+            'middle event removed': events[:5] + events[6:],
+            'rotation labels changed': edit(0, rotation=first['rotation'][::-1].copy()),
+            'world pose changed': edit(0, x_world=first['x_world'] + 1)}
+        for name, evs in cases.items():
+            self.assertFalse(report(evs)['ok'], name)
+        self.assertFalse(report(events[:-1], stopped=True)['ok'])  # its commit still points at the removed event
+
+
+@unittest.skipUnless(NULL_WALL.exists(), 'P1-r2 Null run not present')
+class StoppedRuns(unittest.TestCase):
+    """run_case.verified_trace on copies of a Null wall, cut the way --placements N leaves a run."""
+
+    def copy_run(self, dst, events=None, records=None, committed=None):
+        """dst: receipt, decisions, commits and the first `events` trace events of NULL_WALL; records:
+        how many controller records to keep (default one per kept event), or a list of them;
+        committed: only attempts whose events all come before it have their commit."""
+        src = check_case.result_dirs(NULL_WALL)[0]
+        out = dst / src.relative_to(NULL_WALL)
+        (out / 'trace').mkdir(parents=True)
+        shutil.copy2(NULL_WALL / 'receipt.json', dst / 'receipt.json')
+        n = len(list((src / 'trace').glob('e*.npz'))) if events is None else events
+        for k in range(n):
+            shutil.copy2(src / 'trace' / f'e{k:05d}.npz', out / 'trace' / f'e{k:05d}.npz')
+        commits = [l for l in (src / 'trace' / 'commits.jsonl').read_text(encoding='utf-8').splitlines()
+                   if all(s['event'] < (n if committed is None else committed) for s in json.loads(l)['sides'].values())]
+        placed = sum(json.loads(l)['outcome'] == 'placed' for l in commits)
+        (out / 'trace' / 'commits.jsonl').write_text(''.join(l + '\n' for l in commits), encoding='utf-8')
+        rows = (src / 'decisions.txt').read_text(encoding='utf-8').splitlines()[:placed]
+        (out / 'decisions.txt').write_text(''.join(l + '\n' for l in rows), encoding='utf-8')
+        lines = (src / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()
+        keep = lines[:n] if records is None else lines[:records] if isinstance(records, int) else records
+        if keep is not False:
+            (out / 'trace' / 'controller.jsonl').write_text(''.join(l + '\n' for l in keep), encoding='utf-8')
+        return dst
+
+    def test_s4_stopped_controller_runs_are_checked_too(self):
+        args, stop = SimpleNamespace(no_trace=False, controller={'kind': 'null'}), {'verified': True}
+        lines = (check_case.result_dirs(NULL_WALL)[0] / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()
+        wrong = json.loads(lines[3])
+        wrong['final']['switched'] = True
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            full = run_case.verified_trace(self.copy_run(tmp / 'full'), args, 'PROCESS_PASS', None)
+            self.assertTrue(full['ok'], full['problems'])
+            stopped = run_case.verified_trace(self.copy_run(tmp / 'stopped', 10, 11), args, 'STOPPED_AFTER_PLACEMENTS', stop)
+            self.assertTrue(stopped['ok'], stopped['problems'])
+            self.assertEqual(stopped['controller'][0]['unverified_trailing_records'], 1)
+            for name, records in (('a record missing', lines[:3] + lines[4:10]), ('a wrong record', lines[:3] + [json.dumps(wrong)] + lines[4:10]),
+                                  ('no records', False), ('two extra records', 12)):
+                trace = run_case.verified_trace(self.copy_run(tmp / name, 10, records), args, 'STOPPED_AFTER_PLACEMENTS', stop)
+                self.assertFalse(trace['ok'], name)
+                self.assertEqual(run_case.final_status('STOPPED_AFTER_PLACEMENTS', trace, stop), 'INCOMPLETE_TRACE', name)
+            unfinished = self.copy_run(tmp / 'unfinished', 10, committed=9)  # event 9 has no commit yet
+            self.assertTrue(run_case.verified_trace(unfinished, args, 'STOPPED_AFTER_PLACEMENTS', stop)['ok'])
+            self.assertFalse(controllers.check(check_case.result_dirs(unfinished)[0], stopped=False)['ok'])
 
 
 if __name__ == '__main__':
