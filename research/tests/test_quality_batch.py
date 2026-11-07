@@ -101,6 +101,19 @@ class Batch(unittest.TestCase):
         finally:
             manifest.write_text(text, encoding='utf-8')
 
+    def test_sensitivity_method(self):
+        """s1 on a wall 02 leaves nothing out: the same values, its own method name and options."""
+        q.batch('t', self.root / 's1', runs=self.runs, check_sources=False, method='wang-quality-s1-keep-all')
+        rows = list(csv.DictReader(open(self.root / 's1' / 'quality.csv', encoding='utf-8')))
+        info = json.loads((self.root / 's1' / 'batch.json').read_text(encoding='utf-8'))
+        self.assertEqual((info['method'], info['options']), ('wang-quality-s1-keep-all', {'leave_out': False}))
+        self.assertEqual({r['method'] for r in rows}, {'wang-quality-s1-keep-all'})
+        for r, v1 in zip(rows, self.rows):
+            self.assertEqual({k: r[k] for k in q.COLUMNS if k != 'method'}, {k: v1[k] for k in q.COLUMNS if k != 'method'})
+        self.assertEqual(self.info['options'], {})
+        with self.assertRaises(ValueError):
+            q.evaluate(self.runs / 'campaigns' / 't' / 'case' / 'a' / 'seed1', 'wang-quality-v2')
+
     def test_a_failed_evaluation_is_a_fail_row(self):
         run = self.runs / 'campaigns' / 't' / 'case' / 'a' / 'seed1'
         with mock.patch.object(q.metrics, 'wall_quality', side_effect=RuntimeError('boom')):

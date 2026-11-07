@@ -188,6 +188,20 @@ class Refusals(unittest.TestCase):
             with self.subTest(dx):
                 self.assertEqual((render['stones'][1]['overlap'], render['stones'][1]['left_out']), (overlap, out))
                 self.assertEqual(2 in labels, not out)
+        # wang-quality-s1: every stone drawn; the 343 contested pixels go to the later or the earlier one
+        moved = ';'.join([str(last), str(float(first[1]) + 168)] + first[2:])
+        (self.result / 'transformation.txt').write_text('\n'.join(self.lines[:2] + [moved]))
+        v1, _ = metrics.render_original(self.run_dir, self.result, 'corrected')
+        later, r = metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False)
+        earlier, _ = metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False, overlap='earlier')
+        a, b = r['stones'][0]['pixels'], r['stones'][1]['pixels']
+        self.assertFalse(r['stones'][1]['left_out'])
+        self.assertEqual([np.count_nonzero(later == k) for k in (1, 2)], [a - 343, b])
+        self.assertEqual([np.count_nonzero(earlier == k) for k in (1, 2)], [a, b - 343])
+        self.assertEqual([np.count_nonzero(v1 == k) for k in (1, 2)], [a, 0])
+        self.assertTrue(np.array_equal(later != 0, earlier != 0))  # the same union, only the owner differs
+        with self.assertRaises(ValueError):  # 02's leave-out with contested pixels to the earlier stone is no method
+            metrics.render_original(self.run_dir, self.result, leave_out=True, overlap='earlier')
 
 
 class CorrectedCanvas(unittest.TestCase):

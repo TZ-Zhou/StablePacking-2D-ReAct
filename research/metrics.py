@@ -235,7 +235,7 @@ def stone_source(run):
     return Path(run) / 'data' / image[0]
 
 
-def render_original(run, result, canvas='author'):
+def render_original(run, result, canvas='author', leave_out=True, overlap='later'):
     """02's stacked_wall_label.png of a wall, at the stones' original resolution: the wall size
     from the stone label image (5 mean bounding boxes, + 2/rescale and 3/rescale), every stone
     (region >= 50 px, holes filled) centered on a canvas of that image's size, then for each line
@@ -245,12 +245,16 @@ def render_original(run, result, canvas='author'):
     canvas='author' moves the stone on its own canvas, as 02 does (line 183), which cuts what lands
     beyond it (rows >= 400 for noise 80, inside the 559-row wall); canvas='corrected' moves it on a
     canvas covering both, so only the wall's bounds crop it. Nothing else differs.
+    leave_out=False (sensitivity method wang-quality-s1, not 02) draws every stone, however much it
+    overlaps; overlap='later' gives the contested pixels to the stone drawn later, as 02 does for
+    every stone it keeps, 'earlier' to the one drawn first.
     Returns the uint8 label image and, per stone: pixels drawn, lost_to_crop (all this mode cut),
     canvas_cut (pixels inside the wall that 02's own canvas cuts, the same in both modes; the
     corrected mode keeps them), outside_wall (beyond the wall, cut in both), turn_at_edge (the
     turned stone touches its canvas border, so the turn itself may have cut it), overlap, left_out."""
-    if canvas not in ('author', 'corrected'):
-        raise ValueError(canvas)
+    if canvas not in ('author', 'corrected') or overlap not in ('later', 'earlier') or (leave_out and overlap != 'later'):
+        raise ValueError((canvas, leave_out, overlap))
+    contested_to = overlap  # the loop counts each stone's overlap in `overlap`
     from skimage.measure import label
     image = label(cv2.imread(str(stone_source(run)), cv2.IMREAD_GRAYSCALE).astype(np.uint8))
     regions = [r for r in regionprops(image) if r.area >= 50]
@@ -298,26 +302,30 @@ def render_original(run, result, canvas='author'):
                            'lost_to_crop': int(before - np.count_nonzero(s)),
                            'canvas_cut': int(np.count_nonzero(full) - np.count_nonzero(own)),
                            'outside_wall': int(before - np.count_nonzero(full)), 'turn_at_edge': edge,
-                           'overlap': int(overlap), 'left_out': overlap >= 200})
-        if overlap >= 200:
+                           'overlap': int(overlap), 'left_out': leave_out and overlap >= 200})
+        if stones_out[-1]['left_out']:
             continue
+        if contested_to == 'earlier':
+            s = np.where(drawn != 0, 0, s)
         drawn = np.where(s != 0, s, drawn)
         labels = np.where(s != 0, seq + 1, labels).astype(np.uint8)
     return labels, {'size': [size[1], size[0]], 'canvas': list(image.shape), 'mode': canvas, 'stones': stones_out}
 
 
-def wall_quality(run, result, canvas='author'):
+def wall_quality(run, result, canvas='author', leave_out=True, overlap='later'):
     """The four formal metrics of a wall, by the author's method: 02's rendering at the original
     resolution (canvas: 'author' as 02 does it, or 'corrected', see render_original), then 03
-    (wang_metrics). Kept apart from wall_metrics; raw values, no total score."""
+    (wang_metrics); leave_out, overlap: see render_original. Kept apart from wall_metrics; raw
+    values, no total score."""
     result = Path(result)
-    labels, render = render_original(run, result, canvas)
+    labels, render = render_original(run, result, canvas, leave_out, overlap)
     rocks = [r.id for r in pickle.load(open(result / 'base.pkl', 'rb')).placed_rocks]
     if rocks != [s['id'] for s in render['stones']]:
         raise ValueError(f'transformation.txt does not list the placed rocks of base.pkl: {rocks}')
     m = wang_metrics(result, labels=labels.astype(int))
     return {'F_SF': m['F_SF_author'], 'F_AH': m['F_AH'], 'F_AV': m['F_AV'], 'F_LR': m['F_LR'],
-            'lambda_min': m['lambda_min'], 'mu': m['mu'], 'method': f'Tests/Thangavelu 02 + 03, original resolution, {canvas} canvas',
+            'lambda_min': m['lambda_min'], 'mu': m['mu'], 'method': f'Tests/Thangavelu 02 + 03, original resolution, {canvas} canvas'
+                      + ('' if leave_out else f', every stone drawn, overlap to the {overlap} stone'),
             'F_AH_factors': [p['factor'] for p in m['F_AH_paths'] or []],
             'F_AV_factors': [p['factor'] for p in m['F_AV_paths'] or []],
             'render': render}

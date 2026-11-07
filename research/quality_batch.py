@@ -3,7 +3,10 @@ Wang et al. by metrics.wall_quality on the corrected canvas (F_SF, F_AH, F_AV, F
 values) and on the author-compatible canvas (F_*_author: the reference), beside placed_ratio,
 wall_density and wall_height of metrics.wall_metrics. Raw values: no weights, no total score.
 
-  python -B research/quality_batch.py <campaign id> [--out research/quality/wang-quality-v1]
+  python -B research/quality_batch.py <campaign id> [--method wang-quality-v1] [--out DIR]
+
+--method wang-quality-s1-keep-all (or -earlier) is the sensitivity analysis of 02's overlap rule
+(see metrics.render_original leave_out, overlap); its output goes to research/quality/<method>.
 
 Writes <out>/batch.json, quality.csv and quality.jsonl once; refuses an existing <out> or one
 inside research/runs, which it only reads. The runs are the campaign's manifest.csv rows, which
@@ -30,7 +33,11 @@ sys.path[:0] = [str(REPO), str(REPO / 'research')]
 import check_case  # noqa: E402
 import metrics  # noqa: E402
 
-METHOD = 'wang-quality-v1'
+METHOD = 'wang-quality-v1'  # the formal method
+# method: wall_quality options. The s1 methods are a sensitivity analysis of 02's overlap rule
+# (every stone drawn), never the formal values.
+METHODS = {METHOD: {}, 'wang-quality-s1-keep-all': {'leave_out': False},
+           'wang-quality-s1-keep-all-earlier': {'leave_out': False, 'overlap': 'earlier'}}
 RUNS = REPO / 'research' / 'runs'
 SOURCES = ['research/quality_batch.py', 'research/metrics.py', 'research/check_case.py',
            'Tests/Thangavelu/02_view_transformation_ori_reso.py', 'Tests/Thangavelu/03_evaluate_wall_metrics.py',
@@ -104,15 +111,17 @@ def problems(run):
     return p
 
 
-def evaluate(run):
+def evaluate(run, method=METHOD):
     """(csv fields, jsonl detail) of one wall; status FAIL with its problems when it cannot be."""
+    if method not in METHODS:
+        raise ValueError(f'unknown method {method}')
     p = problems(run)
     if p:
         return {'status': 'FAIL', 'problems': p}, {}
     result = next(run.glob('result_*'))
     try:
-        qc = metrics.wall_quality(run, result, 'corrected')
-        qa = metrics.wall_quality(run, result, 'author')
+        qc = metrics.wall_quality(run, result, 'corrected', **METHODS[method])
+        qa = metrics.wall_quality(run, result, 'author', **METHODS[method])
         wm = metrics.wall_metrics(run, result)
     except Exception as e:
         return {'status': 'FAIL', 'problems': [f'evaluation raised {type(e).__name__}: {e}']}, {}
@@ -132,8 +141,10 @@ def evaluate(run):
     return row, {'corrected': qc, 'author': qa, 'wall_metrics': wm}
 
 
-def batch(campaign_id, out, runs=RUNS, check_sources=True):
+def batch(campaign_id, out, runs=RUNS, check_sources=True, method=METHOD):
     """Evaluate the campaign and write <out>; returns the number of FAIL rows."""
+    if method not in METHODS:
+        raise ValueError(f'unknown method {method}')
     out = Path(out).resolve()
     if out.exists():
         raise SystemExit(f'{out} exists: a batch is written once')
@@ -151,8 +162,8 @@ def batch(campaign_id, out, runs=RUNS, check_sources=True):
         raise SystemExit(f'manifest.csv does not list the campaign arms x seeds once each: {len(listed)} rows, {len(planned)} planned')
     rows, details = [], []
     for m in manifest:
-        row, detail = evaluate(runs / m['run'])
-        row = {**{k: m[k] for k in ('arm', 'policy', 'order', 'seed', 'run')}, 'campaign': campaign_id, 'method': METHOD, **row}
+        row, detail = evaluate(runs / m['run'], method)
+        row = {**{k: m[k] for k in ('arm', 'policy', 'order', 'seed', 'run')}, 'campaign': campaign_id, 'method': method, **row}
         rows.append(row)
         details.append({'run': m['run'], 'arm': m['arm'], 'seed': m['seed'], 'status': row['status'],
                         'problems': row['problems'], **detail})
@@ -160,7 +171,7 @@ def batch(campaign_id, out, runs=RUNS, check_sources=True):
         raise SystemExit('a source file changed during the batch: nothing written')
     failed = [r for r in rows if r['status'] == 'FAIL']
     info = {
-        'method': METHOD, 'campaign': campaign_id, 'formal': 'corrected canvas', 'reference': 'author canvas (*_author)',
+        'method': method, 'options': METHODS[method], 'campaign': campaign_id, 'formal': 'corrected canvas', 'reference': 'author canvas (*_author)',
         'git_head': git('rev-parse', 'HEAD').strip(), 'sources_git_blob': hashes, 'sources_dirty': dirty,
         'resolution': {'rescale': metrics.RESCALE, 'mu': metrics.MU, 'stone_images': sorted({
             f"{metrics.stone_source(runs / r['run']).name} {sha256(metrics.stone_source(runs / r['run']))}"
@@ -187,9 +198,10 @@ def batch(campaign_id, out, runs=RUNS, check_sources=True):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('campaign')
-    ap.add_argument('--out', default=str(REPO / 'research' / 'quality' / METHOD))
+    ap.add_argument('--method', choices=list(METHODS), default=METHOD)
+    ap.add_argument('--out', help='default research/quality/<method>')
     a = ap.parse_args(argv)
-    n = batch(a.campaign, a.out)
+    n = batch(a.campaign, a.out or REPO / 'research' / 'quality' / a.method, method=a.method)
     print(f'{n} FAIL rows' if n else 'all rows OK')
     return 1 if n else 0
 
