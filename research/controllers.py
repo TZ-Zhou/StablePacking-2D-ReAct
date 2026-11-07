@@ -102,7 +102,9 @@ def encode_pixels(mask):
 
 
 def decode_pixels(p, shape):
-    """The wall-sized mask of encode_pixels' output, None if it is malformed or off the wall."""
+    """The wall-sized mask of encode_pixels' output, None if it is malformed, off the wall or not
+    canonical (its box not the tight box of its pixels, padding bits set, other base64): then its
+    origin is where its pixels are."""
     try:
         (x, y), (h, w) = p['origin'], p['shape']
         bits = np.unpackbits(np.frombuffer(base64.b64decode(p['bits'], validate=True), np.uint8))
@@ -111,7 +113,7 @@ def decode_pixels(p, shape):
             return None
         mask = np.zeros(shape, bool)
         mask[y:y + h, x:x + w] = bits[:h * w].reshape(h, w).astype(bool)
-        return mask
+        return mask if encode_pixels(mask) == p else None
     except Exception:  # a malformed record is a failed check, never a crash
         return None
 
@@ -211,9 +213,9 @@ def tool_table(info, label):
 SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
                            'llm_timeout': 60.0, 'max_llm_failures': 3}}
-# max_total_tokens (react, optional): only in specs that set it, so earlier walls keep their spec
+# max_total_tokens, max_cost_usd (react, optional): only in specs that set them, so earlier walls keep their spec
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
-             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens'}}
+             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd'}}
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
 SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
            'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
@@ -254,12 +256,22 @@ def validate_spec(spec):
         make_policy(spec)
     else:
         llm_identity(spec['llm'])
+        budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
+        if not (budget is None or (type(budget) is int and budget > 0)):
+            raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
+        if not (usd is None or (type(usd) in (int, float) and 0 < usd < float('inf'))):
+            raise ValueError(f'max_cost_usd is None or a positive number, got {usd!r}')
         if spec['llm']['kind'] == 'api':
             import llm_adapter
             llm_adapter.enabled(spec['llm'])
-        budget = spec.get('max_total_tokens')
-        if not (budget is None or (type(budget) is int and budget > 0)):
-            raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
+            if llm_adapter.paid(spec['llm']):
+                if budget is None or usd is None:
+                    raise ValueError('a paid provider needs max_total_tokens and max_cost_usd')
+                if llm_adapter.call_bound(spec['llm']) > spec['llm_timeout']:
+                    raise ValueError(f"llm_timeout {spec['llm_timeout']} s is shorter than the provider's retries "
+                                     f"({llm_adapter.call_bound(spec['llm'])} s): an abandoned call leaves its usage unknown")
+            elif usd is not None and llm_adapter.price(spec['llm']) is None:
+                raise ValueError('max_cost_usd needs a price for the model')
     return spec
 
 
@@ -299,15 +311,22 @@ class ControllerClient:
     the client holds the wall's counters: request failures (LLM and worker), LLM decisions and the
     tokens the replies report; after max_llm_failures failures every later decision point is
     skip:llm_unavailable, after max_decisions skip:wall_budget, after max_total_tokens
-    skip:token_budget, and none of them sends a request. Each request leaves a ledger line
-    (ledger: trace/transport.jsonl by default) with what this process sent and received; the
-    transport's worker lifecycle goes to the same ledger.
+    skip:token_budget, after max_cost_usd skip:cost_budget, and none of them sends a request.
+    For an API LLM the spend is llm_adapter.spend's: reported and estimated tokens (both count)
+    and their cost; an attempt whose usage is unknown (a call abandoned or failed after it may have
+    been sent, a worker failure of the decision, a reply without usage) is never counted as free:
+    every later decision point is skip:usage_unknown. With a budget in the spec each request
+    carries what is left of it, which the API LLM reserves before every attempt. Each request
+    leaves a ledger line (ledger: trace/transport.jsonl by default) with what this process sent
+    and received, written before the transport cleans up after a failure; the transport's worker
+    lifecycle goes to the same ledger.
     """
 
     def __init__(self, spec, transport, sink=None, ledger=None):
         self.spec_, self.transport = full_spec(spec), transport
         self.observer, self.sink, self.ledger, self.calls = Observer(), sink or write_record, ledger or write_ledger, 0
-        self.request_failures = self.llm_decisions = self.tokens = 0
+        self.request_failures = self.llm_decisions = self.tokens = self.unknown_usage = 0
+        self.cost_usd, self.api = 0.0, self.spec_['kind'] == 'react' and self.spec_['llm'].get('kind') == 'api'
         if hasattr(transport, 'log'):
             transport.log = self.ledger
 
@@ -321,28 +340,44 @@ class ControllerClient:
                 return base, {'source': 'skip:llm_unavailable'}
             if self.llm_decisions >= spec['max_decisions']:
                 return base, {'source': 'skip:wall_budget'}
+            if self.api and self.unknown_usage:
+                return base, {'source': 'skip:usage_unknown'}
             if spec.get('max_total_tokens') is not None and self.tokens >= spec['max_total_tokens']:
                 return base, {'source': 'skip:token_budget'}
+            if spec.get('max_cost_usd') is not None and self.cost_usd >= spec['max_cost_usd']:
+                return base, {'source': 'skip:cost_budget'}
             self.llm_decisions += 1
         tools = tool_table(info, self.observer.label)
         digest = {'tool_table_sha256': hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()}
         request = {'observation': obs, 'base_order': key(base), 'orders': tools}
-        status, reply = self.transport.decide(request)
-        problem = reply_problem_of(reply, spec['kind'], key(base)) if status == 'ok' else None
-        if problem:
-            status, reply = 'worker_protocol_error', problem
-        self.ledger({'type': 'request', 'event': self.calls, **{k: obs[k] for k in ('step', 'phase', 'sample_trial', 'side')},
-                     'request_sha256': request_sha256(request), 'status': status,
-                     'reply_sha256': request_sha256(comparable(reply)) if status == 'ok' else None,
-                     'restart': status == 'ok' and reply.get('restart') is True, 'error': None if status == 'ok' else reply,
-                     'worker_pid': getattr(self.transport, 'pid', None)})
-        if problem:  # the worker that produced it ends now, its policy state with it
-            self.transport.close('protocol_error')
+        if spec['kind'] == 'react' and (spec.get('max_total_tokens') is not None or spec.get('max_cost_usd') is not None):
+            request['budget'] = {'tokens_left': None if spec.get('max_total_tokens') is None else spec['max_total_tokens'] - self.tokens,
+                                 'usd_left': None if spec.get('max_cost_usd') is None else round(spec['max_cost_usd'] - self.cost_usd, 6)}
+
+        def settle(status, reply):  # before the transport cleans up: the ledger line comes first
+            problem = reply_problem_of(reply, spec['kind'], key(base)) if status == 'ok' else None
+            if problem:  # the transport then ends the worker that produced it, its policy state with it
+                status, reply = 'worker_protocol_error', problem
+            self.ledger({'type': 'request', 'event': self.calls, **{k: obs[k] for k in ('step', 'phase', 'sample_trial', 'side')},
+                         'request_sha256': request_sha256(request), 'status': status,
+                         'reply_sha256': request_sha256(comparable(reply)) if status == 'ok' else None,
+                         'restart': status == 'ok' and reply.get('restart') is True, 'error': None if status == 'ok' else reply,
+                         'worker_pid': getattr(self.transport, 'pid', None)})
+            return status, reply
+        status, reply = self.transport.decide(request, settle)
         if status != 'ok':
             self.request_failures += 1
+            self.unknown_usage += self.api  # an API call of the decision may have been sent
             return base, {'source': f'fallback:{status}', 'error': reply, **digest}
         self.request_failures += reply['source'] in LLM_FAILURES
-        self.tokens += tokens_of(reply)
+        if self.api:
+            import llm_adapter
+            spent = llm_adapter.spend(spec['llm'], reply.get('transcripts'))
+            self.tokens += spent['tokens'] + spent['estimated_tokens']
+            self.cost_usd += spent['cost_usd']
+            self.unknown_usage += spent['unknown']
+        else:
+            self.tokens += tokens_of(reply)
         return parse_order(reply['order']), {**{k: v for k, v in reply.items() if k not in ('order', 'restart')}, **digest}
 
     def __call__(self, policy, ctx):
@@ -370,16 +405,17 @@ class InlineTransport:
     def __init__(self, make):
         self.make, self.policy = make, None
 
-    def decide(self, request):
+    def decide(self, request, settle=None):
         self.policy = self.policy or self.make()
         try:
-            reply = json.loads(json.dumps(self.policy.decide(json.loads(json.dumps(request))), allow_nan=False))
+            status, reply = 'ok', json.loads(json.dumps(self.policy.decide(json.loads(json.dumps(request))), allow_nan=False))
         except Exception as error:  # the worker would report it the same way
+            status, reply = 'worker_error', error_text(error)
+        if settle is not None:
+            status, reply = settle(status, reply)
+        if status != 'ok' or not isinstance(reply, dict) or reply.get('restart'):
             self.policy = None
-            return 'worker_error', error_text(error)
-        if not isinstance(reply, dict) or reply.get('restart'):
-            self.policy = None
-        return 'ok', reply
+        return status, reply
 
     def close(self, reason='close'):
         self.policy = None
@@ -602,6 +638,8 @@ class ReActPolicy:
                     'parsed': parsed, 'usage': safe_json(getattr(self.llm, 'usage', None)), 'error': None if ok else out}
         if getattr(self.llm, 'attempts', None) is not None:
             response['attempts'] = safe_json(self.llm.attempts)
+        if getattr(self.llm, 'exchange', None) is not None:  # the provider's own request and response
+            response['exchange'] = safe_json(self.llm.exchange)
         transcripts.append({'call': len(transcripts), 'request': request, 'request_sha256': request_sha256(request),
                             'response': response, 'status': status, 'latency_s': round(time.monotonic() - start, 3)})
         return status, parsed if ok else out
@@ -623,6 +661,8 @@ class ReActPolicy:
         messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps(view)}]
         steps, transcripts = [], []
         meta = {'prompt_sha256': self.prompt_sha256, 'transcripts': transcripts}
+        if callable(getattr(self.llm, 'begin', None)):  # an API LLM reserves this decision's budget per attempt
+            self.llm.begin(request.get('budget'))
         for _ in range(self.max_tool_calls):
             status, reply = self.call_llm(messages, transcripts)
             if status != 'ok':
@@ -651,26 +691,27 @@ class ReplayLLM:
     found by its decision key (from the observation message) and its position in the decision; the
     request the policy sends, with the model and params the receipt's LLM spec gives (never the
     records'), must hash to the recorded request_sha256, and recorded timeouts and errors recur at
-    once with their text. usage and attempts are restored per call, as the live LLM held them.
+    once with their text. usage, attempts and the provider exchange are restored per call, as the
+    live LLM held them.
     Anything else is a divergence: listed in `diverged` and the call fails."""
 
     def __init__(self, records, model, params):
         records = [r for r in records if isinstance(r, dict) and isinstance(r.get('transcripts'), list)]
         self.recorded = {decision_key(r): r['transcripts'] for r in records}
         self.model, self.params, self.diverged = model, params, []
-        self.usage = self.attempts = None
+        self.usage = self.attempts = self.exchange = None
 
     def __call__(self, messages, tools):
         key_ = decision_key(json.loads(messages[1]['content']))
         call, done = (len(messages) - 2) // 2, self.recorded.get(key_, [])
         t = done[call] if call < len(done) else None
         request = {'messages': messages, 'tools': tools, 'model': self.model, 'params': self.params}
-        self.usage = self.attempts = None
+        self.usage = self.attempts = self.exchange = None
         if not isinstance(t, dict) or t.get('request_sha256') != request_sha256(request) or \
                 request_sha256(t.get('request')) != t['request_sha256'] or not isinstance(t.get('response'), dict):
             self.diverged.append(f"{key_} call {call}: {'not recorded' if t is None else 'request differs from the recording'}")
             raise LLMFailure('error', 'replay diverged')
-        self.usage, self.attempts = t['response'].get('usage'), t['response'].get('attempts')
+        self.usage, self.attempts, self.exchange = (t['response'].get(k) for k in ('usage', 'attempts', 'exchange'))
         if t['status'] != 'ok':
             raise LLMFailure(t['status'], t['response']['error'])
         raw = t['response']['raw_text']
@@ -686,12 +727,12 @@ class ReplayedFailures(InlineTransport):
         self.failed = {decision_key(r): (r['source'][len('fallback:'):], r.get('error'))
                        for r in records if isinstance(r, dict) and str(r.get('source')).startswith('fallback:worker_')}
 
-    def decide(self, request):
+    def decide(self, request, settle=None):
         failed = self.failed.get(decision_key(request['observation']))
         if failed:
             self.policy = None
-            return failed
-        return super().decide(request)
+            return failed if settle is None else settle(*failed)
+        return super().decide(request, settle)
 
 
 class MockLLM:
@@ -994,23 +1035,31 @@ def ledger_problems(result, expected, events, stopped):
 
 
 def worker_problems(entries, stopped):
-    """The worker lifecycle of a live run (ledger lines in order): every worker that was closed
-    was gone after the reap timeout, every failed request (and every reply asking for a restart)
-    was followed by closing its worker, and every worker started was closed (a stopped run's last
+    """The worker lifecycle of a live run (ledger lines in the order written: start, the requests
+    it answered, close): every worker closed was confirmed gone after the reap timeout (a close
+    with alive true or without a pid is a worker that may still run), every failed request (and
+    every reply asking for a restart) is followed by closing the worker it names, no request
+    names a worker closed before it, and every worker started was closed (a stopped run's last
     worker excepted: the launcher kills the process tree and verifies it). Returns (problems, counts)."""
-    problems, open_, closed = [], [], set()
-    starts = [e['pid'] for e in entries if e.get('type') == 'worker' and e.get('action') == 'start']
-    for k, e in enumerate(entries):
+    problems, open_, closed, pending = [], [], set(), {}
+    starts = [e.get('pid') for e in entries if e.get('type') == 'worker' and e.get('action') == 'start']
+    for e in entries:
         if e.get('type') == 'worker' and e.get('action') == 'start':
-            open_.append(e['pid'])
+            open_.append(e.get('pid'))
         elif e.get('type') == 'worker' and e.get('action') == 'close':
-            closed.add(e['pid'])
-            open_ = [p for p in open_ if p != e['pid']]
+            closed.add(e.get('pid'))
+            open_ = [p for p in open_ if p != e.get('pid')]
+            pending.pop(e.get('pid'), None)
             if e.get('alive') is not False:
-                problems.append(f"worker {e['pid']} was still alive after it was closed ({e.get('reason')})")
-        elif e.get('type') == 'request' and (e.get('status') != 'ok' or e.get('restart')) and e.get('worker_pid') is not None:
-            if not any(x.get('type') == 'worker' and x.get('action') == 'close' and x.get('pid') == e['worker_pid'] for x in entries[k + 1:]):
-                problems.append(f"the worker {e['worker_pid']} of the failed request at event {e.get('event')} was never closed")
+                problems.append(f"worker {e.get('pid')} was not confirmed ended when it was closed ({e.get('reason')})")
+        elif e.get('type') == 'request':
+            pid = e.get('worker_pid')
+            if pid is not None and pid in closed:
+                problems.append(f"the request at event {e.get('event')} names worker {pid}, closed before it")
+            if (e.get('status') != 'ok' or e.get('restart')) and pid is not None:
+                pending[pid] = e.get('event')
+    last = starts[-1] if stopped and starts else None
+    problems += [f'the worker {p} of the failed request at event {ev} was never closed' for p, ev in pending.items() if p != last]
     left = open_[:-1] if stopped else open_
     problems += [f'worker {p} was started and never closed' for p in left]
     return problems, {'workers_started': len(starts), 'workers_closed': len(closed)}
@@ -1050,7 +1099,8 @@ def check(result, records=None, spec=None, stopped=None):
     - provenance: the main process's ledger and the launcher's run manifest exist and match.
     verdict: PASS if ok with complete geometry and provenance; PARTIAL if ok but something could
     not be verified (listed in `incomplete`); FAIL otherwise."""
-    result, run = Path(result), run_of(result)
+    result = Path(result).resolve()  # run_of resolves; the manifest keys are relative to the run
+    run = run_of(result)
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
     spec = receipt.get('controller') if spec is None else spec
     stopped = receipt.get('process_status') == 'STOPPED_AFTER_PLACEMENTS' if stopped is None else stopped

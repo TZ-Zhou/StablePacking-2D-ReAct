@@ -3,18 +3,25 @@
 The main process (controllers.ControllerClient) sends a request (observation, base order, tool
 table) and waits for the reply; only JSON crosses the pipe, so the worker holds no Wang object,
 score matrix, global setting or RNG of the main process, and the main process receives nothing but
-parsed JSON. Every stage is bounded: the start (spawn and the ready message) by start_timeout,
-the request (sending it and receiving the reply) by one deadline of `timeout` seconds, and the
-cleanup by reap_timeout. Any failure kills the worker (kill + join) and the next request starts a
-new one:
-- worker_timeout: the request was not taken or not answered in time (the worker is killed with
-  whatever it was running);
+parsed JSON. Every stage runs in a supervised I/O thread the main process waits for with a
+deadline, so no blocking call of the pipe or of the spawn can hold Wang's process: the start
+(Pipe, spawn and the ready message) is bounded by start_timeout, the request (sending it and
+receiving the whole reply) by one deadline of `timeout` seconds, and the cleanup by reap_timeout.
+Any failure kills the worker (kill + join) and the next request starts a new one:
+- worker_timeout: the worker was not started, did not take the request or did not answer in time
+  (it is killed with whatever it was running);
 - worker_error: the worker exited, could not start, or reported an exception of its policy;
-- worker_protocol_error: a message over MAX_BYTES, not JSON, nested too deep, or not of the protocol.
+- worker_protocol_error: a message over MAX_BYTES, not JSON, nested too deep, or not of the protocol;
+- worker_unreaped: an earlier worker could not be confirmed ended (kill failed, still alive after
+  reap_timeout, or its start never returned); no request is sent and no worker started until a
+  later reap confirms it, so no decision runs beside a worker that may still be running.
 A policy reply asking for a restart (an abandoned LLM call) also ends the worker after the reply.
-`log` (if set) receives the lifecycle of each worker: start (pid) and close (pid, reason, exit
-code, whether it was still alive after the reap timeout), as evidence that no worker outlived its
-decision; the last worker is closed when the main process exits normally.
+decide(request, settle) calls settle(status, message) before any cleanup (the client validates
+the reply and writes its ledger line there; settle may turn an 'ok' into a failure), then closes
+the worker of a failure. `log` (if set) receives the lifecycle of each worker: start (pid) and
+close (pid, reason, exit code, whether it was still alive after the reap timeout, a kill error),
+as evidence that no worker outlived its decision; the last worker is closed when the main process
+exits normally.
 """
 import atexit
 import json
@@ -62,22 +69,49 @@ def close_at_exit(ref):
         transport.close('main_exit')
 
 
+def error_text(error):
+    from controllers import error_text
+    return error_text(error)
+
+
 class ProcessTransport:
-    """decide(request) -> ('ok', reply) or (failure, safe description); see the module docstring.
-    target: the worker main (tests pass misbehaving ones); it must be importable by name."""
+    """decide(request, settle=None) -> ('ok', reply) or (failure, safe description); see the module
+    docstring. target: the worker main (tests pass misbehaving ones); it must be importable by name."""
 
     def __init__(self, spec, timeout=None, start_timeout=120.0, target=serve, reap_timeout=30.0):
         react = spec['kind'] == 'react'
         self.spec, self.target, self.start_timeout, self.reap_timeout = json.dumps(spec), target, start_timeout, reap_timeout
         self.timeout = timeout or (spec['llm_timeout'] * spec['max_tool_calls'] + 30 if react else 30.0)
-        self.process = self.conn = self.sender = None
+        self.process = self.conn = self.io = None
+        self.unreaped = None  # (process, I/O thread) of a worker not confirmed ended
         self.started, self.log, self.exit_hook, self.pid = 0, None, False, None
 
     def note(self, entry):
         if self.log is not None:
             self.log({'type': 'worker', **entry})
 
-    def receive(self, deadline):
+    def supervised(self, run, deadline, late):
+        """run() in a daemon I/O thread, waited for until the deadline: its (status, message), or
+        ('worker_timeout', late) if it is still blocked (close() then kills the worker, which ends
+        the blocked pipe call, and joins the thread)."""
+        box = {}
+
+        def body():
+            try:
+                box['out'] = run()
+            except BaseException as error:  # reported to the main thread, never raised in it
+                box['error'] = error
+        self.io = threading.Thread(target=body, name='controller-io', daemon=True)
+        self.io.start()
+        self.io.join(max(0.0, deadline - time.monotonic()))
+        if self.io.is_alive():
+            return 'worker_timeout', late
+        if 'error' in box:
+            return 'worker_error', error_text(box['error'])
+        return box['out']
+
+    def read(self, deadline):
+        """The next message, read in the I/O thread (poll, then the whole message)."""
         timeout = max(0.0, deadline - time.monotonic())
         if not self.conn.poll(timeout):
             return 'worker_timeout', f'no reply within {round(timeout, 3)} s'
@@ -94,81 +128,111 @@ class ProcessTransport:
             return 'worker_protocol_error', f'not JSON: {summary(data)}'
         return 'ok', message
 
-    def send(self, data, deadline):
-        """send_bytes blocks while the worker does not read a request larger than the pipe buffer,
-        so it runs in a thread the deadline can abandon; killing the worker then breaks the pipe
-        and ends the thread."""
-        box = {}
-
-        def run():
-            try:
-                self.conn.send_bytes(data)
-            except Exception as error:  # the worker is gone (broken pipe) or the pipe was closed
-                box['error'] = error
-        self.sender = threading.Thread(target=run, name='controller-send', daemon=True)
-        self.sender.start()
-        self.sender.join(max(0.0, deadline - time.monotonic()))
-        if self.sender.is_alive():
-            return 'worker_timeout', 'the worker did not take the request in time'
-        if 'error' in box:
-            return 'worker_error', f'cannot send the request: {type(box["error"]).__name__}'
-        return 'ok', None
-
     def start(self):
-        try:
+        deadline = time.monotonic() + self.start_timeout
+        self.pid = None
+
+        def launch():
             context = multiprocessing.get_context('spawn')
             self.conn, child = context.Pipe()
             try:
                 self.process = context.Process(target=self.target, args=(child, self.spec), name='controller-worker', daemon=True)
-                self.process.start()
+                try:
+                    self.process.start()
+                except Exception as error:
+                    return 'worker_error', f'cannot start the worker: {error_text(error)}'
             finally:
                 child.close()
-        except Exception as error:  # cannot spawn: clean both pipe ends and any half-built process
-            from controllers import error_text
-            self.close('start_failed')
-            return 'worker_error', f'cannot start the worker: {error_text(error)}'
-        self.started, self.pid = self.started + 1, self.process.pid
-        self.note({'action': 'start', 'pid': self.process.pid, 'n': self.started})
+            self.started, self.pid = self.started + 1, self.process.pid
+            self.note({'action': 'start', 'pid': self.process.pid, 'n': self.started})
+            return self.read(deadline)
+        status, message = self.supervised(launch, deadline, f'the worker did not start within {self.start_timeout} s')
         if not self.exit_hook:  # the last worker ends with the main process, and says so (a weak
             atexit.register(close_at_exit, weakref.ref(self))  # reference: a dropped transport's worker gets EOF)
             self.exit_hook = True
-        status, message = self.receive(time.monotonic() + self.start_timeout)
         if status == 'ok' and message != {'ready': True}:
             status, message = 'worker_error', (message['error'] if isinstance(message, dict) and isinstance(message.get('error'), str)
                                                else 'the worker did not start')
         return status, message
 
-    def decide(self, request):
-        status, message = ('ok', None) if self.process is not None else self.start()
-        if status == 'ok':
-            deadline = time.monotonic() + self.timeout  # one deadline for sending and receiving
-            status, message = self.send(json.dumps(request, allow_nan=False).encode(), deadline)
-            if status == 'ok':
-                status, message = self.receive(deadline)
-        if status == 'ok':
-            if isinstance(message, dict) and set(message) == {'error'} and isinstance(message['error'], str):
-                status, message = 'worker_error', message['error'][:300]
-            elif not (isinstance(message, dict) and set(message) == {'ok'}):
-                status, message = 'worker_protocol_error', 'a message that is neither {"ok": reply} nor {"error": text}'
-            else:
-                message = message['ok']
+    def exchange(self, request):
+        data, deadline = json.dumps(request, allow_nan=False).encode(), time.monotonic() + self.timeout
+
+        def run():
+            try:
+                self.conn.send_bytes(data)
+            except Exception as error:  # the worker is gone (broken pipe) or the pipe was closed
+                return 'worker_error', f'cannot send the request: {type(error).__name__}'
+            return self.read(deadline)
+        status, message = self.supervised(run, deadline, f'no reply within {self.timeout} s')
         if status != 'ok':
+            return status, message
+        if isinstance(message, dict) and set(message) == {'error'} and isinstance(message['error'], str):
+            return 'worker_error', message['error'][:300]
+        if not (isinstance(message, dict) and set(message) == {'ok'}):
+            return 'worker_protocol_error', 'a message that is neither {"ok": reply} nor {"error": text}'
+        return 'ok', message['ok']
+
+    def decide(self, request, settle=None):
+        if self.unreaped is not None:
+            self.close('reap_retry')
+        if self.unreaped is not None:
+            stuck = self.unreaped[0]
+            status, message = 'worker_unreaped', f"worker {getattr(stuck, 'pid', None)} is not confirmed ended; no request is sent"
+        else:
+            status, message = ('ok', None) if self.process is not None else self.start()
+            if status == 'ok':
+                status, message = self.exchange(request)
+        if settle is not None:
+            status, message = settle(status, message)
+        if status not in ('ok', 'worker_unreaped'):
             self.close(status)
-        elif isinstance(message, dict) and message.get('restart') is True:
+        elif status == 'ok' and isinstance(message, dict) and message.get('restart') is True:
             self.close('restart')
         return status, message
 
     def close(self, reason='close'):
-        """Kill the worker (if any), wait at most reap_timeout until it is gone and log whether it is."""
-        process, conn, sender = self.process, self.conn, self.sender
-        self.process = self.conn = self.sender = None
-        if process is not None:
-            if process.pid is not None:
+        """Kill the worker (if any), wait at most reap_timeout until it and the I/O thread are gone
+        and log whether they are. A worker not confirmed ended stays held in `unreaped`."""
+        process, io = self.unreaped or (self.process, self.io)
+        conn, kill_error = self.conn, None
+        self.process = self.conn = self.io = self.unreaped = None
+        spawned = lambda: process is not None and process.pid is not None
+
+        def kill():
+            nonlocal kill_error
+            try:
                 process.kill()
+            except Exception as error:
+                kill_error = error_text(error)
+            try:
                 process.join(self.reap_timeout)
-                self.note({'action': 'close', 'pid': process.pid, 'reason': reason, 'exitcode': process.exitcode,
-                           'alive': process.is_alive()})
-        if sender is not None:
-            sender.join(5)
-        if conn is not None:
-            conn.close()
+            except Exception as error:
+                kill_error = kill_error or error_text(error)
+        try:
+            if spawned():
+                kill()  # ends any pipe call the I/O thread is blocked in
+        finally:
+            if io is not None:
+                io.join(self.reap_timeout)
+            if process is None and self.process is not None:  # a start that returned only now
+                process, conn = self.process, conn or self.conn
+            self.process = self.conn = None
+            if spawned() and process.exitcode is None and kill_error is None:
+                kill()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        try:
+            alive = (spawned() and process.is_alive()) or (io is not None and io.is_alive())
+        except Exception:  # cannot tell: not confirmed
+            alive = True
+        if process is not None and process.pid is not None or alive:
+            self.note({'action': 'close', 'pid': process.pid if spawned() else None, 'reason': reason,
+                       'exitcode': process.exitcode if spawned() else None, 'alive': alive,
+                       **({'kill_error': kill_error} if kill_error else {})})
+        self.pid = None  # later requests name no closed worker
+        if alive:
+            self.unreaped = (process, io)

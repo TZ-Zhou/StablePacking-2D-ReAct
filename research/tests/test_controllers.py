@@ -4,7 +4,8 @@ Run from the repository root: python -B -m unittest discover -s research/tests
 Tests on a recorded wall replay its trace offline and are skipped when the run is absent.
 Regression tests for the P0/P1 review findings are marked R1..R8, the second review S1..S6, the third T1..T9;
 GeometryReplay G1..G6 covers the live outcome geometry of Mock wall 4, FourthReview R4-1..R4-10 the
-fourth review and APIAdapter the fake-provider API adapter.
+fourth review, FifthReview R5-1..R5-6 the fifth, APIAdapter the fake-provider API adapter and
+AnthropicProvider / OpenAIProvider the paid senders against stand-in SDKs (no SDK, network or paid call).
 """
 import base64
 import copy
@@ -1283,7 +1284,7 @@ class FourthReview(unittest.TestCase):
         self.assertEqual(record['source'], 'fallback:worker_protocol_error')
         self.assertIsNone(client.transport.process)  # before any test cleanup
         self.assertFalse(multiprocessing.active_children())
-        self.assertIn(('close', 'protocol_error', False), [(e.get('action'), e.get('reason'), e.get('alive')) for e in lines])
+        self.assertIn(('close', 'worker_protocol_error', False), [(e.get('action'), e.get('reason'), e.get('alive')) for e in lines])
         self.assertEqual(controllers.worker_problems(lines, False)[0], [])
 
     def test_r4_3_a_spawn_failure_is_cleaned_up_and_falls_back(self):
@@ -1461,7 +1462,7 @@ class APIAdapter(unittest.TestCase):
         self.assertEqual(record['source'], 'llm')
         for t in record['transcripts']:
             self.assertEqual((t['request']['model'], t['request']['params']), ('fake-1', {'temperature': 0.0, 'max_tokens': 1024}))
-            self.assertEqual(set(t['response']['usage']), {'input_tokens', 'output_tokens'})
+            self.assertEqual(set(t['response']['usage']), {'input_tokens', 'output_tokens', 'estimated'})  # the fake's are estimates
             self.assertEqual([a['error'] for a in t['response']['attempts']], [None])
 
     def test_transient_failures_are_retried_and_others_fail_the_call(self):
@@ -1485,11 +1486,10 @@ class APIAdapter(unittest.TestCase):
             record = self.call(client)
             self.assertEqual((record['source'], record['final']['order']), ('fallback:no_valid_commit', '3-0-2-1-4'), text[:40])
 
-    def test_the_token_budget_is_the_clients(self):
-        client = self.client(max_total_tokens=1)
-        first, second = self.call(client), self.call(client)
-        self.assertEqual((first['source'], second['source']), ('llm', 'skip:token_budget'))
-        self.assertGreater(client.tokens, 1)
+    def test_the_token_budget_is_never_overspent(self):
+        client = self.client(max_total_tokens=1)  # less than any attempt may need: nothing is sent
+        first = self.call(client)
+        self.assertEqual((first['source'], first['transcripts'][0]['response']['attempts'], client.tokens), ('fallback:llm_error', [], 0))
 
     def test_an_api_wall_replays_without_the_provider(self):
         result, base = check_case.result_dirs(WALL)[0], controllers.base_policy(WALL)
@@ -1500,6 +1500,504 @@ class APIAdapter(unittest.TestCase):
         with mock.patch.object(llm_adapter.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
             report = controllers.check(result, records, spec)
         self.assertTrue(report['ok'], report['problems'][:3])
+
+FAKE_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p2-mock' / 'react-fake-maxllc-seed20'  # first end-to-end PASS
+RELEASE = threading.Event()  # releases the I/O threads the stuck-pipe tests block
+
+
+def stuck_recv(seconds):
+    """A recv_bytes that blocks `seconds` (or until RELEASE) before reading: a pipe stalled mid-message."""
+    real = type(multiprocessing.get_context('spawn').Pipe()[0]).recv_bytes
+
+    def recv(self, *args):
+        RELEASE.wait(seconds)
+        return real(self, *args)
+    return recv
+
+
+@unittest.skipUnless(NULL_WALL.exists() and WALL.exists(), 'P1-r2 Null run or pilot wall not present')
+class FifthReview(unittest.TestCase):
+    """The fifth review's counterexamples (R5-1..R5-6), each on the code path it found open."""
+
+    def setUp(self):
+        RELEASE.clear()
+        self.addCleanup(RELEASE.set)
+
+    def call(self, client, ctx=None):
+        records = []
+        client.sink = records.append
+        policy = controlled_policy(PAPER, client, ctx or two_outcomes())
+        return policy, records[-1]
+
+    def transport(self, **kw):
+        lines = []
+        t = controller_worker.ProcessTransport(controllers.full_spec({'kind': 'null'}), **kw)
+        t.log = lines.append
+        return t, lines
+
+    def test_r5_1_a_slow_spawn_is_inside_the_start_deadline(self):
+        real = multiprocessing.context.SpawnProcess.start
+
+        def slow(process):
+            time.sleep(3)
+            real(process)
+        t, lines = self.transport(start_timeout=0.5, reap_timeout=10)
+        start = time.monotonic()
+        with mock.patch.object(multiprocessing.context.SpawnProcess, 'start', slow):
+            status, text = t.decide({})
+        self.assertEqual(status, 'worker_timeout', text)
+        self.assertIn('did not start within 0.5 s', text)
+        self.assertLess(time.monotonic() - start, 9)  # the deadline, then the reap of the late start
+        self.assertEqual((t.process, t.unreaped), (None, None))
+        self.assertFalse(multiprocessing.active_children())  # the process the late start made was killed
+        self.assertEqual(lines[-1]['alive'], False)
+
+    def test_r5_1_a_stalled_receive_is_inside_the_request_deadline(self):
+        t, lines = self.transport(timeout=1.0, reap_timeout=10)
+        self.assertEqual(t.decide({'observation': {'outcomes': []}, 'base_order': '3-0-2-1-4'})[0], 'ok')
+        with mock.patch.object(type(t.conn), 'recv_bytes', stuck_recv(4)):
+            start = time.monotonic()
+            status, text = t.decide({'observation': {'outcomes': []}, 'base_order': '3-0-2-1-4'})
+        self.assertEqual(status, 'worker_timeout', text)
+        self.assertLess(time.monotonic() - start, 9)
+        self.assertEqual((t.process, t.unreaped, lines[-1]['alive']), (None, None, False))
+        self.assertFalse(multiprocessing.active_children())
+
+    def test_r5_2_an_unconfirmed_reap_stops_every_later_decision(self):
+        client = process_client({'kind': 'null'})
+        lines = []
+        client.ledger = client.transport.log = lines.append
+        client.transport.reap_timeout = 1.0
+        self.assertEqual(self.call(client)[1]['source'], 'null')
+        worker = client.transport.process
+        with mock.patch.object(worker, 'kill', side_effect=OSError('access denied')), \
+                mock.patch.object(worker, 'is_alive', return_value=True):  # the kill fails, the worker runs on
+            client.transport.close('test')  # no exception: the worker is held
+            self.assertIsNotNone(client.transport.unreaped)
+            self.assertEqual((lines[-1]['alive'], lines[-1]['kill_error']), (True, 'OSError: access denied'))
+            policy, record = self.call(client)
+        self.assertIs(policy, PAPER)
+        self.assertEqual((record['source'], client.transport.started), ('fallback:worker_unreaped', 1))  # no new worker
+        _, record = self.call(client)  # the retried reap confirms it ended: decisions resume
+        self.assertEqual((record['source'], client.transport.started), ('null', 2))
+        self.assertTrue(reaped(client))
+        problems = controllers.worker_problems(lines, False)[0]
+        self.assertTrue(any('not confirmed ended' in p for p in problems), problems)  # the run fails acceptance
+        self.assertEqual([e.get('worker_pid') for e in lines if e.get('status') == 'worker_unreaped'], [None])
+
+    def test_r5_2_a_stuck_io_thread_is_not_a_confirmed_reap(self):
+        t, lines = self.transport(timeout=0.5, reap_timeout=0.5)
+        request = {'observation': {'outcomes': []}, 'base_order': '3-0-2-1-4'}
+        self.assertEqual(t.decide(request)[0], 'ok')
+        with mock.patch.object(type(t.conn), 'recv_bytes', stuck_recv(30)):
+            self.assertEqual(t.decide(request)[0], 'worker_timeout')
+            self.assertIsNotNone(t.unreaped)
+            self.assertEqual(t.decide(request)[0], 'worker_unreaped')
+        self.assertEqual(t.started, 1)
+        RELEASE.set()
+        t.unreaped[1].join(5)
+        self.assertEqual(t.decide(request)[0], 'ok')  # confirmed now: a new worker
+        t.close()
+        self.assertEqual(t.started, 2)
+        self.assertFalse(multiprocessing.active_children())
+
+    def test_r5_3_the_ledger_line_of_a_failed_request_comes_before_its_close(self):
+        cases = [({'kind': 'null'}, {'bad': 'exit'}, 'worker_error'), ({'kind': 'null'}, {'bad': 'list_order'}, 'worker_protocol_error'),
+                 ({'kind': 'null'}, {'bad': 'hang'}, 'worker_timeout')]
+        for spec, bad, status in cases:
+            client = process_client(spec, timeout=2.0, **bad)
+            lines = []
+            client.ledger = client.transport.log = lines.append
+            _, record = self.call(client)
+            self.assertEqual(record['source'], f'fallback:{status}')
+            kinds = [e.get('action') or e['status'] for e in lines]
+            self.assertEqual(kinds, ['start', status, 'close'], bad)
+            self.assertEqual(lines[1]['worker_pid'], lines[0]['pid'])
+            self.assertEqual(controllers.worker_problems(lines, False)[0], [], bad)
+            self.assertTrue(reaped(client))
+        start, close = {'type': 'worker', 'action': 'start', 'pid': 7}, {'type': 'worker', 'action': 'close', 'pid': 7, 'alive': False}
+        failed = {'type': 'request', 'event': 0, 'status': 'worker_timeout', 'restart': False, 'worker_pid': 7}
+        self.assertNotEqual(controllers.worker_problems([start, close, failed], False)[0], [])  # Codex: close before the request
+        self.assertNotEqual(controllers.worker_problems([start, close, {**failed, 'status': 'ok'}], False)[0], [])
+        self.assertNotEqual(controllers.worker_problems([start, failed, {**close, 'pid': None}], False)[0], [])
+
+    def test_r5_4_the_token_budget_is_a_hard_limit_reserved_before_each_attempt(self):
+        sends = []
+        sender = llm_adapter.FakeSender({'fake_mode': 'max_llc'})
+        llm = {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}
+
+        def client(**params):
+            spec = {'kind': 'react', 'llm': llm, **params}
+            api = llm_adapter.APILLM(llm, sender=lambda p, a: (sends.append(a), sender(p, a))[1])
+            return controllers.ControllerClient(spec, controllers.InlineTransport(lambda: controllers.ReActPolicy(api)), ledger=[].append)
+        _, first = self.call(client(max_total_tokens=1))
+        self.assertEqual((first['source'], sends), ('fallback:llm_error', []))  # Codex: no attempt sent at all
+        self.assertIn('token budget', first['react'][0]['error'])
+        budget = 6000
+        c = client(max_total_tokens=budget)
+        sources = [self.call(c)[1]['source'] for _ in range(6)]
+        self.assertIn('llm', sources)
+        self.assertLessEqual(c.tokens, budget)  # never past it: each attempt reserved its maximum first
+        self.assertTrue(set(sources[sources.index('llm'):]) <= {'llm', 'fallback:llm_error', 'skip:token_budget', 'skip:llm_unavailable'})
+
+    def test_r5_4_unknown_usage_is_never_free(self):
+        llm = {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}
+        senders = {'exception': mock.Mock(side_effect=RuntimeError('connection dropped')),
+                   'no usage': lambda p, a: {'text': json.dumps({'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 'r'}}),
+                                             'usage': None},
+                   'transient unknown': mock.Mock(side_effect=llm_adapter.TransientError('read timeout', 'unknown'))}
+        for name, send in senders.items():
+            api = llm_adapter.APILLM({**llm, 'retry_backoff_s': 0.0}, sender=send)
+            c = controllers.ControllerClient({'kind': 'react', 'llm': llm}, controllers.InlineTransport(
+                lambda api=api: controllers.ReActPolicy(api)), ledger=[].append)
+            _, first = self.call(c)
+            _, second = self.call(c)
+            self.assertGreater(c.unknown_usage, 0, name)
+            self.assertEqual(second['source'], 'skip:usage_unknown', name)
+        self.assertEqual(llm_adapter.spend(llm, [{'status': 'timeout', 'response': {'usage': None}}])['unknown'], 1)
+        opus = {'kind': 'api', 'provider': 'anthropic', 'model': 'claude-opus-5-5'}
+        spent = llm_adapter.spend(opus, [{'status': 'ok', 'response': {'usage': {'input_tokens': 1_000_000, 'output_tokens': 100_000,
+                                                                                  'cache_read_input_tokens': 1_000_000}}}])
+        self.assertEqual((spent['tokens'], round(spent['cost_usd'], 6), spent['unknown']), (2_100_000, 6.2, 0))
+        self.assertEqual(llm_adapter.spend({**opus, 'model': 'claude-unpriced'}, [{'status': 'ok', 'response': {
+            'usage': {'input_tokens': 1, 'output_tokens': 1}}}])['unknown'], 1)
+
+    def test_r5_4_a_worker_failure_of_an_api_decision_stops_the_paid_calls(self):
+        spec = {'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}, 'llm_timeout': 1.0}
+        c = controllers.ControllerClient(spec, controllers.ReplayedFailures(lambda: None, [{
+            'step': 1, 'phase': 'single', 'sample_trial': 0, 'side': 'left', 'source': 'fallback:worker_timeout', 'error': 'x'}]), ledger=[].append)
+        self.assertEqual(self.call(c)[1]['source'], 'fallback:worker_timeout')
+        self.assertEqual(self.call(c)[1]['source'], 'skip:usage_unknown')
+
+    def test_r5_5_candidate_pixels_must_be_canonical(self):
+        mask = np.zeros((8, 8), bool)
+        mask[2:4, 3:6] = True
+        p = controllers.encode_pixels(mask)
+        self.assertTrue((controllers.decode_pixels(p, mask.shape) == mask).all())
+        crop = mask[2:4, 2:6]  # Codex: a zero column in front, origin kept: the pixels sit one to the right
+        padded = {'origin': p['origin'], 'shape': [2, 4], 'bits': base64.b64encode(np.packbits(crop)).decode()}
+        raw = bytearray(base64.b64decode(p['bits']))
+        raw[-1] |= 0x01  # a padding bit set
+        for bad in (padded, {**p, 'origin': [2, 2], 'shape': [2, 4], 'bits': padded['bits']},
+                    {**p, 'bits': base64.b64encode(bytes(raw)).decode()}):
+            self.assertIsNone(controllers.decode_pixels(bad, mask.shape), bad)
+
+    @unittest.skipUnless(FAKE_WALL.exists(), 'P2 fake-provider wall not present')
+    def test_r5_5_and_6_the_fake_wall_passes_and_a_padded_crop_fails(self):
+        result = check_case.result_dirs(FAKE_WALL)[0]
+        relative = os.path.relpath(result)  # Codex: a relative path crashed the check
+        with mock.patch.object(llm_adapter.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
+            report = controllers.check(relative)
+            self.assertEqual((report['verdict'], report['geometry']['verified_from_pixels']), ('PASS', 65), report['problems'][:3])
+            with mock.patch('builtins.print'):
+                self.assertEqual(controllers.main(['check', os.path.relpath(FAKE_WALL)]), 0)
+            records = jsonl(result / 'trace' / 'controller.jsonl')
+            k, j = next((i, n) for i, r in enumerate(records) for n, x in enumerate(r.get('outcome_pixels') or []) if x)
+            p = records[k]['outcome_pixels'][j]
+            h, w = p['shape']
+            crop = np.unpackbits(np.frombuffer(base64.b64decode(p['bits']), np.uint8))[:h * w].reshape(h, w)
+            wide = np.concatenate([np.zeros((h, 1), np.uint8), crop], axis=1)
+            records[k]['outcome_pixels'][j] = {'origin': p['origin'], 'shape': [h, w + 1], 'bits': base64.b64encode(np.packbits(wide)).decode()}
+            self.assertFalse(controllers.check(result, records)['ok'])
+
+
+class FakeSDK:
+    """A stand-in for the anthropic module: the exception names AnthropicSender catches and a client
+    whose messages.create answers from a script (list the outcomes, then commit keep_paper) or raises."""
+
+    class APIConnectionError(Exception):
+        pass
+
+    class APITimeoutError(APIConnectionError):
+        pass
+
+    class APIStatusError(Exception):
+        def __init__(self, message, status_code):
+            super().__init__(message)
+            self.status_code = status_code
+
+    class RateLimitError(APIStatusError):
+        pass
+
+    def __init__(self, errors=(), model=None, stop_reason=None):
+        self.errors, self.bodies, self.clients, self.model, self.stop_reason = list(errors), [], [], model, stop_reason
+        sdk = self
+
+        class Anthropic:
+            def __init__(self, **kw):
+                sdk.clients.append(kw)
+                self.messages = SimpleNamespace(create=sdk.create)
+        self.Anthropic = Anthropic
+
+    def create(self, **body):
+        self.bodies.append(copy.deepcopy(body))
+        if self.errors:
+            raise self.errors.pop(0)
+        n = len(self.bodies)
+        last = body['messages'][-1]['content']
+        listed = isinstance(last, list) and last and last[0].get('type') == 'tool_result'
+        use = {'type': 'tool_use', 'id': f'toolu_{n}', 'name': 'commit_order', 'input': {'order': 'keep_paper', 'rationale': 'keep'}} \
+            if listed else {'type': 'tool_use', 'id': f'toolu_{n}', 'name': 'list_order_outcomes', 'input': {}}
+        data = {'id': f'msg_{n}', 'model': self.model or body['model'], 'stop_reason': self.stop_reason or 'tool_use', 'stop_details': None,
+                'content': [{'type': 'thinking', 'thinking': '', 'signature': f'sig{n}'}, {'type': 'text', 'text': 'look'}, use],
+                'usage': {'input_tokens': 900, 'output_tokens': 60, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0}}
+        return SimpleNamespace(to_dict=lambda: copy.deepcopy(data), _request_id=f'req_{n}')
+
+
+SECRET = 'sk-test-not-a-real-key-123'
+OPUS = {'kind': 'api', 'provider': 'anthropic', 'model': 'claude-opus-5-5', 'max_tokens': 4096, 'effort': 'low',
+        'request_timeout_s': 20, 'max_retries': 2, 'retry_backoff_s': 0.0, 'api_key_env': 'TEST_ANTHROPIC_KEY'}
+OPUS_SPEC = {'kind': 'react', 'llm': OPUS, 'llm_timeout': 120.0, 'max_total_tokens': 200_000, 'max_cost_usd': 1.0}
+
+
+@mock.patch.dict(os.environ, {'TEST_ANTHROPIC_KEY': SECRET})
+class AnthropicProvider(unittest.TestCase):
+    """The anthropic sender against FakeSDK: no SDK, no network, no paid call anywhere."""
+
+    def client(self, sdk, spec=OPUS_SPEC):
+        api = llm_adapter.APILLM(spec['llm'], sender=llm_adapter.AnthropicSender(llm_adapter.full(spec['llm']), sdk=sdk))
+        return controllers.ControllerClient(spec, controllers.InlineTransport(
+            lambda: controllers.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
+
+    def call(self, client):
+        records = []
+        client.sink = records.append
+        policy = controlled_policy(PAPER, client, two_outcomes())
+        return policy, records[-1]
+
+    def test_requests_are_messages_api_tool_use_with_the_replies_sent_back_unchanged(self):
+        sdk = FakeSDK()
+        policy, record = self.call(self.client(sdk))
+        self.assertEqual((record['source'], record['final']['order'], policy), ('llm', '3-0-2-1-4', PAPER))
+        self.assertEqual(sdk.clients, [{'api_key': SECRET, 'max_retries': 0, 'timeout': 20}])  # our retries, our timeout
+        first, second = sdk.bodies
+        self.assertEqual((first['model'], first['max_tokens'], first['output_config'], first['tool_choice']),
+                         ('claude-opus-5-5', 4096, {'effort': 'low'}, {'type': 'auto', 'disable_parallel_tool_use': True}))
+        self.assertNotIn('temperature', first)
+        self.assertEqual(first['system'], controllers.SYSTEM)
+        self.assertTrue(all(t['strict'] and t['input_schema']['additionalProperties'] is False for t in first['tools']))
+        self.assertEqual(second['messages'][1]['content'][0]['signature'], 'sig1')  # the thinking block, unchanged
+        self.assertEqual({k: second['messages'][2]['content'][0][k] for k in ('type', 'tool_use_id')}, {'type': 'tool_result', 'tool_use_id': 'toolu_1'})
+        t = record['transcripts'][1]['response']
+        self.assertEqual((t['usage']['input_tokens'], t['exchange']['request_id'], t['exchange']['payload']), (900, 'req_2', second))
+        self.assertEqual([a['billed'] for a in t['attempts']], ['reported'])
+
+    def test_errors_are_classified_retried_and_masked(self):
+        e = FakeSDK
+        cases = [([e.RateLimitError('429', 429)], 'llm', ['none', 'reported']),
+                 ([e.APIStatusError('overloaded', 529)], 'llm', ['none', 'reported']),
+                 ([e.APIStatusError('internal', 500)], 'llm', ['unknown', 'reported']),
+                 ([e.APITimeoutError(f'timed out with key {SECRET}')], 'llm', ['unknown', 'reported']),
+                 ([e.APIStatusError('bad request', 400)], 'fallback:llm_error', ['none']),
+                 ([e.APIStatusError('auth', 401)], 'fallback:llm_error', ['none']),
+                 ([e.RateLimitError('429', 429)] * 3, 'fallback:llm_error', ['none'] * 3)]
+        for errors, source, billed in cases:
+            client = self.client(FakeSDK(errors))
+            _, record = self.call(client)
+            self.assertEqual(record['source'], source, errors)
+            self.assertEqual([a['billed'] for a in record['transcripts'][0]['response']['attempts']], billed, errors)
+            self.assertNotIn(SECRET, json.dumps(record))
+            self.assertEqual(client.unknown_usage > 0, 'unknown' in billed, errors)
+
+    def test_refusals_truncations_and_another_model_fail_the_call(self):
+        for sdk, text in ((FakeSDK(stop_reason='refusal'), 'refusal'), (FakeSDK(stop_reason='max_tokens'), 'max_tokens'),
+                          (FakeSDK(model='claude-sonnet-5-5'), 'served by model')):
+            client = self.client(sdk)
+            _, record = self.call(client)
+            self.assertEqual(record['source'], 'fallback:llm_error')
+            self.assertIn(text, record['react'][0]['error'])
+            self.assertEqual(client.unknown_usage, 0)  # the reply reported its usage: counted
+            self.assertGreater(client.tokens, 0)
+
+    def test_paid_calls_need_the_gate_the_key_budgets_and_a_bounded_call(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(llm_adapter.PAID_GATE, None)
+            with self.assertRaises(NotImplementedError):
+                controllers.make_controller(OPUS_SPEC)
+        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}):
+            with mock.patch.object(llm_adapter.AnthropicSender, '__init__', side_effect=AssertionError('built in the main process')):
+                client = controllers.make_controller(OPUS_SPEC)  # valid: and nothing of the API in this process
+            self.assertIsNone(client.transport.process)
+            bad = [{**OPUS_SPEC, 'max_cost_usd': None}, {k: v for k, v in OPUS_SPEC.items() if k != 'max_total_tokens'},
+                   {**OPUS_SPEC, 'llm_timeout': 30.0}, {**OPUS_SPEC, 'llm': {**OPUS, 'temperature': 0.0}},
+                   {**OPUS_SPEC, 'llm': {**OPUS, 'model': 'claude-unpriced'}}, {**OPUS_SPEC, 'llm': {**OPUS, 'api_key_env': 'NOT_SET_ANYWHERE'}},
+                   {**OPUS_SPEC, 'llm': {**OPUS, 'api_key': SECRET}}, {**OPUS_SPEC, 'llm': {**OPUS, 'effort': 'huge'}}]
+            for spec in bad:
+                with self.assertRaises(ValueError, msg=spec):
+                    controllers.make_controller(spec)
+
+    @unittest.skipUnless(WALL.exists(), 'pilot wall not present')
+    def test_a_recorded_api_wall_replays_without_the_api_and_its_usage_is_bound(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        result, ledger, sdk = copy_wall(WALL, tmp), [], FakeSDK()
+        records = controllers.rerun(result, OPUS_SPEC, controllers.base_policy(WALL), controllers.InlineTransport(
+            lambda: controllers.ReActPolicy(llm_adapter.APILLM(OPUS, sender=llm_adapter.AnthropicSender(llm_adapter.full(OPUS), sdk=sdk)),
+                                            llm_timeout=120.0)), ledger=ledger)
+        self.assertTrue(sdk.bodies)
+        self.assertNotIn(SECRET, json.dumps(records) + json.dumps(ledger))
+        jsonl(result / 'trace' / 'controller.jsonl', records)
+        jsonl(result / 'trace' / 'transport.jsonl', ledger)
+        receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
+        with mock.patch.object(llm_adapter.AnthropicSender, '__call__', side_effect=AssertionError('the API was called')):
+            report = controllers.check(result, None, OPUS_SPEC)
+            self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])
+            changed = copy.deepcopy(records)  # the usage a cost is computed from, edited in the record
+            k = next(i for i, r in enumerate(changed) if r.get('transcripts'))
+            changed[k]['transcripts'][0]['response']['usage']['output_tokens'] -= 50
+            report = controllers.check(result, changed, OPUS_SPEC)
+            self.assertTrue(any(p.startswith('ledger:') for p in report['problems']), report['problems'][:3])
+            jsonl(result / 'trace' / 'controller.jsonl', changed)
+            self.assertTrue(any(p.startswith('manifest:') for p in controllers.check(result, None, OPUS_SPEC)['problems']))
+
+class FakeOpenAISDK(FakeSDK):
+    """A stand-in for the openai module: FakeSDK's exceptions and a client whose responses.create
+    answers from the same script with Responses API output items (reasoning, message, function_call)."""
+
+    def __init__(self, errors=(), model='gpt-test-2026-01-01', status='completed', refusal=False, bad_args=False, encrypted=True):
+        super().__init__(errors)
+        self.model, self.status, self.refusal, self.bad_args, self.encrypted = model, status, refusal, bad_args, encrypted
+        sdk = self
+
+        class OpenAI:
+            def __init__(self, **kw):
+                sdk.clients.append(kw)
+                self.responses = SimpleNamespace(create=sdk.create)
+        self.OpenAI = OpenAI
+
+    def create(self, **body):
+        self.bodies.append(copy.deepcopy(body))
+        if self.errors:
+            raise self.errors.pop(0)
+        n = len(self.bodies)
+        listed = body['input'][-1].get('type') == 'function_call_output'
+        name, args = ('commit_order', {'order': 'keep_paper', 'rationale': 'keep'}) if listed else ('list_order_outcomes', {})
+        content = [{'type': 'refusal', 'refusal': 'no'}] if self.refusal else [{'type': 'output_text', 'text': 'look'}]
+        data = {'id': f'resp_{n}', 'model': self.model, 'status': self.status, 'error': None,
+                'incomplete_details': None if self.status == 'completed' else {'reason': 'max_output_tokens'},
+                'output': [{'type': 'reasoning', 'id': f'rs_{n}', 'summary': [], **({'encrypted_content': f'enc{n}'} if self.encrypted else {})},
+                           {'type': 'message', 'id': f'msg_{n}', 'role': 'assistant', 'content': content},
+                           {'type': 'function_call', 'id': f'fc_{n}', 'call_id': f'call_{n}', 'name': name,
+                            'arguments': '{"order": ' if self.bad_args else json.dumps(args)}],
+                'usage': {'input_tokens': 1000, 'input_tokens_details': {'cached_tokens': 200}, 'output_tokens': 80,
+                          'output_tokens_details': {'reasoning_tokens': 50}, 'total_tokens': 1080}}
+        return SimpleNamespace(to_dict=lambda: copy.deepcopy(data), _request_id=f'req_{n}')
+
+
+GPT = {'kind': 'api', 'provider': 'openai', 'model': 'gpt-test', 'max_tokens': 4096, 'effort': 'low', 'request_timeout_s': 20,
+       'max_retries': 2, 'retry_backoff_s': 0.0, 'api_key_env': 'TEST_OPENAI_KEY', 'price_per_mtok': [1.0, 10.0, 0.0, 0.1]}
+GPT_SPEC = {'kind': 'react', 'llm': GPT, 'llm_timeout': 120.0, 'max_total_tokens': 200_000, 'max_cost_usd': 1.0}
+
+
+@mock.patch.dict(os.environ, {'TEST_OPENAI_KEY': SECRET})
+class OpenAIProvider(unittest.TestCase):
+    """The openai sender against FakeOpenAISDK: no SDK, no network, no paid call anywhere."""
+
+    def client(self, sdk, spec=GPT_SPEC):
+        api = llm_adapter.APILLM(spec['llm'], sender=llm_adapter.OpenAISender(llm_adapter.full(spec['llm']), sdk=sdk))
+        return controllers.ControllerClient(spec, controllers.InlineTransport(
+            lambda: controllers.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
+
+    call = AnthropicProvider.call
+
+    def test_requests_are_responses_api_function_calls_with_the_output_items_sent_back(self):
+        sdk = FakeOpenAISDK()
+        policy, record = self.call(self.client(sdk))
+        self.assertEqual((record['source'], record['final']['order'], policy), ('llm', '3-0-2-1-4', PAPER))
+        self.assertEqual(sdk.clients, [{'api_key': SECRET, 'max_retries': 0, 'timeout': 20}])
+        first, second = sdk.bodies
+        self.assertEqual({k: first[k] for k in ('model', 'instructions', 'max_output_tokens', 'tool_choice', 'parallel_tool_calls', 'store',
+                                                'reasoning', 'include')},
+                         {'model': 'gpt-test', 'instructions': controllers.SYSTEM, 'max_output_tokens': 4096, 'tool_choice': 'auto',
+                          'parallel_tool_calls': False, 'store': False, 'reasoning': {'effort': 'low'}, 'include': ['reasoning.encrypted_content']})
+        self.assertNotIn('temperature', first)
+        self.assertTrue(all(t['type'] == 'function' and t['strict'] for t in first['tools']))
+        self.assertEqual([i.get('type', 'user') for i in second['input']], ['user', 'reasoning', 'message', 'function_call', 'function_call_output'])
+        self.assertEqual((second['input'][1]['encrypted_content'], second['input'][4]['call_id']), ('enc1', 'call_1'))
+        t = record['transcripts'][1]['response']
+        self.assertEqual(t['usage'], {'input_tokens': 800, 'output_tokens': 80, 'cache_creation_input_tokens': 0,
+                                      'cache_read_input_tokens': 200, 'reasoning_tokens': 50})
+        self.assertEqual((t['exchange']['request_id'], t['exchange']['payload'], t['exchange']['response']['model']),
+                         ('req_2', second, 'gpt-test-2026-01-01'))  # a dated snapshot of the requested model
+        spent = llm_adapter.spend(GPT, record['transcripts'])
+        self.assertEqual((spent['tokens'], round(spent['cost_usd'], 9), spent['unknown']), (2160, 2 * (800 * 1 + 80 * 10 + 200 * 0.1) / 1e6, 0))
+
+    def test_reasoning_items_without_encrypted_content_are_not_sent_back(self):
+        sdk = FakeOpenAISDK(encrypted=False)
+        self.call(self.client(sdk))
+        self.assertNotIn('reasoning', [i.get('type') for i in sdk.bodies[1]['input']])  # store false: its id would not resolve
+
+    def test_errors_are_classified_retried_and_masked(self):
+        e = FakeOpenAISDK
+        quota = e.RateLimitError('quota', 429)
+        quota.code = 'insufficient_quota'
+        cases = [([e.RateLimitError('429', 429)], 'llm', ['none', 'reported']),
+                 ([quota], 'fallback:llm_error', ['none']),  # an exhausted quota is not retried
+                 ([e.APIStatusError('internal', 500)], 'llm', ['unknown', 'reported']),
+                 ([e.APITimeoutError(f'timed out, key {SECRET}')], 'llm', ['unknown', 'reported']),
+                 ([e.APIStatusError('bad request', 400)], 'fallback:llm_error', ['none']),
+                 ([ValueError(f'unexpected {SECRET}')], 'fallback:llm_error', ['unknown'])]
+        for errors, source, billed in cases:
+            client = self.client(FakeOpenAISDK(errors))
+            _, record = self.call(client)
+            self.assertEqual(record['source'], source, errors)
+            self.assertEqual([a['billed'] for a in record['transcripts'][0]['response']['attempts']], billed, errors)
+            self.assertNotIn(SECRET, json.dumps(record))
+            self.assertEqual(client.unknown_usage > 0, 'unknown' in billed, errors)
+
+    def test_incomplete_refused_or_foreign_replies_fail_and_bad_arguments_never_commit(self):
+        for sdk, text in ((FakeOpenAISDK(status='incomplete'), 'max_output_tokens'), (FakeOpenAISDK(refusal=True), 'refusal'),
+                          (FakeOpenAISDK(model='gpt-other'), 'served by model'), (FakeOpenAISDK(model='gpt-testing'), 'served by model')):
+            client = self.client(sdk)
+            _, record = self.call(client)
+            self.assertEqual(record['source'], 'fallback:llm_error', text)
+            self.assertIn(text, record['react'][0]['error'])
+            self.assertGreater(client.tokens, 0)  # reported usage is counted even for a failed call
+        _, record = self.call(self.client(FakeOpenAISDK(bad_args=True)))
+        self.assertEqual((record['source'], record['final']['order']), ('fallback:no_valid_commit', '3-0-2-1-4'))
+        self.assertTrue(all(s['status'] == 'rejected' for s in record['react']))
+
+    def test_specs_gate_key_price_temperature_and_the_main_process(self):
+        self.assertEqual(llm_adapter.full({'kind': 'api', 'provider': 'openai', 'model': 'm'})['api_key_env'], 'OPENAI_API_KEY')
+        sdk = FakeOpenAISDK()
+        self.call(self.client(sdk, {**GPT_SPEC, 'llm': {**GPT, 'temperature': 0.2, 'effort': None}}))
+        self.assertEqual((sdk.bodies[0]['temperature'], 'reasoning' in sdk.bodies[0]), (0.2, False))
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop(llm_adapter.PAID_GATE, None)
+            with self.assertRaises(NotImplementedError):
+                controllers.make_controller(GPT_SPEC)
+        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}):
+            with mock.patch.object(llm_adapter.OpenAISender, '__init__', side_effect=AssertionError('built in the main process')):
+                self.assertIsNone(controllers.make_controller(GPT_SPEC).transport.process)
+            for spec in ({**GPT_SPEC, 'llm': {**GPT, 'price_per_mtok': None}}, {**GPT_SPEC, 'llm': {**GPT, 'temperature': 3}},
+                         {**GPT_SPEC, 'llm': {**GPT, 'price_per_mtok': [1, 2]}}, {**GPT_SPEC, 'llm': {**GPT, 'effort': 'max'}},
+                         {**GPT_SPEC, 'llm': {**GPT, 'api_key_env': 'NOT_SET_ANYWHERE'}}, {**GPT_SPEC, 'max_cost_usd': None},
+                         {**GPT_SPEC, 'llm_timeout': 30.0}):
+                with self.assertRaises(ValueError, msg=spec):
+                    controllers.make_controller(spec)
+
+    @unittest.skipUnless(WALL.exists(), 'pilot wall not present')
+    def test_a_recorded_openai_wall_replays_without_the_api_and_its_usage_is_bound(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        result, ledger, sdk = copy_wall(WALL, tmp), [], FakeOpenAISDK()
+        records = controllers.rerun(result, GPT_SPEC, controllers.base_policy(WALL), controllers.InlineTransport(
+            lambda: controllers.ReActPolicy(llm_adapter.APILLM(GPT, sender=llm_adapter.OpenAISender(llm_adapter.full(GPT), sdk=sdk)),
+                                            llm_timeout=120.0)), ledger=ledger)
+        self.assertTrue(sdk.bodies)
+        self.assertNotIn(SECRET, json.dumps(records) + json.dumps(ledger))
+        jsonl(result / 'trace' / 'controller.jsonl', records)
+        jsonl(result / 'trace' / 'transport.jsonl', ledger)
+        receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
+        with mock.patch.object(llm_adapter.OpenAISender, '__call__', side_effect=AssertionError('the API was called')):
+            report = controllers.check(result, None, GPT_SPEC)
+            self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])
+            changed = copy.deepcopy(records)
+            k = next(i for i, r in enumerate(changed) if r.get('transcripts'))
+            changed[k]['transcripts'][0]['response']['exchange']['response']['output'][2]['name'] = 'commit_order'  # another tool call
+            self.assertTrue(any(p.startswith('ledger:') for p in controllers.check(result, changed, GPT_SPEC)['problems']))
 
 if __name__ == '__main__':
     unittest.main()

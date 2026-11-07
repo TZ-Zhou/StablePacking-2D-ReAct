@@ -1,49 +1,112 @@
-"""LLM API adapter of the ReAct controller (P2 integration; no real provider is enabled yet).
+"""LLM API adapter of the ReAct controller (P2 integration; no paid call is enabled by default).
 
 An API LLM spec names the provider, the model and the call parameters, e.g.
-  {"kind": "api", "provider": "fake", "model": "fake-1", "temperature": 0.0, "max_tokens": 1024,
-   "max_retries": 2, "retry_backoff_s": 1.0, "fake_mode": "max_llc"}
+  {"kind": "api", "provider": "anthropic", "model": "claude-opus-5-5", "max_tokens": 4096,
+   "effort": "low", "request_timeout_s": 60, "max_retries": 2, "retry_backoff_s": 2.0}
+  {"kind": "api", "provider": "openai", "model": "<model snapshot>", "max_tokens": 4096, "effort": "low",
+   "price_per_mtok": [<input>, <output>, 0, <cached input>]}
+  {"kind": "api", "provider": "fake", "model": "fake-1", "fake_mode": "max_llc"}
 APILLM(messages, tools) sends one request per attempt through the provider's sender and returns
 the reply text, which ReActPolicy parses and validates (only a legal filter order can be
-committed). A TransientError (rate limit, overload, connection reset) is retried up to
-max_retries times with exponential backoff; any other error fails the call at once. The whole
-call, retries included, is bounded by ReActPolicy's llm_timeout, after which the worker is killed
-with the call in it. After a call `usage` holds the provider's token counts and `attempts` one
-entry per attempt (error, latency); ReActPolicy writes both into the transcript and ReplayLLM
-restores them, so a check replays the wall without the provider. The token budget of a wall is
-the client's (max_total_tokens in the react spec), counted from these usages.
+committed). Errors are classified by the sender: a TransientError (rate limit, overload,
+timeout, dropped connection, 5xx) is retried up to max_retries times with exponential backoff,
+any other error fails the call at once (fallback:llm_error). The whole call, retries included,
+is bounded by ReActPolicy's llm_timeout, after which the worker is killed with the call in it;
+for a paid provider validate_spec requires llm_timeout to cover every attempt (call_bound).
+
+Every attempt is recorded (attempts: error, latency, billed): 'reported' when the provider
+returned usage, 'none' when the provider rejected it unprocessed (rate limit, overload, a 4xx),
+'unknown' when it may have been processed and billed without a usage (timeout, connection
+error, 5xx, a reply without usage). After a call `usage` holds the provider's token counts and
+`exchange` the provider's own request body and response (id, model, stop_reason, content with
+any thinking blocks, usage); ReActPolicy writes them into the transcript and ReplayLLM restores
+them, so a check replays the wall without the provider. spend() turns a decision's transcripts
+into reported tokens, estimated tokens (the fake provider's), cost (PRICES) and the count of
+unknown usages; the client stops every later API decision after an unknown one and before a
+token or cost budget is exceeded, and APILLM reserves, before each attempt, its estimated input
+(3 characters per token) and its full max_tokens output from what the client says is left.
 
 APILLM is built by make_policy, i.e. in the controller worker for live walls: the main process
-only validates the spec (identity, enabled). Only the 'fake' provider exists: a deterministic
-local stand-in (fake_mode '<MockLLM mode>[+transient@N|+fatal@N]': MockLLM's scripted replies,
-token counts from text lengths, optionally a failure of the first attempt of step N's first call). A real provider
-is a sender `send(payload, attempt) -> {'text': str, 'usage': {...}}` added to PROVIDERS; until a
-real API test is approved, enabled() refuses every provider but 'fake'.
+only validates the spec (identity, enabled), so the API client and the API key exist only in the
+worker. The key is read there from the environment variable api_key_env (never from the spec,
+the trace or a transcript; it is masked in error texts). Providers:
+- 'fake': a deterministic local stand-in (fake_mode '<MockLLM mode>[+transient@N|+fatal@N]':
+  MockLLM's scripted replies, token counts estimated from text lengths, optionally a failure of
+  the first attempt of step N's first call); never paid.
+- 'anthropic': the Messages API through the official anthropic SDK (imported in the worker
+  only; the SDK client's own retries are off so every attempt is ours), tool use with
+  tool_choice auto, one tool call per reply and strict tool schemas; the thinking blocks of a
+  decision's earlier replies are sent back unchanged.
+- 'openai': the Responses API through the official openai SDK (imported in the worker only, its
+  own retries off), function tools with tool_choice auto, no parallel tool calls and strict
+  schemas, store false (nothing kept at the provider): a decision's earlier output items
+  (reasoning with its encrypted content, messages, function calls) are sent back unchanged and
+  each tool feedback is the function_call_output of its call. temperature only for models that
+  take it; a reply from a dated snapshot of the requested model is the requested model; usage is
+  normalized to USAGE_KEYS (cached input apart, reasoning tokens kept as part of the output).
+Both paid providers: enabled() refuses them unless STONEPACKING_ALLOW_PAID_API=1 is set for an
+approved test, the key variable is set and the model has a price (PRICES or the spec's
+price_per_mtok: USD per million input, output, cache-write and cache-read tokens);
+validate_spec also requires max_total_tokens and max_cost_usd.
 """
+import hashlib
 import json
+import os
+import re
 import time
 
 from controllers import LLMFailure, MockLLM, error_text
 
-DEFAULTS = {'temperature': 0.0, 'max_tokens': 1024, 'max_retries': 2, 'retry_backoff_s': 1.0}
-KEYS = {'kind', 'provider', 'model', 'fake_mode'} | set(DEFAULTS)
+COMMON = {'max_tokens': 1024, 'max_retries': 2, 'retry_backoff_s': 1.0}
+PAID_DEFAULTS = {'temperature': None, 'effort': None, 'request_timeout_s': 60.0, 'price_per_mtok': None}
+PROVIDER_DEFAULTS = {'fake': {'temperature': 0.0, 'fake_mode': None},
+                     'anthropic': {**PAID_DEFAULTS, 'api_key_env': 'ANTHROPIC_API_KEY'},
+                     'openai': {**PAID_DEFAULTS, 'api_key_env': 'OPENAI_API_KEY'}}
+PAID_GATE = 'STONEPACKING_ALLOW_PAID_API'
+EFFORTS = {'anthropic': (None, 'low', 'medium', 'high', 'xhigh', 'max'),
+           'openai': (None, 'none', 'minimal', 'low', 'medium', 'high', 'xhigh')}
+USAGE_KEYS = ('input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')
+# USD per million tokens (input, output, cache write 5 min, cache read): the claude-api reference
+# table cached 2026-10-06; check the provider's price page before a paid run.
+PRICES = {'claude-opus-5-5': (4.00, 20.00, 5.00, 0.20), 'claude-sonnet-5-5': (2.00, 10.00, 2.50, 0.20)}
 
 
-class TransientError(Exception):
-    """A provider failure worth retrying (rate limit, overload, dropped connection)."""
+class ProviderError(Exception):
+    """A provider failure the sender classified; billed: 'none' or 'unknown' (see the docstring)."""
+
+    def __init__(self, text, billed='none'):
+        super().__init__(text)
+        self.billed = billed
+
+
+class TransientError(ProviderError):
+    """A provider failure worth retrying (rate limit, overload, timeout, dropped connection, 5xx)."""
 
 
 def full(llm):
-    """An API LLM spec with its defaults; bad specs raise."""
-    if not isinstance(llm, dict) or llm.get('kind') != 'api' or set(llm) - KEYS:
-        raise ValueError(f'an API LLM spec has the keys {sorted(KEYS)}, got {llm!r}')
-    out = {**DEFAULTS, **llm}
-    checks = {'provider': isinstance(out.get('provider'), str), 'model': isinstance(out.get('model'), str) and out['model'] != '',
-              'temperature': type(out['temperature']) in (int, float) and 0 <= out['temperature'] <= 2,
-              'max_tokens': type(out['max_tokens']) is int and out['max_tokens'] > 0,
+    """An API LLM spec with its provider's defaults; bad specs raise. An unknown provider gets the
+    common defaults only (enabled() refuses it)."""
+    if not isinstance(llm, dict) or llm.get('kind') != 'api' or not isinstance(llm.get('provider'), str):
+        raise ValueError(f'an API LLM spec is {{"kind": "api", "provider": ..., "model": ...}}, got {llm!r}')
+    extra = PROVIDER_DEFAULTS.get(llm['provider'], {})
+    keys = {'kind', 'provider', 'model'} | set(COMMON) | set(extra)
+    if set(llm) - keys:
+        raise ValueError(f"unknown {llm['provider']} LLM keys {sorted(set(llm) - keys)}")
+    out = {**COMMON, **extra, **llm}
+    number = lambda v, lo, hi: type(v) in (int, float) and lo <= v <= hi
+    checks = {'model': isinstance(out.get('model'), str) and out['model'] != '',
+              'max_tokens': type(out['max_tokens']) is int and 0 < out['max_tokens'] <= 128_000,
               'max_retries': type(out['max_retries']) is int and 0 <= out['max_retries'] <= 5,
-              'retry_backoff_s': type(out['retry_backoff_s']) in (int, float) and 0 <= out['retry_backoff_s'] <= 60,
-              'fake_mode': out.get('fake_mode') is None or (out['provider'] == 'fake' and isinstance(out['fake_mode'], str))}
+              'retry_backoff_s': number(out['retry_backoff_s'], 0, 60)}
+    if llm['provider'] == 'fake':
+        checks.update(temperature=number(out['temperature'], 0, 2), fake_mode=out['fake_mode'] is None or isinstance(out['fake_mode'], str))
+    if llm['provider'] in ('anthropic', 'openai'):
+        checks.update(effort=out['effort'] in EFFORTS[llm['provider']], request_timeout_s=number(out['request_timeout_s'], 1, 600),
+                      api_key_env=isinstance(out['api_key_env'], str) and re.fullmatch(r'[A-Z_][A-Z0-9_]*', out['api_key_env']) is not None,
+                      price_per_mtok=out['price_per_mtok'] is None or (isinstance(out['price_per_mtok'], list) and len(out['price_per_mtok']) == 4
+                                                                       and all(number(v, 0, 1000) for v in out['price_per_mtok'])),
+                      # current Claude models reject sampling parameters with a 400; OpenAI's take 0..2 where a model allows it
+                      temperature=out['temperature'] is None or (llm['provider'] == 'openai' and number(out['temperature'], 0, 2)))
     bad = [k for k, ok in checks.items() if not ok]
     if bad:
         raise ValueError(f'bad API LLM spec fields {bad}: {llm!r}')
@@ -53,19 +116,78 @@ def full(llm):
 def identity(llm):
     """(model, params) of the requests this LLM's transcripts record."""
     spec = full(llm)
-    return spec['model'], {'temperature': spec['temperature'], 'max_tokens': spec['max_tokens']}
+    params = {'temperature': spec.get('temperature'), 'max_tokens': spec['max_tokens']}
+    return spec['model'], {**params, **({'effort': spec['effort']} if spec.get('effort') else {})}
+
+
+def paid(llm):
+    return full(llm)['provider'] != 'fake'
+
+
+def price(llm):
+    """USD per million tokens (input, output, cache write, cache read); None if unknown."""
+    spec = full(llm)
+    if spec['provider'] == 'fake':
+        return (0.0, 0.0, 0.0, 0.0)
+    return tuple(spec['price_per_mtok']) if spec.get('price_per_mtok') else PRICES.get(spec['model'])
+
+
+def call_bound(llm):
+    """Seconds one call may take with every retry (request timeouts and backoffs)."""
+    spec = full(llm)
+    tries = spec['max_retries'] + 1
+    return tries * spec.get('request_timeout_s', 0) + sum(spec['retry_backoff_s'] * 2 ** k for k in range(tries - 1))
 
 
 def enabled(llm):
-    """Raises unless the provider may be called by a live wall: only the local fake for now."""
-    if full(llm)['provider'] not in PROVIDERS:
-        raise NotImplementedError(f"provider {llm['provider']!r} is not enabled: real API calls need an approved API test")
+    """Raises unless a live wall may call this provider: the fake one, or a paid one with the gate
+    of an approved API test set, its key variable set (not read here) and a price for the model."""
+    spec = full(llm)
+    if spec['provider'] not in PROVIDERS:
+        raise NotImplementedError(f"provider {spec['provider']!r} is not implemented")
+    if paid(llm):
+        if os.environ.get(PAID_GATE) != '1':
+            raise NotImplementedError(f'paid API calls are off: an approved API test sets {PAID_GATE}=1')
+        if spec['api_key_env'] not in os.environ:
+            raise ValueError(f"the API key variable {spec['api_key_env']} is not set")
+        if price(llm) is None:
+            raise ValueError(f"no price for model {spec['model']!r}: its cost could not be budgeted")
+
+
+def usage_ok(usage):
+    return isinstance(usage, dict) and all(type(usage.get(k)) is int and usage[k] >= 0 for k in USAGE_KEYS[:2]) and \
+        all(type(usage.get(k, 0)) is int and usage.get(k, 0) >= 0 for k in USAGE_KEYS[2:])
+
+
+def cost(prices, usage):
+    return sum(usage.get(k, 0) * p for k, p in zip(USAGE_KEYS, prices)) / 1e6
+
+
+def spend(llm, transcripts):
+    """What a decision's transcripts cost: {'tokens' (reported), 'estimated_tokens', 'cost_usd',
+    'unknown' (attempts or calls whose usage is unknown: never counted as free)}."""
+    prices, out = price(llm), {'tokens': 0, 'estimated_tokens': 0, 'cost_usd': 0.0, 'unknown': 0}
+    for t in transcripts if isinstance(transcripts, list) else []:
+        response = t.get('response') if isinstance(t, dict) and isinstance(t.get('response'), dict) else {}
+        attempts = response.get('attempts') if isinstance(response.get('attempts'), list) else []
+        out['unknown'] += sum(isinstance(a, dict) and a.get('billed') == 'unknown' for a in attempts)
+        out['unknown'] += isinstance(t, dict) and t.get('status') == 'timeout'  # abandoned in flight
+        usage = response.get('usage')
+        if usage_ok(usage):
+            out['estimated_tokens' if usage.get('estimated') else 'tokens'] += sum(usage.get(k, 0) for k in USAGE_KEYS)
+            if prices is None:
+                out['unknown'] += 1
+            else:
+                out['cost_usd'] += cost(prices, usage)
+        elif not isinstance(t, dict) or t.get('status') == 'ok':
+            out['unknown'] += 1
+    return out
 
 
 class FakeSender:
-    """The 'fake' provider: MockLLM's reply to the payload as JSON text, usage from text lengths;
-    fake_mode '<mode>+transient@N' or '<mode>+fatal@N' (mode max_llc by default) also fails the
-    first attempt of step N's first call."""
+    """The 'fake' provider: MockLLM's reply to the payload as JSON text, usage estimated from text
+    lengths; fake_mode '<mode>+transient@N' or '<mode>+fatal@N' (mode max_llc by default) also
+    fails the first attempt of step N's first call, unprocessed (billed 'none')."""
 
     def __init__(self, spec):
         mode, _, inject = (spec.get('fake_mode') or 'max_llc').partition('+')
@@ -78,12 +200,180 @@ class FakeSender:
     def __call__(self, payload, attempt):
         messages = payload['messages']
         if self.failure and attempt == 0 and len(messages) == 2 and json.loads(messages[1]['content'])['step'] == self.step:
-            raise (TransientError if self.failure == 'transient' else RuntimeError)(f'injected {self.failure} failure')
+            raise (TransientError if self.failure == 'transient' else ProviderError)(f'injected {self.failure} failure')
         text = json.dumps(self.mock(messages, payload['tools']))
-        return {'text': text, 'usage': {'input_tokens': len(json.dumps(messages)) // 4, 'output_tokens': len(text) // 4}}
+        return {'text': text, 'usage': {'input_tokens': len(json.dumps(messages)) // 4, 'output_tokens': len(text) // 4, 'estimated': True}}
 
 
-PROVIDERS = {'fake': FakeSender}
+def classified(sdk, error, clean):
+    """The ProviderError of an SDK exception (the anthropic and openai SDKs share these names),
+    its text cleaned of the key: retried or not, billed or not (see the module docstring)."""
+    text = clean(error)
+    if isinstance(error, sdk.RateLimitError):  # an exhausted quota is no rate limit: retrying cannot help
+        return ProviderError(text) if getattr(error, 'code', None) == 'insufficient_quota' else TransientError(text, 'none')
+    if isinstance(error, sdk.APIStatusError):
+        if error.status_code == 529:
+            return TransientError(text, 'none')  # overloaded: not processed
+        if error.status_code >= 500 or error.status_code in (408, 409):
+            return TransientError(text, 'unknown')
+        return ProviderError(text, 'none')
+    if isinstance(error, sdk.APIConnectionError):  # timeouts included: the request may have been processed
+        return TransientError(text, 'unknown')
+    return ProviderError(text, 'unknown')  # anything else: not retried, never counted as free
+
+
+class AnthropicSender:
+    """The 'anthropic' provider (see the module docstring). sdk: the anthropic module, or a stand-in
+    with the same names (tests); the client is built here, in the worker, with the key of api_key_env."""
+
+    def __init__(self, spec, sdk=None):
+        if sdk is None:
+            import anthropic as sdk
+        self.sdk, self.secret = sdk, os.environ[spec['api_key_env']]
+        self.client = sdk.Anthropic(api_key=self.secret, max_retries=0, timeout=spec['request_timeout_s'])
+        self.turns = []  # the content of this decision's replies, sent back unchanged
+
+    def clean(self, error):
+        text = error_text(error)
+        return text.replace(self.secret, '***') if self.secret else text
+
+    def body(self, payload):
+        """The Messages API request of ReActPolicy's messages: its system message, user turns, each
+        assistant turn as the provider's own reply content and each tool feedback as the
+        tool_result of that reply's tool call (a text turn if the reply called no tool)."""
+        messages = payload['messages']
+        if len(messages) == 2:
+            self.turns = []
+        out, call, assistants = [], None, 0
+        for m in messages[1:]:
+            if m['role'] == 'assistant':
+                content = self.turns[assistants] if assistants < len(self.turns) else [{'type': 'text', 'text': m['content']}]
+                assistants += 1
+                out.append({'role': 'assistant', 'content': content})
+                call = next((b['id'] for b in content if b.get('type') == 'tool_use'), None)
+            elif m['role'] == 'tool' and call is not None:
+                out.append({'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': call, 'content': m['content']}]})
+                call = None
+            else:
+                out.append({'role': 'user', 'content': m['content']})
+        body = {'model': payload['model'], 'max_tokens': payload['max_tokens'], 'system': messages[0]['content'],
+                'messages': out, 'tool_choice': {'type': 'auto', 'disable_parallel_tool_use': True},
+                'tools': [{'name': t['name'], 'description': t['description'], 'input_schema': t['parameters'], 'strict': True}
+                          for t in payload['tools']]}
+        if payload.get('effort'):
+            body['output_config'] = {'effort': payload['effort']}
+        return body
+
+    def __call__(self, payload, attempt):
+        body = self.body(payload)
+        try:
+            response = self.client.messages.create(**body)
+        except Exception as error:
+            raise classified(self.sdk, error, self.clean)
+        data = response.to_dict()
+        usage = data.get('usage') if isinstance(data.get('usage'), dict) else {}
+        usage = {k: usage[k] for k in USAGE_KEYS if type(usage.get(k)) is int} or None
+        content = data.get('content') if isinstance(data.get('content'), list) else []
+        exchange = {'payload': body, 'payload_sha256': hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
+                    'request_id': getattr(response, '_request_id', None),
+                    'response': {k: data.get(k) for k in ('id', 'model', 'stop_reason', 'stop_details', 'content', 'usage')}}
+        problem = None
+        if data.get('model') != body['model']:
+            problem = f"served by model {data.get('model')!r}, not {body['model']!r}"
+        elif data.get('stop_reason') == 'refusal':
+            problem = f"refusal ({(data.get('stop_details') or {}).get('category')})"
+        elif data.get('stop_reason') == 'max_tokens':
+            problem = 'the reply stopped at max_tokens'
+        self.turns.append(content)
+        use = next((b for b in content if isinstance(b, dict) and b.get('type') == 'tool_use'), None)
+        thought = ' '.join(b['text'] for b in content if isinstance(b, dict) and b.get('type') == 'text' and isinstance(b.get('text'), str))
+        reply = {'thought': thought or None, **({'tool': use.get('name'), 'arguments': use.get('input')} if use else {})}
+        return {'text': json.dumps(reply), 'usage': usage, 'exchange': exchange, 'problem': problem}
+
+
+class OpenAISender:
+    """The 'openai' provider (see the module docstring). sdk: the openai module, or a stand-in with
+    the same names (tests); the client is built here, in the worker, with the key of api_key_env."""
+
+    def __init__(self, spec, sdk=None):
+        if sdk is None:
+            import openai as sdk
+        self.sdk, self.secret = sdk, os.environ[spec['api_key_env']]
+        self.client = sdk.OpenAI(api_key=self.secret, max_retries=0, timeout=spec['request_timeout_s'])
+        self.turns = []  # the output items of this decision's replies, sent back unchanged
+
+    clean = AnthropicSender.clean
+
+    def body(self, payload):
+        """The Responses API request of ReActPolicy's messages: the system message as instructions,
+        user turns, each assistant turn as the provider's own output items (reasoning items only with
+        their encrypted content: nothing is stored at the provider) and each tool feedback as the
+        function_call_output of that reply's call (a user turn if the reply called no function)."""
+        messages = payload['messages']
+        if len(messages) == 2:
+            self.turns = []
+        items, call, assistants = [], None, 0
+        for m in messages[1:]:
+            if m['role'] == 'assistant':
+                output = self.turns[assistants] if assistants < len(self.turns) else [{'role': 'assistant', 'content': m['content']}]
+                assistants += 1
+                items += [i for i in output if i.get('type') != 'reasoning' or i.get('encrypted_content')]
+                call = next((i['call_id'] for i in output if i.get('type') == 'function_call'), None)
+            elif m['role'] == 'tool' and call is not None:
+                items.append({'type': 'function_call_output', 'call_id': call, 'output': m['content']})
+                call = None
+            else:
+                items.append({'role': 'user', 'content': m['content']})
+        body = {'model': payload['model'], 'instructions': messages[0]['content'], 'input': items,
+                'max_output_tokens': payload['max_tokens'], 'tool_choice': 'auto', 'parallel_tool_calls': False, 'store': False,
+                'tools': [{'type': 'function', 'name': t['name'], 'description': t['description'], 'parameters': t['parameters'],
+                           'strict': True} for t in payload['tools']]}
+        if payload.get('effort'):
+            body.update(reasoning={'effort': payload['effort']}, include=['reasoning.encrypted_content'])
+        if payload.get('temperature') is not None:
+            body['temperature'] = payload['temperature']
+        return body
+
+    def __call__(self, payload, attempt):
+        body = self.body(payload)
+        try:
+            response = self.client.responses.create(**body)
+        except Exception as error:
+            raise classified(self.sdk, error, self.clean)
+        data = response.to_dict()
+        raw = data.get('usage') if isinstance(data.get('usage'), dict) else {}
+        cached = (raw.get('input_tokens_details') or {}).get('cached_tokens') or 0
+        usage = None
+        if type(raw.get('input_tokens')) is int and type(raw.get('output_tokens')) is int and type(cached) is int:
+            usage = {'input_tokens': raw['input_tokens'] - cached, 'output_tokens': raw['output_tokens'],
+                     'cache_creation_input_tokens': 0, 'cache_read_input_tokens': cached,
+                     'reasoning_tokens': (raw.get('output_tokens_details') or {}).get('reasoning_tokens')}
+        output = [i for i in data.get('output') or [] if isinstance(i, dict)]
+        exchange = {'payload': body, 'payload_sha256': hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
+                    'request_id': getattr(response, '_request_id', None),
+                    'response': {k: data.get(k) for k in ('id', 'model', 'status', 'incomplete_details', 'error', 'output', 'usage')}}
+        texts = [c for i in output if i.get('type') == 'message' for c in i.get('content') or [] if isinstance(c, dict)]
+        model, problem = str(data.get('model')), None
+        if not (model == body['model'] or model.startswith(body['model'] + '-')):  # a dated snapshot of it is it
+            problem = f"served by model {model!r}, not {body['model']!r}"
+        elif data.get('status') != 'completed':
+            problem = f"response {data.get('status')}: {data.get('incomplete_details') or data.get('error')}"
+        elif any(c.get('type') == 'refusal' for c in texts):
+            problem = 'refusal'
+        self.turns.append(output)
+        use = next((i for i in output if i.get('type') == 'function_call'), None)
+        thought = ' '.join(c['text'] for c in texts if c.get('type') == 'output_text' and isinstance(c.get('text'), str))
+        args = None
+        if use:
+            try:
+                args = json.loads(use.get('arguments'))
+            except (TypeError, ValueError):
+                args = use.get('arguments')  # not an object: rejected by reply_problem
+        reply = {'thought': thought or None, **({'tool': use.get('name'), 'arguments': args} if use else {})}
+        return {'text': json.dumps(reply), 'usage': usage, 'exchange': exchange, 'problem': problem}
+
+
+PROVIDERS = {'fake': FakeSender, 'anthropic': AnthropicSender, 'openai': OpenAISender}
 
 
 class APILLM:
@@ -92,31 +382,62 @@ class APILLM:
 
     def __init__(self, llm, sender=None):
         spec = full(llm)
-        self.model, self.params = identity(llm)
+        (self.model, self.params), self.prices = identity(llm), price(llm)
         self.max_retries, self.backoff = spec['max_retries'], spec['retry_backoff_s']
         if sender is None:
             enabled(llm)
             sender = PROVIDERS[spec['provider']](spec)
-        self.send, self.usage, self.attempts = sender, None, None
+        self.send, self.usage, self.attempts, self.exchange = sender, None, None, None
+        self.begin(None)
+
+    def begin(self, budget):
+        """A new decision with what is left of the wall's budget ({'tokens_left', 'usd_left'} or None)."""
+        self.budget, self.spent_tokens, self.spent_usd = budget or {}, 0, 0.0
+
+    def reserve(self, payload):
+        """(tokens, usd) an attempt may cost at most: its estimated input and its full max_tokens
+        output; raises if what is left of the budget cannot pay that."""
+        tokens_in = len(json.dumps(payload)) // 3 + 1
+        tokens, usd = tokens_in + self.params['max_tokens'], 0.0
+        if self.prices is not None:
+            usd = (tokens_in * self.prices[0] + self.params['max_tokens'] * self.prices[1]) / 1e6
+        left_tokens, left_usd = self.budget.get('tokens_left'), self.budget.get('usd_left')
+        if left_tokens is not None and self.spent_tokens + tokens > left_tokens:
+            raise LLMFailure('error', f'token budget: an attempt may use {tokens} tokens, {left_tokens - self.spent_tokens} left')
+        if left_usd is not None and self.spent_usd + usd > left_usd:
+            raise LLMFailure('error', f'cost budget: an attempt may cost {usd:.4f} USD, {left_usd - self.spent_usd:.4f} left')
+        return tokens, usd
+
+    def record(self, attempt, start, error, billed, reserved):
+        self.attempts.append({'attempt': attempt, 'error': None if error is None else error_text(error),
+                              'latency_s': round(time.monotonic() - start, 3), 'billed': billed})
+        if billed == 'unknown':  # the most the attempt could have cost
+            self.spent_tokens, self.spent_usd = self.spent_tokens + reserved[0], self.spent_usd + reserved[1]
+        elif billed == 'reported':
+            self.spent_tokens += sum(self.usage.get(k, 0) for k in USAGE_KEYS)
+            self.spent_usd += 0.0 if self.prices is None else cost(self.prices, self.usage)
 
     def __call__(self, messages, tools):
-        self.usage, self.attempts = None, []
+        self.usage, self.attempts, self.exchange = None, [], None
         payload = {'model': self.model, **self.params, 'messages': messages, 'tools': tools}
         for attempt in range(self.max_retries + 1):
             if attempt:
                 time.sleep(self.backoff * 2 ** (attempt - 1))
-            start = time.monotonic()
+            reserved, start = self.reserve(payload), time.monotonic()
             try:
                 out = self.send(payload, attempt)
             except TransientError as error:
-                self.attempts.append({'attempt': attempt, 'error': error_text(error), 'latency_s': round(time.monotonic() - start, 3)})
+                self.record(attempt, start, error, error.billed, reserved)
                 continue
             except Exception as error:  # not worth a retry: the call fails (fallback:llm_error)
-                self.attempts.append({'attempt': attempt, 'error': error_text(error), 'latency_s': round(time.monotonic() - start, 3)})
+                self.record(attempt, start, error, getattr(error, 'billed', 'unknown'), reserved)
                 raise
-            self.attempts.append({'attempt': attempt, 'error': None, 'latency_s': round(time.monotonic() - start, 3)})
-            if not (isinstance(out, dict) and isinstance(out.get('text'), str)):
+            out = out if isinstance(out, dict) else {}
+            self.usage, self.exchange = out.get('usage'), out.get('exchange')
+            self.record(attempt, start, None, 'reported' if usage_ok(self.usage) else 'unknown', reserved)
+            if out.get('problem'):
+                raise LLMFailure('error', out['problem'])
+            if not isinstance(out.get('text'), str):
                 raise LLMFailure('error', 'the provider reply has no text')
-            self.usage = out.get('usage')
             return out['text']
         raise LLMFailure('error', f"no reply after {self.max_retries + 1} attempts: {self.attempts[-1]['error']}")
