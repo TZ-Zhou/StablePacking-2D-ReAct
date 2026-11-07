@@ -1,4 +1,4 @@
-"""Dynamic filter-order controllers for the paper policy (P0/P1: no real LLM).
+"""Dynamic filter-order controllers for the paper policy (P2 architecture, mock LLM only).
 
 Usage: python -B research/controllers.py offline <campaign id> <out dir> [--arm paper_3-0-2-1-4]
        python -B research/controllers.py check <run>
@@ -9,6 +9,12 @@ policy for this one selection: the base (Paper) order or another permutation. Ev
 point starts from the run's base policy (receipt filter_policy), never from an earlier choice.
 Candidate generation, image convolution, the LLC > 0 gate and the stability analysis are not
 touched; a controller can only pick what some filter order selects (an outcome class).
+
+The controller is split in two. ControllerClient (main process, trusted) builds the observation
+and the tool table of the 120 orders, validates the order string it gets back, runs select()
+and writes the record. The policy (Null, Random, Matched-Random, Rule, ReAct with its LLM) only
+maps a JSON request to a JSON reply; live walls run it in a worker process
+(controller_worker.ProcessTransport), offline evaluation and check() in this one (InlineTransport).
 
 Information boundary. A controller sees the current wall, the sampled stones' candidates and
 filter scores, how many stones remain, and what it saw at its own earlier calls. It does not see
@@ -29,6 +35,7 @@ import json
 import re
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -37,7 +44,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from failure_analysis import FILTERS, wall_state  # noqa: E402
 
-from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, load_trace, select, to_world  # noqa: E402
+from check_case import chain_problems  # noqa: E402
+from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, load_trace, published_events, select  # noqa: E402
 
 ORDER_TEXT = re.compile(r'[0-4](-[0-4]){4}')
 
@@ -103,12 +111,11 @@ class Observer:
         rotation = np.arange(len(raw)) // n * 90
         feasible = (raw[:, 3] > 0) & np.isfinite(raw[:, :5]).all(axis=1)
         base = tuple(policy['order'] or PAPER_ORDER)
-        by_index = {}
-        for order in ALL_ORDERS:
-            index = select(raw, weights, 'paper', order, tol).index
-            if index is not None:
-                by_index.setdefault(int(index), []).append(order)
-        paper = select(raw, weights, 'paper', base, tol).index
+        by_index, selections = {}, {order: select(raw, weights, 'paper', order, tol) for order in ALL_ORDERS}
+        for order, s in selections.items():
+            if s.index is not None:
+                by_index.setdefault(int(s.index), []).append(order)
+        paper = selections[base].index
         paper = None if paper is None else int(paper)
         classes = sorted(by_index, key=lambda i: (i != paper, -len(by_index[i]), i))
         remaining = {int(s) for s in ctx['inventory_ids']} | set(sampled)
@@ -143,7 +150,8 @@ class Observer:
                      last_feasible_rotations=s['feasible_rotations'], last_best_llc=s['best_llc'],
                      min_feasible_rotations=min(m['min_feasible_rotations'], s['feasible_rotations']))
         self.recent = (self.recent + [{'step': obs['step'], **obs['now']}])[-3:]
-        info = {'classes': classes, 'by_index': by_index, 'paper': paper, 'base': base, 'stone_ids': stone, 'tol': tol}
+        info = {'classes': classes, 'by_index': by_index, 'paper': paper, 'base': base, 'stone_ids': stone, 'tol': tol,
+                'selections': selections, 'n': n}
         return obs, info
 
 
@@ -152,24 +160,101 @@ def decision_key(record):
     return (record['step'], record['phase'], record['sample_trial'], record['side'])
 
 
-class Controller:
-    """Null controller: always the base order. Subclasses override decide()."""
-    kind = 'null'
+def tool_table(info, label):
+    """What each of the 120 orders selects and why (the explain_order answer), keyed in ALL_ORDERS
+    order: the legal order space of every policy. Built here, where the scores are; a policy gets
+    it as JSON and never sees the score matrix or the stones."""
+    n, stone, classes = info['n'], info['stone_ids'], info['classes']
+    name = lambda i: f'{label(stone[i])}/{i // n * 90}'
+    return {key(o): {'branch': s.branch, 'selects_outcome': None if s.index is None else classes.index(int(s.index)),
+                     'stages': [{'after': 'LLC>0 gate' if k == 0 else FILTERS[o[k - 1]], 'survivors': [name(int(i)) for i in st]}
+                                for k, st in enumerate(s.stages)]}
+            for o, s in info['selections'].items()}
 
-    def __init__(self, sink=None, **params):
-        self.params, self.observer, self.sink, self.calls = params, Observer(), sink or write_record, 0
+
+SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
+                 'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
+                           'llm_timeout': 60.0, 'max_llm_failures': 3}}
+SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']), 'react': set(SPEC_DEFAULTS['react'])}
+WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
+SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
+           'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
+           'react': {'llm', 'fallback:llm_timeout', 'fallback:llm_error', 'fallback:no_valid_commit'}}
+LLM_FAILURES = {'fallback:llm_timeout', 'fallback:llm_error'}
+REPLY_KEYS = {'order', 'source', 'prompt_sha256', 'react', 'transcripts', 'restart'}
+
+
+def full_spec(spec):
+    """A controller spec with its defaults, as records and receipts name it; unknown keys raise."""
+    if not isinstance(spec, dict) or spec.get('kind') not in SPEC_KEYS:
+        raise ValueError(f'controller spec needs a kind in {sorted(SPEC_KEYS)}, got {spec!r}')
+    params = {k: v for k, v in spec.items() if k != 'kind'}
+    if set(params) - SPEC_KEYS[spec['kind']]:
+        raise ValueError(f"unknown {spec['kind']} controller keys {sorted(set(params) - SPEC_KEYS[spec['kind']])}")
+    if spec['kind'] == 'random' and isinstance(params.get('steps'), (list, tuple)):
+        params['steps'] = [list(s) if isinstance(s, (list, tuple)) else s for s in params['steps']]
+    return {'kind': spec['kind'], **SPEC_DEFAULTS[spec['kind']], **params}
+
+
+def reply_problem_of(reply, kind, base):
+    """Why a policy's reply is not one of `kind`'s answers, None if it is: an object with known
+    fields, its order an 'a-b-c-d-e' string, its source one of the kind's, the base order if a fallback."""
+    if not isinstance(reply, dict) or set(reply) - REPLY_KEYS or not {'order', 'source'} <= set(reply):
+        return 'the reply is not an object with an order and a source'
+    if not isinstance(reply['order'], str) or parse_order(reply['order']) is None:
+        return "the reply's order is not an 'a-b-c-d-e' permutation of 0..4"
+    if not isinstance(reply['source'], str) or reply['source'] not in SOURCES[kind]:
+        return f'source is not one of the {kind} policy'
+    if reply['source'].startswith('fallback:') and reply['order'] != base:
+        return 'a fallback must keep the base order'
+    return None
+
+
+class ControllerClient:
+    """The controller build_wall calls (selection.controlled_policy), in the main process.
+
+    Per selection: the Observer's observation; at a decision point a request (observation, base
+    order, tool table of the 120 orders) through the transport to the policy, which answers with an
+    order string; the order is validated here, select() gives the candidate, the record is written.
+    A transport failure (fallback:worker_timeout / worker_error / worker_protocol_error) or a reply
+    that is not one of the policy's answers (worker_protocol_error) keeps the base order. For react
+    the client holds the wall's counters: request failures (LLM and worker) and LLM decisions;
+    after max_llm_failures failures every later decision point is skip:llm_unavailable, after
+    max_decisions skip:wall_budget, and neither sends a request.
+    """
+
+    def __init__(self, spec, transport, sink=None):
+        self.spec_, self.transport = full_spec(spec), transport
+        self.observer, self.sink, self.calls = Observer(), sink or write_record, 0
+        self.request_failures = self.llm_decisions = 0
 
     def spec(self):
-        return {'kind': self.kind, **self.params}
+        return self.spec_
 
-    def decide(self, obs, info, ctx):
-        return info['base'], {'source': 'null'}
+    def ask(self, obs, info):
+        spec, base = self.spec_, info['base']
+        if spec['kind'] == 'react':
+            if self.request_failures >= spec['max_llm_failures']:
+                return base, {'source': 'skip:llm_unavailable'}
+            if self.llm_decisions >= spec['max_decisions']:
+                return base, {'source': 'skip:wall_budget'}
+            self.llm_decisions += 1
+        tools = tool_table(info, self.observer.label)
+        digest = {'tool_table_sha256': hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()}
+        status, reply = self.transport.decide({'observation': obs, 'base_order': key(base), 'orders': tools})
+        if status == 'ok' and reply_problem_of(reply, spec['kind'], key(base)):
+            status, reply = 'worker_protocol_error', reply_problem_of(reply, spec['kind'], key(base))
+        if status != 'ok':
+            self.request_failures += 1
+            return base, {'source': f'fallback:{status}', 'error': reply, **digest}
+        self.request_failures += reply['source'] in LLM_FAILURES
+        return parse_order(reply['order']), {**{k: v for k, v in reply.items() if k not in ('order', 'restart')}, **digest}
 
     def __call__(self, policy, ctx):
         obs, info = self.observer(policy, ctx)
         decision_point = len(info['classes']) >= 2
-        order, detail = self.decide(obs, info, ctx) if decision_point else (info['base'], {'source': 'not_a_decision_point'})
-        index = select(np.asarray(ctx['features_raw']), ctx['weights'], 'paper', order, policy['tol']).index
+        order, detail = self.ask(obs, info) if decision_point else (info['base'], {'source': 'not_a_decision_point'})
+        index = info['selections'][order].index
         index = None if index is None else int(index)
         self.sink({'event': self.calls, 'step': obs['step'], 'phase': obs['phase'], 'sample_trial': obs['sample_trial'],
                    'side': obs['side'], 'controller': self.spec(), 'decision_point': decision_point,
@@ -181,7 +266,46 @@ class Controller:
         return policy if order == info['base'] else {**policy, 'order': order}
 
 
-class RandomController(Controller):
+class InlineTransport:
+    """The policy in this process, on JSON copies of request and reply: offline evaluation, check()
+    and tests. Failures and restarts mirror ProcessTransport (any failure or a reply asking for a
+    restart rebuilds the policy), but nothing is isolated: an abandoned LLM call keeps running."""
+
+    def __init__(self, make):
+        self.make, self.policy = make, None
+
+    def decide(self, request):
+        self.policy = self.policy or self.make()
+        try:
+            reply = json.loads(json.dumps(self.policy.decide(json.loads(json.dumps(request))), allow_nan=False))
+        except Exception as error:  # the worker would report it the same way
+            self.policy = None
+            return 'worker_error', error_text(error)
+        if not isinstance(reply, dict) or reply.get('restart'):
+            self.policy = None
+        return 'ok', reply
+
+    def close(self):
+        self.policy = None
+
+
+def error_text(error):
+    """'Type: message' of an exception, at most 300 characters, without trusting its __str__."""
+    try:
+        text = str(error)
+    except Exception:
+        text = '(unprintable)'
+    return f'{type(error).__name__}: {text}'[:300]
+
+
+class NullPolicy:
+    """Always the base order."""
+
+    def decide(self, request):
+        return {'order': request['base_order'], 'source': 'null'}
+
+
+class RandomPolicy:
     """Random Adaptive: a uniformly drawn order of the 120 at every decision point.
 
     Matched-Random (steps given): only at the decision keys [step, phase, sample_trial, side]
@@ -189,30 +313,28 @@ class RandomController(Controller):
     class (reached by its smallest order); elsewhere the base order. Draws come from its own
     generator seeded by a non-negative int, never the global RNG.
     """
-    kind = 'random'
 
-    def __init__(self, seed, steps=None, sink=None):
+    def __init__(self, seed, steps=None):
         if type(seed) is not int or seed < 0:
             raise ValueError(f'random controller needs a non-negative int seed, got {seed!r}')
         if steps is not None:
-            steps = [list(s) for s in steps]
-            if not all(len(s) == 4 and type(s[0]) is int and isinstance(s[1], str) and type(s[2]) is int
+            steps = [list(s) if isinstance(s, (list, tuple)) else s for s in steps]
+            if not all(isinstance(s, list) and len(s) == 4 and type(s[0]) is int and isinstance(s[1], str) and type(s[2]) is int
                        and isinstance(s[3], str) for s in steps) or len({tuple(s) for s in steps}) != len(steps):
                 raise ValueError('steps must be distinct [step, phase, sample_trial, side] keys')
-        super().__init__(sink, seed=seed, **({} if steps is None else {'steps': steps}))
         self.rng, self.steps = np.random.default_rng(seed), None if steps is None else {tuple(s) for s in steps}
 
-    def decide(self, obs, info, ctx):
+    def decide(self, request):
+        obs, orders = request['observation'], list(request['orders'])
         if self.steps is None:
-            return ALL_ORDERS[int(self.rng.integers(len(ALL_ORDERS)))], {'source': 'random'}
+            return {'order': orders[int(self.rng.integers(len(orders)))], 'source': 'random'}
         if decision_key(obs) not in self.steps:
-            return info['base'], {'source': 'matched_random:not_matched'}
-        others = [i for i in info['classes'] if i != info['paper']]
-        pick = others[int(self.rng.integers(len(others)))]
-        return min(info['by_index'][pick]), {'source': 'matched_random'}
+            return {'order': request['base_order'], 'source': 'matched_random:not_matched'}
+        others = [o for o in obs['outcomes'] if not o['is_paper']]
+        return {'order': others[int(self.rng.integers(len(others)))]['example_order'], 'source': 'matched_random'}
 
 
-class RuleController(Controller):
+class RulePolicy:
     """Pre-defined rules (draft parameters, to be frozen before any test seed is built).
 
     scarcity: with <= max_remaining stones left, a sampled stone with <= 1 feasible rotation that
@@ -220,25 +342,23 @@ class RuleController(Controller):
     llc_drop: the mean LLC of feasible candidates fell by >= llc_drop against the mean of the
     previous three calls: the outcome with the highest LLC. Otherwise the base order.
     """
-    kind = 'rule'
 
-    def __init__(self, max_remaining=6, llc_drop=0.2, sink=None):
-        super().__init__(sink, max_remaining=max_remaining, llc_drop=llc_drop)
+    def __init__(self, max_remaining=6, llc_drop=0.2):
+        self.max_remaining, self.llc_drop = max_remaining, llc_drop
 
-    def decide(self, obs, info, ctx):
+    def decide(self, request):
+        obs, base = request['observation'], request['base_order']
         best = lambda outs: max(outs, key=lambda o: (o['scores']['LLC'], -o['id']))
         scarce = {s['stone'] for s in obs['sampled'] if s['feasible_rotations'] <= 1 and s['reachable']}
-        if obs['n_remaining'] <= self.params['max_remaining'] and scarce:
+        if obs['n_remaining'] <= self.max_remaining and scarce:
             pick, source = best([o for o in obs['outcomes'] if o['stone'] in scarce]), 'rule:scarcity'
         else:
             past = [r['mean_feasible_llc'] for r in obs['memory']['recent'] if r['mean_feasible_llc'] is not None]
             current = obs['now']['mean_feasible_llc']
-            if not past or current is None or current > (1 - self.params['llc_drop']) * np.mean(past):
-                return info['base'], {'source': 'rule:none'}
+            if not past or current is None or current > (1 - self.llc_drop) * np.mean(past):
+                return {'order': base, 'source': 'rule:none'}
             pick, source = best(obs['outcomes']), 'rule:llc_drop'
-        if pick['is_paper']:
-            return info['base'], {'source': source}
-        return parse_order(pick['example_order']), {'source': source}
+        return {'order': base if pick['is_paper'] else pick['example_order'], 'source': source}
 
 
 SYSTEM = ("You choose the filter order of Wang's progressive above-mean cascade for one stone placement. "
@@ -286,119 +406,210 @@ def reply_problem(reply, tools):
     return None
 
 
-def loggable(reply):
-    """A reply as a JSON object for the record and the next message; {'reply': repr} if it is not one."""
-    try:
-        said = json.loads(json.dumps(reply, default=repr))
-    except (TypeError, ValueError):  # non-string keys of mixed types, cycles
-        said = None
-    return said if isinstance(said, dict) and all(isinstance(k, str) for k in reply) else {'reply': repr(reply)}
+MAX_REPLY_CHARS = 100_000
 
 
-class ReActController(Controller):
-    """LLM-driven ReAct. llm(messages, tools) -> {'thought', 'tool', 'arguments'}.
+def safe_json(value, depth=32):
+    """A plain JSON copy of an LLM reply for the record and the next message: dicts with str keys,
+    lists, str, int, finite float, bool and None; anything else, or nested deeper than `depth`,
+    becomes {'__type__': its type name}. No __repr__, __str__ or __eq__ of the reply is called."""
+    if value is None or type(value) in (bool, int, str):
+        return value
+    if type(value) is float:
+        return value if np.isfinite(value) else {'__type__': 'float'}
+    if depth and type(value) is dict and all(type(k) is str for k in value):
+        return {k: safe_json(v, depth - 1) for k, v in value.items()}
+    if depth and type(value) in (list, tuple):
+        return [safe_json(v, depth - 1) for v in value]
+    return {'__type__': type(value).__name__}
+
+
+def parse_reply(reply):
+    """What a policy decides on: the safe_json copy of a reply object, or of the JSON in a reply
+    text; text that is no JSON and copies over MAX_REPLY_CHARS become a {'__type__': ...} marker."""
+    if isinstance(reply, str):
+        try:
+            reply = json.loads(reply)
+        except (ValueError, RecursionError):
+            return {'__type__': 'unparseable text'}
+    parsed = safe_json(reply)
+    return parsed if len(json.dumps(parsed)) <= MAX_REPLY_CHARS else {'__type__': 'oversized reply'}
+
+
+def request_sha256(request):
+    return hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+
+
+class LLMFailure(Exception):
+    """An LLM call that failed with status 'timeout' or 'error' and this text (raised by a client
+    with its own deadline, and by ReplayLLM to repeat a recorded failure without waiting)."""
+
+    def __init__(self, status, text):
+        super().__init__(text)
+        self.status, self.text = status, text
+
+
+class ReActPolicy:
+    """LLM-driven ReAct. llm(messages, tools) -> a reply object {'thought', 'tool', 'arguments'} or
+    its JSON text; optional llm.model and llm.params name the model in the transcripts.
 
     The first message is the observation without outcome classes; with tool_feedback the LLM gets
-    them by calling list_order_outcomes / explain_order. tool_feedback=False is the ablation:
-    commit_order is the only tool.
+    them by calling list_order_outcomes / explain_order (answered from the request's tool table).
+    tool_feedback=False is the ablation: commit_order is the only tool. The policy decides on the
+    parsed copy of each reply (parse_reply), the copy its transcript keeps, so a replay of the
+    transcripts reproduces every decision.
 
-    Fallback rules (the decision then uses the base order and its record says why):
+    Every LLM call leaves a transcript: call, request {messages, tools, model, params}, its
+    request_sha256, response {raw_text, parsed, usage, error}, status and latency_s.
+
+    Fallback rules (the decision then keeps the base order and its record says why):
     - a reply that breaks the tool schema is rejected with the reason as feedback and counts as
       one of the max_tool_calls actions; no valid commit within them: fallback:no_valid_commit;
     - an LLM call that raises or gives no reply within llm_timeout seconds: fallback:llm_error /
-      fallback:llm_timeout at once, no retry; while a timed-out call is still running no new call
-      starts: fallback:llm_busy; after max_llm_failures such failures in a wall every later
-      decision point: fallback:llm_unavailable;
-    - more than max_decisions LLM decisions in a wall: fallback:wall_budget.
-    Calls run in a daemon thread, so a timed-out call holds up neither the wall nor process exit,
-    but it is abandoned, not killed: a real client must also set its own request deadline.
+      fallback:llm_timeout at once, no retry. A timed-out call cannot be stopped from its thread,
+      so the reply asks for a restart: ProcessTransport kills the worker with the call in it.
+    The wall budget and the failure limit are the client's (ControllerClient).
     """
-    kind = 'react'
 
-    def __init__(self, llm, llm_spec=None, tool_feedback=True, max_tool_calls=4, max_decisions=25,
-                 llm_timeout=60.0, max_llm_failures=3, sink=None):
-        super().__init__(sink, llm=llm_spec, tool_feedback=tool_feedback, max_tool_calls=max_tool_calls,
-                         max_decisions=max_decisions, llm_timeout=llm_timeout, max_llm_failures=max_llm_failures)
-        self.llm, self.decisions, self.failures, self.pending = llm, 0, 0, None
+    def __init__(self, llm, tool_feedback=True, max_tool_calls=4, llm_timeout=60.0):
+        self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
         self.tools = TOOLS if tool_feedback else [COMMIT]
         self.prompt_sha256 = hashlib.sha256(json.dumps([SYSTEM, self.tools]).encode()).hexdigest()
 
-    def call_llm(self, messages):
-        """('ok', reply) or ('timeout' | 'error' | 'busy', reason)."""
-        if self.pending is not None and self.pending.is_alive():
-            return 'busy', 'an earlier timed-out call is still running'
+    def call_llm(self, messages, transcripts):
+        """('ok', parsed reply) or ('timeout' | 'error', reason); appends the call's transcript."""
+        request = {'messages': copy.deepcopy(messages), 'tools': copy.deepcopy(self.tools),
+                   'model': safe_json(getattr(self.llm, 'model', None)), 'params': safe_json(getattr(self.llm, 'params', {}))}
         box, args = {}, (copy.deepcopy(messages), copy.deepcopy(self.tools))
 
         def call():
             try:
                 box['reply'] = self.llm(*args)
+            except LLMFailure as failure:
+                box['failure'] = (failure.status, str(failure.text)[:300])
             except Exception as error:  # any client failure is a failed call, never a decision
-                box['error'] = f'{type(error).__name__}: {error}'
+                box['failure'] = ('error', error_text(error))
+        start = time.monotonic()
         thread = threading.Thread(target=call, name='llm-call', daemon=True)
         thread.start()
-        thread.join(self.params['llm_timeout'])
+        thread.join(self.llm_timeout)
         if thread.is_alive():
-            self.pending = thread
-            return 'timeout', f"no reply within {self.params['llm_timeout']} s"
-        if 'reply' not in box:
-            return 'error', box.get('error', 'the call ended without a reply')
-        return 'ok', box['reply']
+            status, out = 'timeout', f'no reply within {self.llm_timeout} s'
+        elif 'reply' in box:
+            status, out = 'ok', box['reply']
+        else:
+            status, out = box.get('failure', ('error', 'the call ended without a reply'))
+        ok = status == 'ok'
+        parsed = parse_reply(out) if ok else None
+        transcripts.append({'call': len(transcripts), 'request': request, 'request_sha256': request_sha256(request),
+                            'response': {'raw_text': out[:MAX_REPLY_CHARS] if ok and isinstance(out, str) else None,
+                                         'parsed': parsed, 'usage': safe_json(getattr(self.llm, 'usage', None)),
+                                         'error': None if ok else out},
+                            'status': status, 'latency_s': round(time.monotonic() - start, 3)})
+        return status, parsed if ok else out
 
-    def tool(self, name, args, obs, info, ctx):
+    def tool(self, name, args, request):
         """(feedback, committed order or None) for a reply that passed reply_problem."""
+        obs = request['observation']
         if name == 'list_order_outcomes':
             return {'outcomes': obs['outcomes'],
                     'unreachable_sampled': [s['stone'] for s in obs['sampled'] if not s['reachable']]}, None
-        order = info['base'] if args['order'] == 'keep_paper' else parse_order(args['order'])
+        order = request['base_order'] if args['order'] == 'keep_paper' else key(parse_order(args['order']))
         if name == 'commit_order':
-            return {'ok': True, 'order': key(order)}, order
-        s = select(np.asarray(ctx['features_raw']), ctx['weights'], 'paper', order, info['tol'])
-        label = lambda i: f"{self.observer.label(info['stone_ids'][i])}/{i // len(ctx['sampled_ids']) * 90}"
-        return {'branch': s.branch, 'selects_outcome': info['classes'].index(int(s.index)) if s.index is not None else None,
-                'stages': [{'after': 'LLC>0 gate' if k == 0 else FILTERS[order[k - 1]], 'survivors': [label(int(i)) for i in st]}
-                           for k, st in enumerate(s.stages)]}, None
+            return {'ok': True, 'order': order}, order
+        return request['orders'][order], None
 
-    def decide(self, obs, info, ctx):
-        if self.failures >= self.params['max_llm_failures']:
-            return info['base'], {'source': 'fallback:llm_unavailable'}
-        if self.decisions >= self.params['max_decisions']:
-            return info['base'], {'source': 'fallback:wall_budget'}
-        self.decisions += 1
+    def decide(self, request):
+        obs, base = request['observation'], request['base_order']
         view = {k: v for k, v in obs.items() if k != 'outcomes'}  # outcomes only through list_order_outcomes
         messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps(view)}]
-        steps, meta = [], {'prompt_sha256': self.prompt_sha256}
-        for _ in range(self.params['max_tool_calls']):
-            status, reply = self.call_llm(messages)
+        steps, transcripts = [], []
+        meta = {'prompt_sha256': self.prompt_sha256, 'transcripts': transcripts}
+        for _ in range(self.max_tool_calls):
+            status, reply = self.call_llm(messages, transcripts)
             if status != 'ok':
-                self.failures += 1
                 steps.append({'status': status, 'error': reply})
-                return info['base'], {'source': f'fallback:llm_{status}', **meta, 'react': steps}
+                return {'order': base, 'source': f'fallback:llm_{status}', **meta, 'react': steps,
+                        **({'restart': True} if status == 'timeout' else {})}
             try:
                 problem = reply_problem(reply, self.tools)
             except Exception as error:  # the validator must never decide by crashing
-                problem = f'unreadable reply: {type(error).__name__}: {error}'
-            said = loggable(reply)
+                problem = f'unreadable reply: {error_text(error)}'
+            said = reply if isinstance(reply, dict) else {'reply': reply}
             if problem is None:
-                feedback, order = self.tool(reply['tool'], reply.get('arguments', {}), obs, info, ctx)
+                feedback, order = self.tool(reply['tool'], reply.get('arguments', {}), request)
             else:
                 feedback, order = {'error': problem}, None
             steps.append({**said, 'status': 'ok' if problem is None else 'rejected', 'feedback': feedback})
             messages += [{'role': 'assistant', 'content': json.dumps(said)},
                          {'role': 'tool', 'name': str(said.get('tool')), 'content': json.dumps(feedback)}]
             if order is not None:
-                return order, {'source': 'llm', **meta, 'react': steps}
-        return info['base'], {'source': 'fallback:no_valid_commit', **meta, 'react': steps}
+                return {'order': order, 'source': 'llm', **meta, 'react': steps}
+        return {'order': base, 'source': 'fallback:no_valid_commit', **meta, 'react': steps}
+
+
+class ReplayLLM:
+    """The LLM of a check: plays back the transcripts of a wall's records, never an API. A call is
+    found by its decision key (from the observation message) and its position in the decision; the
+    request the policy sends must hash to the recorded request_sha256, and recorded timeouts and
+    errors recur at once with their text. Anything else is a divergence: listed in `diverged` and
+    the call fails."""
+
+    def __init__(self, records):
+        records = [r for r in records if isinstance(r, dict) and isinstance(r.get('transcripts'), list)]
+        self.recorded = {decision_key(r): r['transcripts'] for r in records}
+        first = next((t['request'] for r in records for t in r['transcripts']), {})
+        self.model, self.params, self.diverged = first.get('model'), first.get('params', {}), []
+
+    def __call__(self, messages, tools):
+        key_ = decision_key(json.loads(messages[1]['content']))
+        call, done = (len(messages) - 2) // 2, self.recorded.get(key_, [])
+        t = done[call] if call < len(done) else None
+        request = {'messages': messages, 'tools': tools, 'model': self.model, 'params': self.params}
+        if t is None or t.get('request_sha256') != request_sha256(request) or request_sha256(t.get('request')) != t['request_sha256']:
+            self.diverged.append(f"{key_} call {call}: {'not recorded' if t is None else 'request differs from the recording'}")
+            raise LLMFailure('error', 'replay diverged')
+        if t['status'] != 'ok':
+            raise LLMFailure(t['status'], t['response']['error'])
+        raw = t['response']['raw_text']
+        return raw if raw is not None else t['response']['parsed']
+
+
+class ReplayedFailures(InlineTransport):
+    """Inline transport for checking an LLM wall: the decisions whose worker failed live fail again
+    with the recorded status and text; the others run the policy."""
+
+    def __init__(self, make, records):
+        super().__init__(make)
+        self.failed = {decision_key(r): (r['source'][len('fallback:'):], r.get('error'))
+                       for r in records if isinstance(r, dict) and str(r.get('source')).startswith('fallback:worker_')}
+
+    def decide(self, request):
+        failed = self.failed.get(decision_key(request['observation']))
+        if failed:
+            self.policy = None
+            return failed
+        return super().decide(request)
 
 
 class MockLLM:
     """Scripted stand-in for the tool flow (no API): 'max_llc' lists outcomes, explains the
     highest-LLC one and commits it; 'keep' commits keep_paper; 'blind' commits 0-1-2-3-4 without
-    looking; 'invalid' commits a non-permutation; 'stone' tries to name a stone."""
+    looking; 'invalid' commits a non-permutation; 'stone' tries to name a stone. Failure modes,
+    max_llc elsewhere: 'hang@N' never answers and 'crash@N' ends its process (exit code 3) at the
+    first call of the decisions of step N (read from the observation, so a restart does not move it)."""
 
     def __init__(self, mode):
-        self.mode = mode
+        self.mode, self.model, self.params = mode, f'mock:{mode}', {}
 
     def __call__(self, messages, tools):
+        failure, _, step = self.mode.partition('@')
+        if step and len(messages) == 2 and json.loads(messages[1]['content'])['step'] == int(step):
+            if failure == 'hang':
+                threading.Event().wait()
+            if failure == 'crash':
+                import os
+                os._exit(3)
         last = json.loads(messages[-1]['content']) if messages[-1]['role'] == 'tool' else None
         commit = lambda order, why: {'thought': why, 'tool': 'commit_order', 'arguments': {'order': order, 'rationale': why}}
         if self.mode == 'keep':
@@ -419,27 +630,31 @@ class MockLLM:
         return commit(self.best['example_order'], f"place outcome {self.best['id']}")
 
 
-SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': {'max_remaining', 'llc_drop'},
-             'react': {'llm', 'tool_feedback', 'max_tool_calls', 'max_decisions', 'llm_timeout', 'max_llm_failures'}}
-
-
-def make_controller(spec, sink=None):
-    """Controller from a JSON-able spec, e.g. {'kind': 'random', 'seed': 7}; unknown keys raise."""
-    if not isinstance(spec, dict) or spec.get('kind') not in SPEC_KEYS:
-        raise ValueError(f'controller spec needs a kind in {sorted(SPEC_KEYS)}, got {spec!r}')
+def make_policy(spec):
+    """The decision logic of a controller spec (what runs behind the transport); bad specs raise."""
+    spec = full_spec(spec)
     params = {k: v for k, v in spec.items() if k != 'kind'}
-    if set(params) - SPEC_KEYS[spec['kind']]:
-        raise ValueError(f"unknown {spec['kind']} controller keys {sorted(set(params) - SPEC_KEYS[spec['kind']])}")
     if spec['kind'] == 'null':
-        return Controller(sink)
+        return NullPolicy()
     if spec['kind'] == 'random':
-        return RandomController(params.get('seed'), params.get('steps'), sink)
+        return RandomPolicy(params.get('seed'), params.get('steps'))
     if spec['kind'] == 'rule':
-        return RuleController(sink=sink, **params)
-    llm = params.pop('llm', None)
+        return RulePolicy(**params)
+    llm = params['llm']
     if not isinstance(llm, dict) or llm.get('kind') != 'mock' or set(llm) != {'kind', 'mode'}:
         raise NotImplementedError(f'only {{"kind": "mock", "mode": ...}} exists before P2, got {llm!r}')
-    return ReActController(MockLLM(llm['mode']), llm, sink=sink, **params)
+    return ReActPolicy(MockLLM(llm['mode']), **{k: params[k] for k in WORKER_KEYS['react']})
+
+
+def make_controller(spec, sink=None, transport='process'):
+    """Controller from a JSON-able spec, e.g. {'kind': 'random', 'seed': 7}; bad specs raise here,
+    before any wall is built. transport 'process' (live walls) runs the policy in a worker
+    process (controller_worker.ProcessTransport); 'inline' runs it in this process."""
+    make_policy(spec)
+    if transport == 'inline':
+        return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink)
+    import controller_worker
+    return ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec)), sink)
 
 
 def write_record(record):
@@ -451,7 +666,7 @@ def write_record(record):
 
 
 def trace_events(result):
-    for path in sorted((Path(result) / 'trace').glob('e*.npz')):
+    for path in published_events(Path(result) / 'trace'):
         yield load_trace(path)
 
 
@@ -468,12 +683,17 @@ def base_policy(run):
     return {'policy': 'paper', 'order': None if fp['order'] is None else tuple(fp['order']), 'tol': fp['tol']}
 
 
-def rerun(result, spec, base):
-    """The records a controller writes when it sees the traced selections of one result directory."""
+def rerun(result, spec, base, transport='inline'):
+    """The records a controller writes when it sees the traced selections of one result directory;
+    transport: 'inline', 'process' or a transport object (check() replays LLM walls with one)."""
     records = []
-    controller = make_controller(spec, records.append)
-    for meta, a in trace_events(result):
-        controller(types.MappingProxyType(dict(base)), context_from_trace(meta, a))
+    controller = make_controller(spec, records.append, transport) if isinstance(transport, str) else \
+        ControllerClient(spec, transport, records.append)
+    try:
+        for meta, a in trace_events(result):
+            controller(types.MappingProxyType(dict(base)), context_from_trace(meta, a))
+    finally:
+        controller.transport.close()
     return json.loads(json.dumps(records, default=lambda v: v.item()))
 
 
@@ -490,57 +710,14 @@ def replay(result, spec):
     return rerun(result, spec, base)
 
 
-def strip_geometry(v):
+def comparable(v):
+    """A record without what a re-execution cannot reproduce: outcome geometry (it needs the stone
+    pixels) and LLM call latencies."""
     if isinstance(v, dict):
-        return {k: None if k == 'geometry' else strip_geometry(x) for k, x in v.items()}
+        return {k: None if k in ('geometry', 'latency_s') else comparable(x) for k, x in v.items()}
     if isinstance(v, list):
-        return [strip_geometry(x) for x in v]
+        return [comparable(x) for x in v]
     return v
-
-
-def trace_problems(result, events, stopped=False):
-    """The trace a controller check relies on, independent of the controller: events numbered 0..n-1
-    and each part of a commit in commits.jsonl (a stopped run may end in events of an unfinished
-    attempt), candidate i is sampled stone i % n at rotation i // n * 90, the sampled and remaining
-    stones are the inventory left by earlier placements, world poses follow to_world, and each
-    placed commit names the pose of the candidate it points at."""
-    problems, numbers = [], [m['event'] for m, _ in events]
-    if numbers != list(range(len(events))):
-        problems.append(f'trace events are not numbered 0..{len(events) - 1}')
-    path = Path(result) / 'trace' / 'commits.jsonl'
-    commits = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
-    if not path.exists() and not stopped:
-        problems.append('no trace/commits.jsonl')
-    referenced = {s['event'] for c in commits for s in c['sides'].values()}
-    if referenced - set(numbers):
-        problems.append(f'commits reference missing events {sorted(referenced - set(numbers))[:5]}')
-    loose = set(numbers) - referenced
-    if loose and not (stopped and min(loose) > max(referenced, default=-1)):
-        problems.append(f'events {sorted(loose)[:5]} belong to no commit')
-    by_event = dict(zip(numbers, events))
-    placed = {max(s['event'] for s in c['sides'].values()): c for c in commits if c['outcome'] == 'placed'}
-    start, gone = None, set()
-    for meta, a in events:
-        where, n, i = f"event {meta['event']}", len(a['sampled_ids']), np.arange(len(a['stone_id']))
-        sampled, remaining = set(a['sampled_ids'].tolist()), set(a['inventory_ids'].tolist())
-        start = sampled | remaining if start is None else start
-        if not n or not ((a['stone_id'] == a['sampled_ids'][i % n]).all() and (a['rotation'] == i // n * 90).all()):
-            problems.append(f'{where}: candidate stones and rotations do not follow the sampled stones')
-        if sampled & remaining or sampled | remaining != start - gone:
-            problems.append(f'{where}: sampled and remaining stones are not the inventory left by earlier placements')
-        x_world, rotation_world = to_world(meta['side'], a['x'], a['rotation'], a['width'], meta['world_width'])
-        if not (np.array_equal(x_world, a['x_world']) and np.array_equal(rotation_world, a['rotation_world'])):
-            problems.append(f'{where}: world poses do not follow the evaluation-frame poses')
-        if meta['event'] in placed:
-            gone.add(placed[meta['event']]['stone_id'])
-    for c in placed.values():
-        side = c['sides'][c['chosen_side']]
-        if side['event'] in by_event:
-            a, k = by_event[side['event']][1], side['index']
-            pose = (int(a['stone_id'][k]), int(a['x_world'][k]), int(a['y'][k]), int(a['rotation_world'][k]))
-            if pose != (c['stone_id'], c['x_world'], c['y'], c['rotation_world']):
-                problems.append(f"step {c['step']}: commit pose differs from its candidate {pose}")
-    return problems
 
 
 def check(result, records=None, spec=None, stopped=None):
@@ -549,7 +726,7 @@ def check(result, records=None, spec=None, stopped=None):
     the receipt's base policy; every record must equal its re-execution (geometry excluded: it
     needs stone pixels), the traced policy must be the base with the re-executed order, replaying
     select with it must give the traced pick, decision keys must be unique and the trace itself
-    must be complete and consistent (trace_problems). A run stopped by the launcher (stopped; by
+    must be complete and consistent (check_case.chain_problems). A stopped run (stopped; by
     default read from the receipt) may hold one record more than events: the controller is called
     before its event is written. Counts come from the re-execution, not from the records."""
     result, run = Path(result), run_of(result)
@@ -563,14 +740,22 @@ def check(result, records=None, spec=None, stopped=None):
         return {'ok': False, 'problems': ['the receipt names no controller'], 'records': len(records),
                 'decision_points': None, 'switches': None}
     base = base_policy(run)
-    expected, events = rerun(result, spec, base), list(trace_events(result))
-    problems = trace_problems(result, events, stopped)
+    llm, transport = None, 'inline'
+    if full_spec(spec)['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
+        llm, worker = ReplayLLM(records), {k: full_spec(spec)[k] for k in WORKER_KEYS['react']}
+        transport = ReplayedFailures(lambda: ReActPolicy(llm, **worker), records)
+    expected, events = rerun(result, spec, base, transport), list(trace_events(result))
+    problems = chain_problems(result, events, stopped)
     if not len(events) <= len(records) <= len(events) + int(stopped):
         problems.append(f'{len(records)} records for {len(events)} selections')
     keys = [decision_key(x) for x in expected]
     if len(set(keys)) != len(keys):
         problems.append('decision keys (step, phase, sample_trial, side) are not unique')
     rest = lambda p: {k: v for k, v in p.items() if k != 'order'}
+    # records written before P2 carry no tool_table_sha256: compared without it and reported as legacy
+    legacy = bool(records) and not any(isinstance(r, dict) and 'tool_table_sha256' in r for r in records)
+    if legacy:
+        expected = [{k: v for k, v in x.items() if k != 'tool_table_sha256'} for x in expected]
     for r, x, (meta, a) in zip(records, expected, events):
         where = f"event {meta['event']} (step {meta['step']} {meta['phase']} trial {meta['sample_trial']} {meta['side']})"
         if (x['event'], *decision_key(x)) != (meta['event'], meta['step'], meta['phase'], meta['sample_trial'], meta['side']):
@@ -581,14 +766,49 @@ def check(result, records=None, spec=None, stopped=None):
         index = select(a['features_raw'], a['weights'], 'paper', parse_order(x['final']['order']), base['tol']).index
         if (-1 if index is None else int(index)) != int(a['selected']) or x['final']['index'] != (None if index is None else int(index)):
             problems.append(f"{where}: replay selects {index}, traced {int(a['selected'])}, controller {x['final']['index']}")
-        if strip_geometry(r) != strip_geometry(x):
+        if comparable(r) != comparable(x):
             problems.append(f'{where}: record differs from the controller re-executed on the trace')
+    for r in records[len(events):len(events) + 1]:
+        problems += [f'trailing record: {p}' for p in trailing_problems(r, spec, events)]
+    problems += [f'replay diverged at {d}' for d in (llm.diverged[:5] if llm else [])]
+    failed = [r['event'] for r in records if isinstance(r, dict) and str(r.get('source')).startswith('fallback:worker_')]
+    if failed and full_spec(spec)['kind'] != 'react':
+        problems.append(f'the worker of this deterministic controller failed at events {failed[:5]}: '
+                        'its decisions are not the controller ones, the wall is no valid result')
     report = {'ok': not problems, 'problems': problems, 'records': len(records),
               'decision_points': sum(x['decision_point'] for x in expected),
               'switches': sum(x['final']['switched'] for x in expected)}
     if len(records) > len(events):
         report['unverified_trailing_records'] = len(records) - len(events)
+    if legacy:
+        report['legacy_records'] = True
     return report
+
+
+RECORD_KEYS = {'event', 'step', 'phase', 'sample_trial', 'side', 'controller', 'decision_point', 'n_outcomes',
+               'observation', 'source', 'final'}
+
+
+def trailing_problems(record, spec, events):
+    """The record of a selection whose event a stopped run never wrote cannot be re-executed; it must
+    still be the next call of the receipt's controller: the next event number, a well-formed record
+    of that spec whose observation is for its own decision key and, if the last traced attempt has
+    its left side only, that attempt's right side."""
+    if not isinstance(record, dict) or not RECORD_KEYS <= set(record):
+        return ['not a controller record']
+    problems, obs, final = [], record['observation'], record['final']
+    if record['event'] != len(events) or record['controller'] != spec:
+        problems.append(f"event {record['event']} of {record['controller']}, expected {len(events)} of {spec}")
+    if not isinstance(obs, dict) or decision_key(record) != tuple(obs.get(k) for k in ('step', 'phase', 'sample_trial', 'side')):
+        problems.append(f'its observation is not for {decision_key(record)}')
+    if not isinstance(final, dict) or parse_order(final.get('order')) is None:
+        problems.append('its final order is not a permutation of 0..4')
+    if events:
+        meta = events[-1][0]
+        if meta['construction_order'] == 'two_sides' and meta['side'] == 'left' and \
+                decision_key(record) != (meta['step'], meta['phase'], meta['sample_trial'], 'right'):
+            problems.append(f"it is not the right side of the attempt of event {meta['event']}")
+    return problems
 
 
 OFFLINE = [{'kind': 'null'}, {'kind': 'random', 'seed': 1}, {'kind': 'rule'},

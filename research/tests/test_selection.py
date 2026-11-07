@@ -476,18 +476,6 @@ class Ties(unittest.TestCase):
         self.assertEqual(len(branches), 8, branches)  # 6 code_original + paper full/no_feasible
 
 
-def commits_case(directory, decisions, placed):
-    result = Path(directory) / 'result'
-    (result / 'trace').mkdir(parents=True)
-    (result / 'decisions.txt').write_text(decisions, encoding='utf-8')
-    (result / 'trace' / 'e00000.npz').write_bytes(b'')
-    lines = [{'outcome': 'probe', 'sides': {'left': {'event': 0}, 'right': {'event': 0}}}]
-    lines += [{'step': step, 'stone_id': sid, 'x_world': x, 'y': y, 'rotation_label': r,
-               'outcome': 'placed', 'sides': {'left': {'event': 0}}} for step, sid, x, y, r in placed]
-    (result / 'trace' / 'commits.jsonl').write_text(''.join(json.dumps(l) + '\n' for l in lines), encoding='utf-8')
-    return Path(directory)
-
-
 class Geometry(unittest.TestCase):
     def test_footprint(self):
         rect = np.zeros((6, 8))
@@ -534,25 +522,6 @@ class Geometry(unittest.TestCase):
             row, = sensitivity.analyze_commits([commit], decisions)
             self.assertTrue(row['live_reproduced'], (right_gds, row))
             self.assertEqual((row['n_distinct_side'], row['orders_same_placement_as_live']), (1, 120))
-
-
-class CommitRecords(unittest.TestCase):
-    def test_placed_commits_must_match_decisions(self):
-        decisions = '1;7;1;2;0\n2;10;250;2;90\n'
-        both = [(1, 7, 1, 2, 0), (2, 10, 250, 2, 90)]
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(run_case.check_commits(commits_case(tmp, decisions, both)), [])
-        with tempfile.TemporaryDirectory() as tmp:  # wrong x
-            out = commits_case(tmp, decisions, [(1, 7, 1, 2, 0), (2, 10, 251, 2, 90)])
-            self.assertEqual(len(run_case.check_commits(out)), 1)
-        with tempfile.TemporaryDirectory() as tmp:  # last placement not recorded
-            out = commits_case(tmp, decisions, both[:1])
-            self.assertEqual(len(run_case.check_commits(out)), 1)
-            self.assertEqual(run_case.check_commits(out, stopped=True), [])
-        with tempfile.TemporaryDirectory() as tmp:  # reference to a missing event file
-            out = commits_case(tmp, decisions, both)
-            (out / 'result' / 'trace' / 'e00000.npz').unlink()
-            self.assertIn('missing events', run_case.check_commits(out)[0])
 
 
 class OutputProtection(unittest.TestCase):

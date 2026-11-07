@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from Stonepacker2D.stack.selection import footprint, load_trace, select  # noqa: E402
+from Stonepacker2D.stack.selection import footprint, load_trace, published_events, select, to_world  # noqa: E402
 
 
 def result_dirs(run):
@@ -28,12 +28,142 @@ def result_dirs(run):
 def load_result(result):
     trace = Path(result) / 'trace'
     events = {}
-    for p in sorted(trace.glob('e*.npz')):
-        if not p.name.endswith('.tmp.npz'):
-            meta, arrays = load_trace(p)
-            events[meta['event']] = (meta, arrays)
+    for p in published_events(trace):
+        meta, arrays = load_trace(p)
+        events[meta['event']] = (meta, arrays)
     lines = (trace / 'commits.jsonl').read_text(encoding='utf-8').splitlines()
     return events, [json.loads(line) for line in lines]
+
+
+def selected(meta, a):
+    """(index, weighted GDS) the traced policy selects in an event; (None, -1.0) without a feasible
+    candidate, as build_wall's construct_one_step returns it."""
+    p = meta['policy']
+    s = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'])
+    return (None, -1.0) if s.index is None else (int(s.index), float(s.weighted[s.index, 1]))
+
+
+def sides_of(construction_order):
+    return {'left', 'right'} if construction_order == 'two_sides' else {'right' if construction_order == 'from_right' else 'left'}
+
+
+def chosen_side(gds, construction_order):
+    """(side, tie) by build_wall's rule from {side: weighted GDS}: right only if strictly greater."""
+    if construction_order != 'two_sides':
+        return next(iter(sides_of(construction_order))), False
+    return ('right' if gds['right'] > gds['left'] else 'left'), gds['right'] == gds['left']
+
+
+def candidate_pose(a, k):
+    return int(a['stone_id'][k]), int(a['x_world'][k]), int(a['y'][k]), int(a['rotation_world'][k]), int(a['rotation'][k])
+
+
+def chain_problems(result, events, stopped=False):
+    """The trace of one result directory as build_wall writes it, per selection: controller record,
+    event eNNNNN.npz, and per sampling attempt a decisions.txt line (placed only), then a commit.
+
+    events: (meta, arrays) of the published events in order. Every event must be part of a commit
+    and every commit side must name its event, carry that event's step/phase/trial/side/sampled
+    stones and hold what the traced policy selects there (index, ok, weighted GDS); the chosen side
+    follows build_wall's rule (right only with a strictly greater weighted GDS); the committed pose
+    and rotation label are the selected candidate's; decisions.txt lists the placed commits. Each
+    event's ids are unique ints, nb_stones sampled stones, candidate i is sampled stone i % n at
+    rotation i // n * 90, world poses follow to_world, and sampled plus remaining stones are the
+    inventory left by earlier placements. A run stopped by the launcher (stopped) may end only in a
+    prefix of that write order: events of one attempt without its commit, then (once all its sides
+    are traced) one decisions.txt line with that attempt's chosen candidate, and one unpublished
+    eNNNNN.tmp.npz.
+    """
+    problems, numbers = [], [m['event'] for m, _ in events]
+    if numbers != list(range(len(events))):
+        problems.append(f'trace events are not numbered 0..{len(events) - 1}')
+    trace = Path(result) / 'trace'
+    unpublished = sorted(p.name for p in trace.glob('e*.tmp.npz'))
+    if unpublished and not (stopped and unpublished == [f'e{len(events):05d}.tmp.npz']):
+        problems.append(f'unpublished trace events {unpublished[:3]}')
+    path = trace / 'commits.jsonl'
+    commits = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
+    if not path.exists() and not stopped:
+        problems.append('no trace/commits.jsonl')
+    by_event, referenced = dict(zip(numbers, events)), []
+    for c in commits:
+        where = f"commit step {c['step']} {c['phase']} trial {c['sample_trial']}"
+        order = c['construction_order']
+        if set(c['sides']) != sides_of(order):
+            problems.append(f'{where}: sides {sorted(c["sides"])} for {order}')
+            continue
+        picks = {}
+        for name, s in c['sides'].items():
+            referenced.append(s['event'])
+            if s['event'] not in by_event:
+                problems.append(f"{where}: references missing event {s['event']}")
+                continue
+            meta, a = by_event[s['event']]
+            if (meta['step'], meta['phase'], meta['sample_trial'], meta['side'], meta['construction_order'], meta['vendor_type']) \
+                    != (c['step'], c['phase'], c['sample_trial'], name, order, c['vendor_type']) or a['sampled_ids'].tolist() != c['sampled_ids']:
+                problems.append(f"{where} {name}: event {s['event']} is a different selection")
+            index, gds = selected(meta, a)
+            if index != (None if int(a['selected']) == -1 else int(a['selected'])):
+                problems.append(f"{where} {name}: traced pick {int(a['selected'])}, the traced policy selects {index}")
+            if (s['index'], s['ok'], s['gds_weighted']) != (index, index is not None, gds):
+                problems.append(f"{where} {name}: commit holds {s['index']}, the event selects {index}")
+            picks[name] = (index, gds, a)
+        if len(picks) != len(c['sides']):
+            continue
+        chosen, tie = chosen_side({k: v[1] for k, v in picks.items()}, order)
+        if (c['chosen_side'], c['side_tie']) != (chosen, tie):
+            problems.append(f"{where}: chosen side {c['chosen_side']}, build_wall's rule gives {chosen}")
+        index, _, a = picks[chosen]
+        if 'stone_id' in c:
+            pose = None if index is None else candidate_pose(a, index)
+            if pose != (c['stone_id'], c['x_world'], c['y'], c['rotation_world'], c['rotation_label']):
+                problems.append(f'{where}: committed pose is not the selected candidate {pose}')
+    if len(set(referenced)) != len(referenced):
+        problems.append('an event is part of more than one commit side')
+    loose = [by_event[e] for e in sorted(set(numbers) - set(referenced))]
+    tail = {(m['step'], m['phase'], m['sample_trial'], m['construction_order']) for m, _ in loose}
+    if loose and not (stopped and loose[0][0]['event'] > max(referenced, default=-1) and len(tail) == 1
+                      and len({m['side'] for m, _ in loose}) == len(loose)):
+        problems.append(f"events {[m['event'] for m, _ in loose][:5]} belong to no commit")
+
+    decisions = Path(result) / 'decisions.txt'
+    rows = [l.split(';') for l in decisions.read_text(encoding='utf-8').splitlines()] if decisions.exists() else []
+    placed = [c for c in commits if c['outcome'] == 'placed']
+    if rows[:len(placed)] != [[str(c[k]) for k in ('step', 'stone_id', 'x_world', 'y', 'rotation_label')] for c in placed]:
+        problems.append(f'decisions.txt does not list the {len(placed)} placed commits')
+    pending = None  # the decisions.txt line of the unfinished attempt, once all its sides are traced
+    if len(tail) == 1 and {m['side'] for m, _ in loose} == sides_of(next(iter(tail))[3]):
+        picks = {m['side']: (*selected(m, a), a) for m, a in loose}
+        index, _, a = picks[chosen_side({k: v[1] for k, v in picks.items()}, next(iter(tail))[3])[0]]
+        pose = None if index is None else candidate_pose(a, index)
+        pending = None if pose is None else [str(loose[0][0]['step']), *map(str, (pose[0], pose[1], pose[2], pose[4]))]
+    extra = rows[len(placed):]
+    if extra and not (stopped and len(extra) == 1 and extra[0] == pending):
+        problems.append(f'decisions.txt has {len(extra)} placements without a commit and its selected candidate')
+
+    gone, start = set(), None
+    last_event = {max(s['event'] for s in c['sides'].values()): c for c in placed if c['sides']}
+    for meta, a in events:
+        where, sampled, remaining = f"event {meta['event']}", a['sampled_ids'], a['inventory_ids']
+        n = len(sampled)
+        if sampled.dtype.kind not in 'iu' or (remaining.size and remaining.dtype.kind not in 'iu'):
+            problems.append(f'{where}: stone ids are not integers')
+        s_ids, r_ids = sampled.tolist(), remaining.tolist()
+        if len(set(s_ids)) != n or len(set(r_ids)) != len(r_ids) or set(s_ids) & set(r_ids):
+            problems.append(f'{where}: sampled and remaining stone ids are not distinct')
+        start = set(s_ids) | set(r_ids) if start is None else start
+        if set(s_ids) | set(r_ids) != start - gone:
+            problems.append(f'{where}: sampled and remaining stones are not the inventory left by earlier placements')
+        i = np.arange(len(a['stone_id']))
+        if n != meta['nb_stones'] or not n or len(i) % n or not ((a['stone_id'] == sampled[i % n]).all()
+                                                               and (a['rotation'] == i // n * 90).all()):
+            problems.append(f'{where}: candidates do not follow the {n} sampled stones and their rotations')
+        x_world, rotation_world = to_world(meta['side'], a['x'], a['rotation'], a['width'], meta['world_width'])
+        if not (np.array_equal(x_world, a['x_world']) and np.array_equal(rotation_world, a['rotation_world'])):
+            problems.append(f'{where}: world poses do not follow the evaluation-frame poses')
+        if meta['event'] in last_event:
+            gone.add(last_event[meta['event']]['stone_id'])
+    return problems
 
 
 def check_result(result):

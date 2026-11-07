@@ -147,33 +147,26 @@ def terminate(pid, settle_seconds=30):
 
 
 def check_commits(output, stopped=False):
-    """Placed attempts in trace/commits.jsonl must match decisions.txt line for line and point
-    at existing filter events. A run stopped by the launcher may lag decisions.txt by one line."""
+    """Every result directory's trace chain (check_case.chain_problems): events, commits.jsonl and
+    decisions.txt agree selection by selection; a run stopped by the launcher may end in a prefix
+    of build_wall's write order."""
+    import check_case
+    from Stonepacker2D.stack.selection import load_trace, published_events
     problems = []
-    for decisions in output.rglob('decisions.txt'):
-        commits_file = decisions.parent / 'trace' / 'commits.jsonl'
-        if not commits_file.exists():
-            problems.append(f'{commits_file.parent}: no commits.jsonl')
+    for result in check_case.result_dirs(output):
+        trace = result / 'trace'
+        if not (trace / 'commits.jsonl').exists() and not stopped:
+            problems.append(f'{trace}: no commits.jsonl')
             continue
-        commits = [json.loads(line) for line in commits_file.read_text(encoding='utf-8').splitlines()]
-        rows = [line.split(';') for line in decisions.read_text(encoding='utf-8').splitlines()]
-        placed = [[str(c[k]) for k in ('step', 'stone_id', 'x_world', 'y', 'rotation_label')]
-                  for c in commits if c['outcome'] == 'placed']
-        if placed != rows[:len(placed)] or not 0 <= len(rows) - len(placed) <= int(stopped):
-            problems.append(f'{decisions}: {len(placed)} placed commits do not match {len(rows)} decisions')
-        events = {int(p.stem[1:]) for p in (decisions.parent / 'trace').glob('e*.npz')
-                  if not p.name.endswith('.tmp.npz')}
-        missing = {side['event'] for c in commits for side in c['sides'].values()} - events
-        if missing:
-            problems.append(f'{commits_file}: references missing events {sorted(missing)[:5]}')
+        events = [load_trace(p) for p in published_events(trace)]
+        problems += [f'{result}: {p}' for p in check_case.chain_problems(result, events, stopped)]
     return problems
 
 
 def check_trace(output, stopped=False):
     """Trace files must exist, be numbered without gaps and load; otherwise the data is incomplete."""
-    from Stonepacker2D.stack.selection import load_trace
-    files = sorted(output.rglob('trace/e*.npz'))
-    files = [f for f in files if not f.name.endswith('.tmp.npz')]
+    from Stonepacker2D.stack.selection import load_trace, published_events
+    files = [Path(p) for t in sorted(output.rglob('trace')) if t.is_dir() for p in published_events(t)]
     numbers = [int(f.stem[1:]) for f in files]
     problems = []
     if not files:
@@ -185,7 +178,8 @@ def check_trace(output, stopped=False):
             load_trace(f)
         except Exception as error:  # any unreadable file makes the run incomplete
             problems.append(f'{f.name}: {error!r}')
-    problems += check_commits(output, stopped)
+    if not problems:  # the chain check needs every event loadable
+        problems += check_commits(output, stopped)
     return {'files': len(files), 'ok': not problems, 'problems': problems}
 
 
@@ -197,6 +191,7 @@ def check_controller(output, trace, stopped=False):
     try:
         reports = [controllers.check(r, stopped=stopped) for r in check_case.result_dirs(output)]
         problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
+        problems += ['controller records without tool_table_sha256 (written before P2)' for r in reports if r.get('legacy_records')]
     except Exception as error:  # an unreadable record or trace leaves the run unverified
         reports, problems = [], [f'controller check failed: {error!r}']
     return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems,

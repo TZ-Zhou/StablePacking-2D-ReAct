@@ -165,6 +165,9 @@ def controlled_policy(policy, controller, context):
     if policy['policy'] != 'paper':
         raise ValueError(f"a filter controller needs the paper policy, got {policy['policy']}")
     base = dict(policy)
+    if set(base) != {'policy', 'order', 'tol'} or type(base['tol']) is not float or not (base['order'] is None or (
+            type(base['order']) is tuple and all(type(c) is int for c in base['order']) and sorted(base['order']) == [0, 1, 2, 3, 4])):
+        raise ValueError(f'a filter controller needs a base policy {{policy, order: None or a tuple of the ints 0..4, tol: float}}, got {base}')
     (names, values), np_state, py_state, inputs = _settings(), np.random.get_state(), random.getstate(), _digest(context)
     new = controller(types.MappingProxyType(dict(base)), detached_inputs(context))
     after = np.random.get_state()
@@ -275,6 +278,14 @@ def write_trace(directory, meta, **arrays):
     tmp = path[:-4] + '.tmp.npz'
     np.savez_compressed(tmp, meta=json.dumps(meta), **arrays)
     os.replace(tmp, path)
+
+
+def published_events(directory):
+    """The event files write_trace has published (eNNNNN.npz), sorted; an eNNNNN.tmp.npz left by a
+    run stopped while writing is not one. Every trace reader lists events through this."""
+    names = os.listdir(directory) if os.path.isdir(directory) else []
+    return sorted(os.path.join(directory, n) for n in names if len(n) == 10 and n[0] == 'e' and n[1:6].isdigit()
+                  and n.endswith('.npz'))
 
 
 def load_trace(path):
