@@ -9,8 +9,8 @@ from ..entity import Brick,Stone
 from .place_stone import place_one_stone
 from multiprocessing import Pool
 import pickle
-from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace
-from .selection import select, filter_log, write_trace, next_event, to_world, footprint, FEATURE_NAMES
+from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace, get_filter_controller
+from .selection import select, filter_log, write_trace, next_event, to_world, footprint, controlled_policy, FEATURE_NAMES
 from ..utils.logger import get_main_logger
 from ..utils.plot import save_matrix_plot, save_matrix
 from ..evaluate import evaluate_kine
@@ -21,7 +21,7 @@ import os
 import pandas as pd
 sequential_run = False
 
-def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection):
+def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection, policy=None):
     """Snapshot of one selection decision (inputs + live result) for offline replay; returns its event id.
 
     x, y, rotation and wall are in the evaluation frame (np.fliplr for side='right');
@@ -33,7 +33,7 @@ def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distance
     rotation = np.arange(len(all_bricks)) // len(current_bricks) * 90
     width = np.array([b.width for b in all_bricks])
     x_world, rotation_world = to_world(meta['side'], np.array(xs), rotation, width, all_bricks[0]._w)
-    meta = {**meta, 'run_id': get_trace(), 'event': event, 'policy': get_filter_policy(meta['step']),
+    meta = {**meta, 'run_id': get_trace(), 'event': event, 'policy': get_filter_policy(meta['step']) if policy is None else policy,
             'frame': 'mirrored' if meta['side'] == 'right' else 'world', 'world_width': all_bricks[0]._w,
             'branch': selection.branch, 'stages': [s.tolist() for s in selection.stages],
             'np_rng': {'pos': int(np_state[2]), 'has_gauss': int(np_state[3]), 'cached_gaussian': float(np_state[4])},
@@ -416,14 +416,20 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             filters_matrix_ori = filters_matrix.copy()
             selection_weights = get_selection_weights()
             weights = [selection_weights[name] for name in FEATURE_NAMES]
-            selection = select(filters_matrix_ori, weights, **get_filter_policy(construction_step_i))
+            _policy = controlled_policy(get_filter_policy(construction_step_i), get_filter_controller(), {
+                'step': construction_step_i, 'side': 'right' if from_right else 'left', 'phase': _phase,
+                'sample_trial': sample_trial, 'wall': base.matrix, 'all_bricks': all_bricks,
+                'sampled_ids': [b.id for b in current_bricks], 'inventory_ids': list(vendor.stones.keys()),
+                'x': min_x_list, 'y': min_y_list, 'distance': min_distance_list,
+                'features_raw': filters_matrix_ori, 'weights': weights})
+            selection = select(filters_matrix_ori, weights, **_policy)
             if get_trace() is not None:
                 _side = 'right' if from_right else 'left'
                 _attempt_events[_side] = trace_event({'step': construction_step_i, 'side': _side,
                              'phase': _phase, 'sample_trial': sample_trial, 'vendor_type': vendor_type,
                              'construction_order': construction_order, 'nb_stones': nb_stones},
                             base, vendor, current_bricks, all_bricks, min_x_list, min_y_list,
-                            min_distance_list, filters_matrix_ori, weights, selection)
+                            min_distance_list, filters_matrix_ori, weights, selection, _policy)
             filters_matrix = selection.weighted
             min_index = selection.index
             with open(get_dir()+"filter.txt", "a+") as f:

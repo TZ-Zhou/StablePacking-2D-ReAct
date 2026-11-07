@@ -2,7 +2,7 @@
 
 Usage: python -B research/run_case.py <case> <run name> [--policy code_original|paper]
                                       [--order 3,0,2,1,4] [--tol 1e-9] [--placements N]
-                                      [--seed S] [--switch STEP=a,b,c,d,e ...]
+                                      [--seed S] [--switch STEP=a,b,c,d,e ...] [--controller JSON]
 
 Staging follows baseline/validation/run_original_case.py (copied inputs, Windows main guard,
 shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py);
@@ -10,6 +10,8 @@ those baseline files stay frozen and are only read. Output goes to a new researc
 With --placements N the case is stopped once decisions.txt has N committed placements.
 --switch makes a one-step counterfactual branch: same seed and code, so every decision before
 STEP should repeat the run without it; verify that with check_case.py --compare.
+--controller '{"kind": "null"}' (research/controllers.py) picks the order at each selection;
+verify its records with controllers.py check <run>.
 """
 import argparse
 import hashlib
@@ -69,6 +71,11 @@ def stage(source, policy, seed=None):
               "    from Stonepacker2D.utils.constant import set_filter_policy, set_trace\n"
               f"    set_filter_policy(**{policy['filter']!r})\n"
               f"    set_trace({policy['run_id']!r})\n")
+    if policy.get('controller') is not None:
+        header += (f"    __import__('sys').path.insert(0, {str(REPO / 'research')!r})\n"
+                   "    from controllers import make_controller\n"
+                   "    from Stonepacker2D.utils.constant import set_filter_controller\n"
+                   f"    set_filter_controller(make_controller({policy['controller']!r}))\n")
     body = ''.join('    ' + l if l.strip() else l for l in safe[boundary:].splitlines(keepends=True))
     if seed is not None:
         call = '    seed_everything()\n'
@@ -95,7 +102,8 @@ def committed_placements(output):
 def code_fingerprint(root=REPO):
     """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
     files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
-        Path(root) / 'research' / 'run_case.py', Path(root) / 'baseline' / 'validation' / 'windows_case_runtime.py']
+        Path(root) / 'research' / name for name in ('run_case.py', 'controllers.py', 'failure_analysis.py', 'campaign.py')] + [
+        Path(root) / 'baseline' / 'validation' / 'windows_case_runtime.py']
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
 
@@ -180,6 +188,20 @@ def check_trace(output, stopped=False):
     return {'files': len(files), 'ok': not problems, 'problems': problems}
 
 
+def check_controller(output, trace):
+    """A controller run is complete only if every result's controller records equal the receipt's
+    controller re-executed on the trace (controllers.check)."""
+    import check_case
+    import controllers
+    try:
+        reports = [controllers.check(r) for r in check_case.result_dirs(output)]
+        problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
+    except Exception as error:  # an unreadable record or trace leaves the run unverified
+        reports, problems = [], [f'controller check failed: {error!r}']
+    return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems,
+            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches')} for r in reports]}
+
+
 def final_status(process_status, trace, termination):
     if termination is not None and not termination['verified']:
         return 'TERMINATION_FAILED'
@@ -201,7 +223,17 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
     parser.add_argument('--switch', action='append', default=[], metavar='STEP=a,b,c,d,e',
                         help='paper policy only: use this order at construction step STEP (every sampling trial of that step), the --order elsewhere; repeatable')
+    parser.add_argument('--controller', type=json.loads, metavar='JSON',
+                        help='paper policy only: research/controllers.py spec, e.g. {"kind": "random", "seed": 7}')
     args = parser.parse_args(argv)
+    if args.controller is not None:
+        if args.policy != 'paper' or args.switch or args.no_trace:
+            parser.error('--controller needs --policy paper, tracing and no --switch')
+        import controllers
+        try:
+            controllers.make_controller(args.controller, sink=lambda record: None)
+        except (ValueError, TypeError, NotImplementedError) as error:
+            parser.error(f'--controller: {error}')
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
     output = prepare_output(args.name)
@@ -217,8 +249,8 @@ def main(argv=None):
         filter_policy['switch'] = parse_switch(args.switch)
         if args.policy != 'paper':
             parser.error('--switch needs --policy paper')
-    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name},
-                   seed=args.seed)
+    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name,
+                                                          'controller': args.controller}, seed=args.seed)
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
@@ -229,7 +261,8 @@ def main(argv=None):
     git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
     receipt = {
         'case': args.case, 'run_id': args.name, 'source': source_name, 'source_sha256': digest(original),
-        'staged_sha256': digest(target), 'filter_policy': filter_policy, 'trace': not args.no_trace,
+        'staged_sha256': digest(target), 'filter_policy': filter_policy, 'controller': args.controller,
+        'trace': not args.no_trace,
         'seed': 'seed_everything() default in source (20)' if args.seed is None else args.seed,
         'python_hash_seed_launcher': 20, 'placements_limit': args.placements,
         'git_head': git('rev-parse', 'HEAD'), 'git_branch': git('branch', '--show-current'),
@@ -263,6 +296,8 @@ def main(argv=None):
     finally:
         trace = ({'ok': True, 'skipped': 'no-trace control run'} if args.no_trace
                  else check_trace(output, stopped=termination is not None))
+        if args.controller is not None and process_status == 'PROCESS_PASS' and trace['ok']:
+            trace = check_controller(output, trace)
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
                        elapsed_seconds=round(time.monotonic() - start, 3),

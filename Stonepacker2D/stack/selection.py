@@ -9,11 +9,16 @@ baseline-author-original): filter order[0] is applied twice, order[4] is never r
 fallback/final sums use fixed columns. policy="paper" follows Algorithm 2 of Wang et al.
 (EJOR 2024): fixed LLC>0 gate, then each of the five filters once in the given order.
 """
+import copy
 import hashlib
 import itertools
 import json
 import os
+import pickle
+import random
+import types
 from collections import namedtuple
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -109,6 +114,60 @@ def _paper(raw, weighted, order, tol):
         stages.append(survivors)
     score = weighted[np.ix_(survivors, cols)].sum(axis=1)
     return survivors[np.argmax(score)], stages, 'full'
+
+
+def _digest(context):
+    """Pickled bytes of the real selection inputs: values, shapes, dtypes and every brick attribute."""
+    return hashlib.sha1(pickle.dumps(context, protocol=4)).hexdigest()
+
+
+def detached_inputs(context):
+    """What a controller receives: read-only array copies and deep-copied bricks, never the objects
+    build_wall goes on to select from and place."""
+    out = {}
+    for key, value in context.items():
+        if key == 'all_bricks':
+            out[key] = copy.deepcopy(value)
+        elif isinstance(value, (np.ndarray, list, tuple)):
+            out[key] = np.array(value)
+            out[key].flags.writeable = False
+        else:
+            out[key] = value
+    return out
+
+
+def controlled_policy(policy, controller, context):
+    """The filter policy of one selection after an optional controller.
+
+    The controller gets a read-only copy of the base policy and detached copies of the selection
+    inputs (detached_inputs) and returns a mapping equal to the base in every key but 'order', whose
+    order is a permutation of 0..4 given as ints. Afterwards the base policy object, the real
+    inputs and the global numpy and Python RNGs (they drive stone sampling) must be unchanged.
+    Anything else raises. This catches mistakes; it is not a sandbox for in-process code.
+    """
+    if controller is None:
+        return policy
+    if policy['policy'] != 'paper':
+        raise ValueError(f"a filter controller needs the paper policy, got {policy['policy']}")
+    base = dict(policy)
+    np_state, py_state, inputs = np.random.get_state(), random.getstate(), _digest(context)
+    new = controller(types.MappingProxyType(dict(base)), detached_inputs(context))
+    after = np.random.get_state()
+    if not (np_state[0] == after[0] and np.array_equal(np_state[1], after[1]) and np_state[2:] == after[2:]
+            and py_state == random.getstate()):
+        raise RuntimeError('filter controller changed the global RNG state')
+    if _digest(context) != inputs:
+        raise RuntimeError('filter controller changed the selection inputs')
+    if dict(policy) != base:
+        raise RuntimeError('filter controller changed the base policy')
+    if not isinstance(new, Mapping) or set(new) != set(base) or any(new[k] != base[k] for k in base if k != 'order'):
+        raise ValueError(f'a filter controller may change only the order: {base} -> {new}')
+    order = new['order']
+    if order == base['order']:
+        return policy
+    if not isinstance(order, (tuple, list)) or any(type(c) is not int for c in order) or sorted(order) != [0, 1, 2, 3, 4]:
+        raise ValueError(f'controller order must be a permutation of the ints 0..4, got {order!r}')
+    return {**base, 'order': tuple(order)}
 
 
 def to_world(side, x, rotation, width, world_width):
