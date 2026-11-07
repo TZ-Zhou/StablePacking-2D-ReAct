@@ -370,6 +370,22 @@ class LauncherSafety(unittest.TestCase):
         real = run_case.code_fingerprint()
         self.assertIn('Stonepacker2D/stack/selection.py', real)
         self.assertIn('research/run_case.py', real)
+        self.assertIn('research/validation/windows_case_runtime.py', real)
+
+    def test_launcher_tools_reach_a_clone_and_need_no_baseline(self):
+        # A fresh clone has no baseline/: everything run_case executes or reads lives in research/validation.
+        self.assertEqual(run_case.VALIDATION, REPO / 'research' / 'validation')
+        tools = ('windows_case_runtime.py', 'verify_environment.py', 'environment-manifest.json')
+        for tool in tools:
+            self.assertTrue((run_case.VALIDATION / tool).is_file(), tool)
+            ignored = subprocess.run(['git', 'check-ignore', '--no-index', '-q', f'research/validation/{tool}'], cwd=REPO)
+            self.assertEqual(ignored.returncode, 1, f'{tool} would not reach a clone')
+        for source in ('research/run_case.py', 'research/validation/verify_environment.py'):
+            code = (REPO / source).read_text(encoding='utf-8')
+            self.assertNotRegex(code, r"['\"]baseline['\"]|baseline[/\\]validation|Users[/\\]", source)
+        manifest = json.loads((run_case.VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(run_case.ENV_PREFIX, Path(manifest['prefix']))
+        self.assertTrue({'python', 'platform', 'packages', 'conda_records'} <= set(manifest))
 
 
 class MirrorFrame(unittest.TestCase):

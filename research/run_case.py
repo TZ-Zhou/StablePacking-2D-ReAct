@@ -4,9 +4,10 @@ Usage: python -B research/run_case.py <case> <run name> [--policy code_original|
                                       [--order 3,0,2,1,4] [--tol 1e-9] [--placements N]
                                       [--seed S] [--switch STEP=a,b,c,d,e ...] [--controller JSON]
 
-Staging follows baseline/validation/run_original_case.py (copied inputs, Windows main guard,
-shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py);
-those baseline files stay frozen and are only read. Output goes to a new research/runs/<name>.
+Staging follows the frozen baseline run_original_case.py (copied inputs, Windows main guard,
+shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py).
+research/validation/ holds tracked copies of the two baseline tools used here and the registered
+environment manifest; baseline/ itself is never read. Output goes to a new research/runs/<name>.
 With --placements N the case is stopped once decisions.txt has N committed placements.
 --switch makes a one-step counterfactual branch: same seed and code, so every decision before
 STEP should repeat the run without it; verify that with check_case.py --compare.
@@ -25,8 +26,8 @@ import time
 
 REPO = Path(__file__).resolve().parents[1]
 RUNS = REPO / 'research' / 'runs'
-VALIDATION = REPO / 'baseline' / 'validation'
-ENV_PREFIX = Path(r'C:\Users\user\miniconda3\envs\stablepacking-baseline')
+VALIDATION = REPO / 'research' / 'validation'
+ENV_PREFIX = Path(json.loads((VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix'])
 CASES = {  # case -> (entry script, original number of walls in its batch)
     'bricks': ('Tests/Bricks/run.py', 1),
     'almeida-r': ('Tests/Almeida/R/run.py', 1),
@@ -103,7 +104,7 @@ def code_fingerprint(root=REPO):
     """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
     files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
         Path(root) / 'research' / name for name in ('run_case.py', 'controllers.py', 'failure_analysis.py', 'campaign.py')] + [
-        Path(root) / 'baseline' / 'validation' / 'windows_case_runtime.py']
+        Path(root) / 'research' / 'validation' / 'windows_case_runtime.py']
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
 
