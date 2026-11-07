@@ -25,10 +25,15 @@ pre-stabilization proxy and exists only live, where the stone pixels are at hand
 
 Every call is one line of <result>/trace/controller.jsonl: event, decision key (step, phase,
 sample_trial, side), observation, ReAct steps (status, thought, tool, arguments, feedback) and the
-final order with the candidate it selects. check() re-executes the controller named in the
-receipt on the traced inputs and compares every record.
+final order with the candidate it selects; live records also keep each outcome's candidate pixels
+(outcome_pixels). Every request the client sends is one line of trace/transport.jsonl, the
+client's own ledger (request hash, transport status, reply hash), next to the worker lifecycle.
+check() re-executes the controller named in the receipt on the traced inputs and compares every
+record and ledger line; it reports replay consistency (ok), Geometry Validation and provenance
+(ledger, run manifest) separately, and only all three complete give the verdict PASS.
 """
 import argparse
+import base64
 import copy
 import hashlib
 import json
@@ -85,6 +90,32 @@ def plain(v):
     return None if isinstance(v, float) and not np.isfinite(v) else v
 
 
+def encode_pixels(mask):
+    """A candidate's pixels as a record keeps them: origin (x, y) and shape of their bounding box
+    and the box packed into base64; None without pixels."""
+    rows, cols = np.nonzero(mask)
+    if not len(rows):
+        return None
+    crop = mask[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    return {'origin': [int(cols.min()), int(rows.min())], 'shape': [int(n) for n in crop.shape],
+            'bits': base64.b64encode(np.packbits(crop)).decode()}
+
+
+def decode_pixels(p, shape):
+    """The wall-sized mask of encode_pixels' output, None if it is malformed or off the wall."""
+    try:
+        (x, y), (h, w) = p['origin'], p['shape']
+        bits = np.unpackbits(np.frombuffer(base64.b64decode(p['bits'], validate=True), np.uint8))
+        if not (set(p) == {'origin', 'shape', 'bits'} and all(type(v) is int for v in (x, y, h, w)) and h > 0 and w > 0
+                and len(bits) == -(-h * w // 8) * 8 and 0 <= y <= shape[0] - h and 0 <= x <= shape[1] - w):
+            return None
+        mask = np.zeros(shape, bool)
+        mask[y:y + h, x:x + w] = bits[:h * w].reshape(h, w).astype(bool)
+        return mask
+    except Exception:  # a malformed record is a failed check, never a crash
+        return None
+
+
 def placement_geometry(wall, pixels):
     """Change of wall_state when pixels (bool, wall-sized) are filled; no physics, no stabilization."""
     after = wall.copy()
@@ -121,12 +152,13 @@ class Observer:
         paper = None if paper is None else int(paper)
         classes = sorted(by_index, key=lambda i: (i != paper, -len(by_index[i]), i))
         remaining = {int(s) for s in ctx['inventory_ids']} | set(sampled)
-        outcomes = []
+        outcomes, pixels = [], None if ctx['all_bricks'] is None else []
         for k, i in enumerate(classes):
             geometry = None
             if ctx['all_bricks'] is not None:
                 moved = ctx['all_bricks'][i].transformed([ctx['x'][i], ctx['y'][i]])
                 geometry = None if moved is None else placement_geometry(np.asarray(ctx['wall']), moved.matrix != 0)
+                pixels.append(None if moved is None else encode_pixels(np.asarray(moved.matrix) != 0))
             outcomes.append({'id': k, 'stone': self.label(stone[i]), 'rotation': int(rotation[i]),
                              'x': int(ctx['x'][i]), 'y': int(ctx['y'][i]), 'n_orders': len(by_index[i]),
                              'example_order': key(min(by_index[i])), 'is_paper': i == paper,
@@ -147,7 +179,7 @@ class Observer:
                'outcomes': outcomes}
         obs = plain(obs)  # also detaches the memory entries updated below
         if self.geometry is not None:
-            self.geometry.fill(obs)
+            self.geometry.fill(obs, classes)
         for s in obs['sampled']:  # memory is updated after the observation, so it only holds the past
             m = self.stones.setdefault(s['stone'], {'times_sampled': 0, 'min_feasible_rotations': 4})
             m.update(times_sampled=m['times_sampled'] + 1, last_step=obs['step'],
@@ -155,7 +187,7 @@ class Observer:
                      min_feasible_rotations=min(m['min_feasible_rotations'], s['feasible_rotations']))
         self.recent = (self.recent + [{'step': obs['step'], **obs['now']}])[-3:]
         info = {'classes': classes, 'by_index': by_index, 'paper': paper, 'base': base, 'stone_ids': stone, 'tol': tol,
-                'selections': selections, 'n': n}
+                'selections': selections, 'n': n, 'pixels': pixels}
         return obs, info
 
 
@@ -179,7 +211,9 @@ def tool_table(info, label):
 SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
                            'llm_timeout': 60.0, 'max_llm_failures': 3}}
-SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']), 'react': set(SPEC_DEFAULTS['react'])}
+# max_total_tokens (react, optional): only in specs that set it, so earlier walls keep their spec
+SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
+             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens'}}
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
 SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
            'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
@@ -198,6 +232,45 @@ def full_spec(spec):
     if spec['kind'] == 'random' and isinstance(params.get('steps'), (list, tuple)):
         params['steps'] = [list(s) if isinstance(s, (list, tuple)) else s for s in params['steps']]
     return {'kind': spec['kind'], **SPEC_DEFAULTS[spec['kind']], **params}
+
+
+def llm_identity(llm):
+    """(model, params) an LLM spec puts into the requests of its transcripts; bad specs raise.
+    A mock is 'mock:<mode>' without parameters; an API LLM is llm_adapter's."""
+    if isinstance(llm, dict) and llm.get('kind') == 'mock' and set(llm) == {'kind', 'mode'} and isinstance(llm['mode'], str):
+        return f"mock:{llm['mode']}", {}
+    if isinstance(llm, dict) and llm.get('kind') == 'api':
+        import llm_adapter
+        return llm_adapter.identity(llm)
+    raise NotImplementedError(f'an LLM spec is {{"kind": "mock", "mode": ...}} or {{"kind": "api", ...}}, got {llm!r}')
+
+
+def validate_spec(spec):
+    """The full spec if a live wall may run it; raises otherwise. A Null, Random or Rule policy is
+    built to validate its parameters (it has no side effects); a ReAct policy and its LLM client
+    are not: they exist only in the worker (make_policy runs there)."""
+    spec = full_spec(spec)
+    if spec['kind'] != 'react':
+        make_policy(spec)
+    else:
+        llm_identity(spec['llm'])
+        if spec['llm']['kind'] == 'api':
+            import llm_adapter
+            llm_adapter.enabled(spec['llm'])
+        budget = spec.get('max_total_tokens')
+        if not (budget is None or (type(budget) is int and budget > 0)):
+            raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
+    return spec
+
+
+def tokens_of(reply):
+    """Tokens the LLM calls of a reply report (usage input_tokens + output_tokens; 0 without usage)."""
+    total = 0
+    for t in reply.get('transcripts') if isinstance(reply.get('transcripts'), list) else []:
+        usage = t.get('response', {}).get('usage') if isinstance(t, dict) and isinstance(t.get('response'), dict) else None
+        if isinstance(usage, dict):
+            total += sum(v for k, v in usage.items() if k in ('input_tokens', 'output_tokens') and type(v) is int and v >= 0)
+    return total
 
 
 def reply_problem_of(reply, kind, base):
@@ -221,16 +294,22 @@ class ControllerClient:
     order, tool table of the 120 orders) through the transport to the policy, which answers with an
     order string; the order is validated here, select() gives the candidate, the record is written.
     A transport failure (fallback:worker_timeout / worker_error / worker_protocol_error) or a reply
-    that is not one of the policy's answers (worker_protocol_error) keeps the base order. For react
-    the client holds the wall's counters: request failures (LLM and worker) and LLM decisions;
-    after max_llm_failures failures every later decision point is skip:llm_unavailable, after
-    max_decisions skip:wall_budget, and neither sends a request.
+    that is not one of the policy's answers (worker_protocol_error) keeps the base order; a
+    rejected reply also ends the worker, so no policy state that produced it survives. For react
+    the client holds the wall's counters: request failures (LLM and worker), LLM decisions and the
+    tokens the replies report; after max_llm_failures failures every later decision point is
+    skip:llm_unavailable, after max_decisions skip:wall_budget, after max_total_tokens
+    skip:token_budget, and none of them sends a request. Each request leaves a ledger line
+    (ledger: trace/transport.jsonl by default) with what this process sent and received; the
+    transport's worker lifecycle goes to the same ledger.
     """
 
-    def __init__(self, spec, transport, sink=None):
+    def __init__(self, spec, transport, sink=None, ledger=None):
         self.spec_, self.transport = full_spec(spec), transport
-        self.observer, self.sink, self.calls = Observer(), sink or write_record, 0
-        self.request_failures = self.llm_decisions = 0
+        self.observer, self.sink, self.ledger, self.calls = Observer(), sink or write_record, ledger or write_ledger, 0
+        self.request_failures = self.llm_decisions = self.tokens = 0
+        if hasattr(transport, 'log'):
+            transport.log = self.ledger
 
     def spec(self):
         return self.spec_
@@ -242,16 +321,28 @@ class ControllerClient:
                 return base, {'source': 'skip:llm_unavailable'}
             if self.llm_decisions >= spec['max_decisions']:
                 return base, {'source': 'skip:wall_budget'}
+            if spec.get('max_total_tokens') is not None and self.tokens >= spec['max_total_tokens']:
+                return base, {'source': 'skip:token_budget'}
             self.llm_decisions += 1
         tools = tool_table(info, self.observer.label)
         digest = {'tool_table_sha256': hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()}
-        status, reply = self.transport.decide({'observation': obs, 'base_order': key(base), 'orders': tools})
-        if status == 'ok' and reply_problem_of(reply, spec['kind'], key(base)):
-            status, reply = 'worker_protocol_error', reply_problem_of(reply, spec['kind'], key(base))
+        request = {'observation': obs, 'base_order': key(base), 'orders': tools}
+        status, reply = self.transport.decide(request)
+        problem = reply_problem_of(reply, spec['kind'], key(base)) if status == 'ok' else None
+        if problem:
+            status, reply = 'worker_protocol_error', problem
+        self.ledger({'type': 'request', 'event': self.calls, **{k: obs[k] for k in ('step', 'phase', 'sample_trial', 'side')},
+                     'request_sha256': request_sha256(request), 'status': status,
+                     'reply_sha256': request_sha256(comparable(reply)) if status == 'ok' else None,
+                     'restart': status == 'ok' and reply.get('restart') is True, 'error': None if status == 'ok' else reply,
+                     'worker_pid': getattr(self.transport, 'pid', None)})
+        if problem:  # the worker that produced it ends now, its policy state with it
+            self.transport.close('protocol_error')
         if status != 'ok':
             self.request_failures += 1
             return base, {'source': f'fallback:{status}', 'error': reply, **digest}
         self.request_failures += reply['source'] in LLM_FAILURES
+        self.tokens += tokens_of(reply)
         return parse_order(reply['order']), {**{k: v for k, v in reply.items() if k not in ('order', 'restart')}, **digest}
 
     def __call__(self, policy, ctx):
@@ -265,7 +356,8 @@ class ControllerClient:
                    'n_outcomes': len(info['classes']), 'observation': obs, **detail,
                    'final': {'order': key(order), 'index': index, 'switched': index != info['paper'],
                              'outcome': info['classes'].index(index) if index in info['classes'] else None,
-                             'stone_id': None if index is None else int(info['stone_ids'][index])}})
+                             'stone_id': None if index is None else int(info['stone_ids'][index])},
+                   **({} if info['pixels'] is None else {'outcome_pixels': info['pixels']})})
         self.calls += 1
         return policy if order == info['base'] else {**policy, 'order': order}
 
@@ -289,7 +381,7 @@ class InlineTransport:
             self.policy = None
         return 'ok', reply
 
-    def close(self):
+    def close(self, reason='close'):
         self.policy = None
 
 
@@ -464,7 +556,8 @@ class ReActPolicy:
     transcripts reproduces every decision.
 
     Every LLM call leaves a transcript: call, request {messages, tools, model, params}, its
-    request_sha256, response {raw_text, parsed, usage, error}, status and latency_s.
+    request_sha256, response {raw_text, parsed, usage, error, and attempts for an LLM that retries},
+    status and latency_s. usage and attempts are what the LLM object holds after the call.
 
     Fallback rules (the decision then keeps the base order and its record says why):
     - a reply that breaks the tool schema is rejected with the reason as feedback and counts as
@@ -505,11 +598,12 @@ class ReActPolicy:
             status, out = box.get('failure', ('error', 'the call ended without a reply'))
         ok = status == 'ok'
         parsed = parse_reply(out) if ok else None
+        response = {'raw_text': out[:MAX_REPLY_CHARS] if ok and isinstance(out, str) else None,
+                    'parsed': parsed, 'usage': safe_json(getattr(self.llm, 'usage', None)), 'error': None if ok else out}
+        if getattr(self.llm, 'attempts', None) is not None:
+            response['attempts'] = safe_json(self.llm.attempts)
         transcripts.append({'call': len(transcripts), 'request': request, 'request_sha256': request_sha256(request),
-                            'response': {'raw_text': out[:MAX_REPLY_CHARS] if ok and isinstance(out, str) else None,
-                                         'parsed': parsed, 'usage': safe_json(getattr(self.llm, 'usage', None)),
-                                         'error': None if ok else out},
-                            'status': status, 'latency_s': round(time.monotonic() - start, 3)})
+                            'response': response, 'status': status, 'latency_s': round(time.monotonic() - start, 3)})
         return status, parsed if ok else out
 
     def tool(self, name, args, request):
@@ -555,24 +649,28 @@ class ReActPolicy:
 class ReplayLLM:
     """The LLM of a check: plays back the transcripts of a wall's records, never an API. A call is
     found by its decision key (from the observation message) and its position in the decision; the
-    request the policy sends must hash to the recorded request_sha256, and recorded timeouts and
-    errors recur at once with their text. Anything else is a divergence: listed in `diverged` and
-    the call fails."""
+    request the policy sends, with the model and params the receipt's LLM spec gives (never the
+    records'), must hash to the recorded request_sha256, and recorded timeouts and errors recur at
+    once with their text. usage and attempts are restored per call, as the live LLM held them.
+    Anything else is a divergence: listed in `diverged` and the call fails."""
 
-    def __init__(self, records):
+    def __init__(self, records, model, params):
         records = [r for r in records if isinstance(r, dict) and isinstance(r.get('transcripts'), list)]
         self.recorded = {decision_key(r): r['transcripts'] for r in records}
-        first = next((t['request'] for r in records for t in r['transcripts']), {})
-        self.model, self.params, self.diverged = first.get('model'), first.get('params', {}), []
+        self.model, self.params, self.diverged = model, params, []
+        self.usage = self.attempts = None
 
     def __call__(self, messages, tools):
         key_ = decision_key(json.loads(messages[1]['content']))
         call, done = (len(messages) - 2) // 2, self.recorded.get(key_, [])
         t = done[call] if call < len(done) else None
         request = {'messages': messages, 'tools': tools, 'model': self.model, 'params': self.params}
-        if t is None or t.get('request_sha256') != request_sha256(request) or request_sha256(t.get('request')) != t['request_sha256']:
+        self.usage = self.attempts = None
+        if not isinstance(t, dict) or t.get('request_sha256') != request_sha256(request) or \
+                request_sha256(t.get('request')) != t['request_sha256'] or not isinstance(t.get('response'), dict):
             self.diverged.append(f"{key_} call {call}: {'not recorded' if t is None else 'request differs from the recording'}")
             raise LLMFailure('error', 'replay diverged')
+        self.usage, self.attempts = t['response'].get('usage'), t['response'].get('attempts')
         if t['status'] != 'ok':
             raise LLMFailure(t['status'], t['response']['error'])
         raw = t['response']['raw_text']
@@ -645,28 +743,45 @@ def make_policy(spec):
     if spec['kind'] == 'rule':
         return RulePolicy(**params)
     llm = params['llm']
-    if not isinstance(llm, dict) or llm.get('kind') != 'mock' or set(llm) != {'kind', 'mode'}:
-        raise NotImplementedError(f'only {{"kind": "mock", "mode": ...}} exists before P2, got {llm!r}')
-    return ReActPolicy(MockLLM(llm['mode']), **{k: params[k] for k in WORKER_KEYS['react']})
+    llm_identity(llm)
+    if llm['kind'] == 'api':
+        import llm_adapter
+        llm = llm_adapter.APILLM(llm)  # its client is built here, in the process that calls it
+    else:
+        llm = MockLLM(llm['mode'])
+    return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']})
 
 
-def make_controller(spec, sink=None, transport='process'):
+def make_controller(spec, sink=None, transport='process', ledger=None):
     """Controller from a JSON-able spec, e.g. {'kind': 'random', 'seed': 7}; bad specs raise here,
-    before any wall is built. transport 'process' (live walls) runs the policy in a worker
-    process (controller_worker.ProcessTransport); 'inline' runs it in this process."""
-    make_policy(spec)
+    before any wall is built (validate_spec: no policy or LLM client is built in this process).
+    transport 'process' (live walls) runs the policy in a worker process
+    (controller_worker.ProcessTransport); 'inline' runs it in this process."""
+    validate_spec(spec)
     if transport == 'inline':
-        return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink)
+        return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
     import controller_worker
-    return ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec)), sink)
+    return ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec)), sink, ledger)
+
+
+def append_trace(name, entry):
+    """Append a JSON line to trace/<name> of the wall being built; nothing outside a traced wall
+    (run_case always traces controller runs; a lost line shows as a missing record or ledger)."""
+    from Stonepacker2D.utils.constant import get_dir, get_trace
+    if get_trace() is None:
+        return
+    path = Path(get_dir()) / 'trace' / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as f:
+        f.write(json.dumps(entry, default=lambda v: v.item()) + '\n')
 
 
 def write_record(record):
-    from Stonepacker2D.utils.constant import get_dir
-    path = Path(get_dir()) / 'trace' / 'controller.jsonl'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(record, default=lambda v: v.item()) + '\n')
+    append_trace('controller.jsonl', record)
+
+
+def write_ledger(entry):
+    append_trace('transport.jsonl', entry)
 
 
 def trace_events(result):
@@ -687,13 +802,14 @@ def base_policy(run):
     return {'policy': 'paper', 'order': None if fp['order'] is None else tuple(fp['order']), 'tol': fp['tol']}
 
 
-def rerun(result, spec, base, transport='inline', geometry=None):
+def rerun(result, spec, base, transport='inline', geometry=None, ledger=None):
     """The records a controller writes when it sees the traced selections of one result directory;
     transport: 'inline', 'process' or a transport object (check() replays LLM walls with one);
-    geometry: a LiveGeometry giving the observations the live outcome geometry."""
-    records = []
-    controller = make_controller(spec, records.append, transport) if isinstance(transport, str) else \
-        ControllerClient(spec, transport, records.append)
+    geometry: a LiveGeometry giving the observations the live outcome geometry; ledger: a list
+    that receives the ledger lines (discarded by default)."""
+    records, ledger = [], [] if ledger is None else ledger
+    controller = make_controller(spec, records.append, transport, ledger.append) if isinstance(transport, str) else \
+        ControllerClient(spec, transport, records.append, ledger.append)
     controller.observer.geometry = geometry
     try:
         for meta, a in trace_events(result):
@@ -717,10 +833,10 @@ def replay(result, spec):
 
 
 def comparable(v):
-    """A record without what a re-execution cannot reproduce: outcome geometry (it needs the stone
-    pixels) and LLM call latencies."""
+    """A record without what a re-execution from the trace cannot reproduce: the candidate pixels
+    and outcome geometry (live only; LiveGeometry checks them) and LLM call latencies."""
     if isinstance(v, dict):
-        return {k: None if k in ('geometry', 'latency_s') else comparable(x) for k, x in v.items()}
+        return {k: None if k in ('geometry', 'latency_s') else comparable(x) for k, x in v.items() if k != 'outcome_pixels'}
     if isinstance(v, list):
         return [comparable(x) for x in v]
     return v
@@ -741,15 +857,21 @@ def pose_of(outcome):
 
 
 class LiveGeometry:
-    """Outcome geometry as a wall's live records hold it, for re-executing the wall from its trace,
-    which keeps no stone pixels (Transcript Replay: the policy must see what it saw live). Found by
-    decision key and candidate pose (pose_of), never by position or count. fill() lists in
-    `problems` a selection without a live record, outcome poses that differ from the re-executed
-    ones (missing, extra or duplicated candidates) and geometry that is missing or malformed. This
-    only carries the live values over; whether they are right is validate_geometry's question."""
+    """The live outcome geometry when a wall is re-executed from its trace, which keeps no stone
+    pixels (Transcript Replay: the policy must see what it saw live), and its Geometry Validation.
+    Outcomes are found by decision key and candidate pose (pose_of), never by position or count.
 
-    def __init__(self, records):
-        self.by_key, self.problems = {}, []
+    An outcome whose record keeps its candidate pixels (outcome_pixels) gets its geometry
+    recomputed from them, not copied: the pixels must lie at the candidate's (x, y) and hash to the
+    footprint Wang's trace holds for that candidate (they are its pixels), and the recorded
+    geometry must equal the recomputation (verified). Without pixels (records written before
+    outcome_pixels) the recorded geometry is carried over unverified, for validate_geometry to try
+    on base.pkl. `problems` lists a selection without a live record, outcome sets that differ from
+    the re-executed candidates, missing or malformed geometry or pixels, and every mismatch."""
+
+    def __init__(self, records, events):
+        self.by_key, self.problems, self.carried, self.verified, self.outcomes = {}, [], [], 0, 0
+        self.traced = {(m['step'], m['phase'], m['sample_trial'], m['side']): a for m, a in events}
         for r in records:
             if not (isinstance(r, dict) and isinstance(r.get('observation'), dict)):
                 continue
@@ -757,12 +879,17 @@ class LiveGeometry:
             if key in self.by_key:
                 self.problems.append(f'two live records for {key}')
                 continue
-            poses = [pose_of(o) for o in outcomes] if isinstance(outcomes, list) else []
+            outcomes = outcomes if isinstance(outcomes, list) else []
+            poses = [pose_of(o) for o in outcomes]
             if len(set(poses)) != len(poses) or None in poses:
                 self.problems.append(f'{key}: live outcomes without a pose or with a pose twice')
-            self.by_key[key] = {p: o.get('geometry') for p, o in zip(poses, outcomes or []) if p is not None}
+            pixels = r.get('outcome_pixels', [None] * len(outcomes))
+            if not (isinstance(pixels, list) and len(pixels) == len(outcomes)):
+                self.problems.append(f'{key}: outcome_pixels do not list one entry per outcome')
+                pixels = [None] * len(outcomes)
+            self.by_key[key] = {p: (o.get('geometry'), px) for p, o, px in zip(poses, outcomes, pixels) if p is not None}
 
-    def fill(self, obs):
+    def fill(self, obs, classes):
         key = decision_key(obs)
         recorded = self.by_key.get(key)
         if recorded is None:
@@ -770,23 +897,38 @@ class LiveGeometry:
             return
         if {pose_of(o) for o in obs['outcomes']} != set(recorded):
             self.problems.append(f'{key}: the live outcomes are not the candidates the trace re-executes')
-        for o in obs['outcomes']:
-            g = recorded.get(pose_of(o))
+        a = self.traced[key]
+        for o, i in zip(obs['outcomes'], classes):
+            self.outcomes += 1
+            g, pixels = recorded.get(pose_of(o), (None, None))
+            o['geometry'] = g
             if not geometry_ok(g):
                 self.problems.append(f'{key}: outcome {o["id"]} {pose_of(o)} has no valid live geometry')
-            o['geometry'] = g
+            elif pixels is None:
+                self.carried.append((key, pose_of(o), g))
+            else:
+                wall = np.asarray(a['wall'])
+                mask = decode_pixels(pixels, wall.shape) if isinstance(pixels, dict) else None
+                if mask is None or pixels['origin'] != [o['x'], o['y']] or footprint(mask, obs['side']) != a['footprint'][i]:
+                    self.problems.append(f'{key}: outcome {o["id"]} {pose_of(o)}: its pixels are not the traced candidate')
+                    continue
+                o['geometry'] = placement_geometry(wall, mask)
+                if o['geometry'] != g:
+                    self.problems.append(f'{key}: outcome {o["id"]} {pose_of(o)}: recorded geometry differs from its recomputation')
+                else:
+                    self.verified += 1
 
 
-def validate_geometry(result, records, events):
-    """Geometry Validation, independent of the records: every outcome geometry that can be
-    recomputed from the stone pixels base.pkl holds must equal the record's. A placed rock gives its
+def validate_geometry(result, carried, events):
+    """Geometry Validation of outcomes whose records keep no pixels (carried: (decision key, pose,
+    geometry) from LiveGeometry), from the stone pixels base.pkl holds. A placed rock gives its
     stone's world-frame pixel crop; a candidate of that stone whose traced footprint hash equals one
     of the crop's 8 rotations and mirrorings has exactly those pixels, which are pasted at the
     candidate's evaluation-frame (x, y) on the traced wall (placement_geometry). Stones whose rock
     stabilization turned or moved off the pixel grid, stones never placed and a missing base.pkl
-    leave outcomes unverifiable; they are counted, not passed."""
+    leave outcomes unverifiable; they are counted, never passed."""
     crops, path = {}, Path(result) / 'base.pkl'
-    if path.exists():
+    if carried and path.exists():
         with path.open('rb') as f:
             base = pickle.load(f)
         for rock in base.placed_rocks:
@@ -799,52 +941,115 @@ def validate_geometry(result, records, events):
         for s in a['sampled_ids'].tolist():
             labels.setdefault(int(s), f'S{len(labels) + 1}')
     ids = {v: k for k, v in labels.items()}
-    by_event, problems, total, verified = {m['event']: (m, a) for m, a in events}, [], 0, 0
-    for r in records:
-        if not (isinstance(r, dict) and r.get('event') in by_event and isinstance(r.get('observation'), dict)):
+    traced = {(m['step'], m['phase'], m['sample_trial'], m['side']): (m, a) for m, a in events}
+    problems, verified = [], 0
+    for key_, (stone, rotation, x, y), g in carried:
+        meta, a = traced[key_]
+        match = np.nonzero((a['stone_id'] == ids.get(stone, -1)) & (a['rotation'] == rotation) & (a['x'] == x) & (a['y'] == y))[0]
+        if len(match) != 1:
+            problems.append(f'{key_}: outcome {(stone, rotation, x, y)} is not one candidate of the trace')
             continue
-        meta, a = by_event[r['event']]
-        for o in r['observation'].get('outcomes') or []:
-            total += 1
-            stone, rotation, x, y = pose_of(o)
-            match = np.nonzero((a['stone_id'] == ids.get(stone, -1)) & (a['rotation'] == rotation) & (a['x'] == x) & (a['y'] == y))[0]
-            if len(match) != 1:
-                problems.append(f"event {r['event']}: outcome {pose_of(o)} is not one candidate of the trace")
-                continue
-            crop, world = crops.get(ids[stone]), None
-            for k in range(8 if crop is not None else 0):
-                t = np.rot90(crop, k % 4)
-                t = np.fliplr(t) if k >= 4 else t
-                if footprint(t, 'left') == a['footprint'][match[0]]:
-                    world = t
-                    break
-            if world is None:
-                continue
-            wall = np.asarray(a['wall'])
-            shape = world if meta['side'] == 'left' else np.fliplr(world)
-            piece = shape[:wall.shape[0] - y, :wall.shape[1] - x]
-            pixels = np.zeros(wall.shape, bool)
-            pixels[y:y + piece.shape[0], x:x + piece.shape[1]] = piece
-            if placement_geometry(wall, pixels) != o.get('geometry'):
-                problems.append(f"event {r['event']}: geometry of outcome {pose_of(o)} differs from its recomputation from base.pkl")
-            else:
-                verified += 1
-    return {'outcomes': total, 'verified': verified, 'mismatched': len(problems), 'unverifiable': total - verified - len(problems),
-            'problems': problems}
+        crop, world = crops.get(ids[stone]), None
+        for k in range(8 if crop is not None else 0):
+            t = np.rot90(crop, k % 4)
+            t = np.fliplr(t) if k >= 4 else t
+            if footprint(t, 'left') == a['footprint'][match[0]]:
+                world = t
+                break
+        if world is None:
+            continue
+        wall = np.asarray(a['wall'])
+        shape = world if meta['side'] == 'left' else np.fliplr(world)
+        piece = shape[:wall.shape[0] - y, :wall.shape[1] - x]
+        pixels = np.zeros(wall.shape, bool)
+        pixels[y:y + piece.shape[0], x:x + piece.shape[1]] = piece
+        if placement_geometry(wall, pixels) != g:
+            problems.append(f'{key_}: geometry of outcome {(stone, rotation, x, y)} differs from its recomputation from base.pkl')
+        else:
+            verified += 1
+    return verified, problems
+
+
+def ledger_problems(result, expected, events, stopped):
+    """The live ledger (trace/transport.jsonl, written by the main process) against the ledger of
+    the re-execution: the same request hashes, transport statuses, reply hashes, restarts and
+    errors in the same order (worker pids aside); a stopped run may hold one request more, for the
+    selection whose event it never wrote. None if the wall has no ledger (written before it)."""
+    path = Path(result) / 'trace' / 'transport.jsonl'
+    if not path.exists():
+        return None
+    try:
+        live = [e for e in map(json.loads, path.read_text(encoding='utf-8').splitlines()) if isinstance(e, dict) and e.get('type') == 'request']
+    except ValueError:
+        return ['the ledger is not JSON lines']
+    strip = lambda e: {k: v for k, v in e.items() if k != 'worker_pid'}
+    got, want = [strip(e) for e in live], [strip(e) for e in expected]
+    extra = got[len(want):]
+    if got[:len(want)] != want:
+        bad = next(i for i, (g, w) in enumerate(zip(got + [None] * len(want), want)) if g != w)
+        return [f'ledger line {bad} differs from the request the re-execution sends ({want[bad]["step"]} {want[bad]["side"]})']
+    if extra and not (stopped and len(extra) == 1 and extra[0].get('event') == len(events)):
+        return [f'the ledger holds {len(extra)} requests the trace does not re-execute']
+    return []
+
+
+def worker_problems(entries, stopped):
+    """The worker lifecycle of a live run (ledger lines in order): every worker that was closed
+    was gone after the reap timeout, every failed request (and every reply asking for a restart)
+    was followed by closing its worker, and every worker started was closed (a stopped run's last
+    worker excepted: the launcher kills the process tree and verifies it). Returns (problems, counts)."""
+    problems, open_, closed = [], [], set()
+    starts = [e['pid'] for e in entries if e.get('type') == 'worker' and e.get('action') == 'start']
+    for k, e in enumerate(entries):
+        if e.get('type') == 'worker' and e.get('action') == 'start':
+            open_.append(e['pid'])
+        elif e.get('type') == 'worker' and e.get('action') == 'close':
+            closed.add(e['pid'])
+            open_ = [p for p in open_ if p != e['pid']]
+            if e.get('alive') is not False:
+                problems.append(f"worker {e['pid']} was still alive after it was closed ({e.get('reason')})")
+        elif e.get('type') == 'request' and (e.get('status') != 'ok' or e.get('restart')) and e.get('worker_pid') is not None:
+            if not any(x.get('type') == 'worker' and x.get('action') == 'close' and x.get('pid') == e['worker_pid'] for x in entries[k + 1:]):
+                problems.append(f"the worker {e['worker_pid']} of the failed request at event {e.get('event')} was never closed")
+    left = open_[:-1] if stopped else open_
+    problems += [f'worker {p} was started and never closed' for p in left]
+    return problems, {'workers_started': len(starts), 'workers_closed': len(closed)}
+
+
+def manifest_problems(result, run, receipt):
+    """The run manifest (receipt 'manifest': sha256 of every trace and result file, written by the
+    launcher when the case process ended) against the files now: None without a manifest."""
+    import check_case
+    manifest = receipt.get('manifest')
+    if manifest is None:
+        return None
+    files = {p.relative_to(run).as_posix(): p for p in check_case.artifact_files(result)}
+    mine = {k for k in manifest if k.startswith(Path(result).relative_to(run).as_posix() + '/')}
+    problems = [f'{k}: missing' for k in sorted(mine - set(files))] + [f'{k}: not in the manifest' for k in sorted(set(files) - mine)]
+    problems += [f'{k}: changed since the run' for k in sorted(mine & set(files)) if check_case.sha256_file(files[k]) != manifest[k]]
+    return problems
 
 
 def check(result, records=None, spec=None, stopped=None):
     """Controller records of a built wall against its receipt and trace. The controller named in
     the receipt (spec only for tests on walls without one) is re-executed on the traced inputs from
-    the receipt's base policy; every record must equal its re-execution (geometry excluded: it
-    needs stone pixels), the traced policy must be the base with the re-executed order, replaying
-    select with it must give the traced pick, decision keys must be unique and the trace itself
-    must be complete and consistent (check_case.chain_problems). A stopped run (stopped; by
-    default read from the receipt) may hold one record more than events: the controller is called
-    before its event is written. Counts come from the re-execution, not from the records.
-    Records holding live outcome geometry are re-executed with it (LiveGeometry: Transcript
-    Replay) and that geometry is recomputed where base.pkl allows (validate_geometry: Geometry
-    Validation); report['geometry'] counts both."""
+    the receipt's base policy; every record must equal its re-execution, the traced policy must be
+    the base with the re-executed order, replaying select with it must give the traced pick,
+    decision keys must be unique and the trace itself must be complete and consistent
+    (check_case.chain_problems). A stopped run (stopped; by default read from the receipt) may hold
+    one record more than events: the controller is called before its event is written. Counts come
+    from the re-execution, not from the records.
+
+    The report keeps three questions apart:
+    - ok: replay consistency. The records, the LLM transcripts (ReplayLLM, the receipt's model and
+      params) and the ledger, if any, are what the controller produces on the trace, and nothing
+      recorded contradicts a recomputation (geometry, ledger, manifest);
+    - geometry: Geometry Validation of the live outcome geometry (LiveGeometry from the candidate
+      pixels, validate_geometry from base.pkl for records without them): verified, unverifiable,
+      mismatched; complete only if every outcome is verified;
+    - provenance: the main process's ledger and the launcher's run manifest exist and match.
+    verdict: PASS if ok with complete geometry and provenance; PARTIAL if ok but something could
+    not be verified (listed in `incomplete`); FAIL otherwise."""
     result, run = Path(result), run_of(result)
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
     spec = receipt.get('controller') if spec is None else spec
@@ -853,17 +1058,17 @@ def check(result, records=None, spec=None, stopped=None):
         path = result / 'trace' / 'controller.jsonl'
         records = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
     if spec is None:
-        return {'ok': False, 'problems': ['the receipt names no controller'], 'records': len(records),
+        return {'ok': False, 'verdict': 'FAIL', 'problems': ['the receipt names no controller'], 'records': len(records),
                 'decision_points': None, 'switches': None}
-    base = base_policy(run)
+    base, full, events = base_policy(run), full_spec(spec), list(trace_events(result))
     llm, transport = None, 'inline'
-    if full_spec(spec)['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
-        llm, worker = ReplayLLM(records), {k: full_spec(spec)[k] for k in WORKER_KEYS['react']}
+    if full['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
+        llm, worker = ReplayLLM(records, *llm_identity(full['llm'])), {k: full[k] for k in WORKER_KEYS['react']}
         transport = ReplayedFailures(lambda: ReActPolicy(llm, **worker), records)
     live = any(isinstance(r, dict) and isinstance(r.get('observation'), dict) and isinstance(r['observation'].get('outcomes'), list)
                and any(isinstance(o, dict) and o.get('geometry') is not None for o in r['observation']['outcomes']) for r in records)
-    geometry = LiveGeometry(records) if live else None
-    expected, events = rerun(result, spec, base, transport, geometry), list(trace_events(result))
+    geometry, ledger = LiveGeometry(records, events) if live else None, []
+    expected = rerun(result, spec, base, transport, geometry, ledger)
     problems = chain_problems(result, events, stopped)
     if not len(events) <= len(records) <= len(events) + int(stopped):
         problems.append(f'{len(records)} records for {len(events)} selections')
@@ -891,17 +1096,35 @@ def check(result, records=None, spec=None, stopped=None):
         problems += [f'trailing record: {p}' for p in trailing_problems(r, spec, events)]
     problems += [f'replay diverged at {d}' for d in (llm.diverged[:5] if llm else [])]
     failed = [r['event'] for r in records if isinstance(r, dict) and str(r.get('source')).startswith('fallback:worker_')]
-    if failed and full_spec(spec)['kind'] != 'react':
+    if failed and full['kind'] != 'react':
         problems.append(f'the worker of this deterministic controller failed at events {failed[:5]}: '
                         'its decisions are not the controller ones, the wall is no valid result')
-    validation = None
+    incomplete, report_geometry = [], {'source': 'live records' if live else 'none recorded'}
     if geometry is not None:
         problems += [f'live geometry: {p}' for p in geometry.problems[:5]]
-        validation = validate_geometry(result, records, events)
-        problems += validation.pop('problems')[:5]
-    report = {'ok': not problems, 'problems': problems, 'records': len(records),
-              'geometry': {'source': 'live records' if live else 'none recorded',
-                           'replay_problems': None if geometry is None else len(geometry.problems), 'validation': validation},
+        from_base, base_problems = validate_geometry(result, geometry.carried, events)
+        problems += base_problems[:5]
+        unverifiable = len(geometry.carried) - from_base - len(base_problems)
+        report_geometry.update(outcomes=geometry.outcomes, verified_from_pixels=geometry.verified, verified_from_base_pkl=from_base,
+                               unverifiable=unverifiable, mismatched=len(geometry.problems) + len(base_problems),
+                               complete=unverifiable == 0 and not geometry.problems and not base_problems)
+        if unverifiable:
+            incomplete.append(f'{unverifiable} of {geometry.outcomes} outcome geometries not verifiable (no candidate pixels recorded)')
+    elif records:
+        incomplete.append('no live outcome geometry')
+    found = ledger_problems(result, ledger, events, stopped)
+    problems += [f'ledger: {p}' for p in found or []]
+    manifest = manifest_problems(result, run, receipt)
+    problems += [f'manifest: {p}' for p in (manifest or [])[:5]]
+    provenance = {'ledger': 'missing' if found is None else 'ok' if not found else 'mismatch',
+                  'manifest': 'missing' if manifest is None else 'ok' if not manifest else 'mismatch'}
+    incomplete += [f'no {name}' for name, v in (('transport ledger', provenance['ledger']), ('run manifest', provenance['manifest']))
+                   if v == 'missing']
+    if legacy:
+        incomplete.append('records without tool_table_sha256 (written before P2)')
+    report = {'ok': not problems, 'verdict': 'FAIL' if problems else 'PARTIAL' if incomplete else 'PASS',
+              'problems': problems, 'incomplete': incomplete, 'records': len(records),
+              'geometry': report_geometry, 'provenance': provenance,
               'decision_points': sum(x['decision_point'] for x in expected),
               'switches': sum(x['final']['switched'] for x in expected)}
     if len(records) > len(events):
@@ -918,13 +1141,13 @@ RECORD_KEYS = {'event', 'step', 'phase', 'sample_trial', 'side', 'controller', '
 def trailing_problems(record, spec, events):
     """The record of a selection whose event a stopped run never wrote cannot be re-executed; it must
     still be the next call of the receipt's controller: the next event number, a well-formed record
-    of that spec whose observation is for its own decision key and, if the last traced attempt has
-    its left side only, that attempt's right side."""
+    of that spec (with its defaults, as records hold it) whose observation is for its own decision
+    key and, if the last traced attempt has its left side only, that attempt's right side."""
     if not isinstance(record, dict) or not RECORD_KEYS <= set(record):
         return ['not a controller record']
     problems, obs, final = [], record['observation'], record['final']
-    if record['event'] != len(events) or record['controller'] != spec:
-        problems.append(f"event {record['event']} of {record['controller']}, expected {len(events)} of {spec}")
+    if record['event'] != len(events) or record['controller'] != full_spec(spec):
+        problems.append(f"event {record['event']} of {record['controller']}, expected {len(events)} of {full_spec(spec)}")
     if not isinstance(obs, dict) or decision_key(record) != tuple(obs.get(k) for k in ('step', 'phase', 'sample_trial', 'side')):
         problems.append(f'its observation is not for {decision_key(record)}')
     if not isinstance(final, dict) or parse_order(final.get('order')) is None:

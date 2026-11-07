@@ -103,7 +103,8 @@ def committed_placements(output):
 def code_fingerprint(root=REPO):
     """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
     files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
-        Path(root) / 'research' / name for name in ('run_case.py', 'controllers.py', 'failure_analysis.py', 'campaign.py')] + [
+        Path(root) / 'research' / name for name in ('run_case.py', 'controllers.py', 'controller_worker.py', 'llm_adapter.py',
+                                                    'check_case.py', 'failure_analysis.py', 'campaign.py')] + [
         Path(root) / 'research' / 'validation' / 'windows_case_runtime.py']
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
@@ -183,21 +184,34 @@ def check_trace(output, stopped=False):
     return {'files': len(files), 'ok': not problems, 'problems': problems}
 
 
+def manifest(output):
+    """sha256 of every trace and result file of the run, taken when the case process has ended."""
+    import check_case
+    return {p.relative_to(output).as_posix(): check_case.sha256_file(p)
+            for r in check_case.result_dirs(output) for p in check_case.artifact_files(r)}
+
+
 def check_controller(output, trace, stopped=False):
-    """A controller run is complete only if every result's controller records equal the receipt's
-    controller re-executed on the trace (controllers.check)."""
+    """A controller run is complete only if every result's controller check gives the verdict PASS
+    (controllers.check: records, transcripts and ledger equal the receipt's controller re-executed
+    on the trace, every outcome geometry verified, ledger and run manifest present and matching)
+    and the ledgers show every worker reaped (controllers.worker_problems)."""
     import check_case
     import controllers
     try:
-        reports = [controllers.check(r, stopped=stopped) for r in check_case.result_dirs(output)]
+        results = check_case.result_dirs(output)
+        reports = [controllers.check(r, stopped=stopped) for r in results]
         problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
-        problems += ['controller records without tool_table_sha256 (written before P2)' for r in reports if r.get('legacy_records')]
-        problems += ['controller records without live outcome geometry' for r in reports if r.get('geometry', {}).get('source') != 'live records']
+        problems += [f"not fully verified: {p}" for r in reports for p in r.get('incomplete', [])]
+        entries = [json.loads(l) for r in results if (r / 'trace' / 'transport.jsonl').exists()
+                   for l in (r / 'trace' / 'transport.jsonl').read_text(encoding='utf-8').splitlines()]
+        workers, counts = controllers.worker_problems(entries, stopped)
+        problems += workers
     except Exception as error:  # an unreadable record or trace leaves the run unverified
-        reports, problems = [], [f'controller check failed: {error!r}']
-    return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems,
-            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches', 'unverified_trailing_records', 'geometry')
-                            if k in r} for r in reports]}
+        reports, problems, counts = [], [f'controller check failed: {error!r}'], None
+    return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems, 'workers': counts,
+            'controller': [{k: r[k] for k in ('ok', 'verdict', 'records', 'decision_points', 'switches', 'unverified_trailing_records',
+                                              'geometry', 'provenance', 'incomplete') if k in r} for r in reports]}
 
 
 def verified_trace(output, args, process_status, termination):
@@ -303,6 +317,9 @@ def main(argv=None):
                 # A trace write failure raises inside the case and lands here as a non-zero exit.
                 process_status = 'PROCESS_PASS' if process.returncode == 0 else 'FAILED'
     finally:
+        if 'pid' in receipt and not args.no_trace:  # the outputs as the case left them, before any check reads them
+            receipt['manifest'] = manifest(output)
+            (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
         trace = verified_trace(output, args, process_status, termination)
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
@@ -312,7 +329,7 @@ def main(argv=None):
             receipt['execution_log_tail'] = (output / 'execution.log').read_text(
                 encoding='utf-8', errors='replace').splitlines()[-25:]
         (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
-    print(json.dumps({k: v for k, v in receipt.items() if k not in ('command', 'code_sha256')}, indent=2))
+    print(json.dumps({k: v for k, v in receipt.items() if k not in ('command', 'code_sha256', 'manifest')}, indent=2))
     if receipt['status'] == 'TERMINATION_FAILED':
         raise RuntimeError('case process tree not verified stopped; do not launch another case')
     return 0 if receipt['status'] in ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS') else 1

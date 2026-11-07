@@ -9,6 +9,7 @@ differing_files: every file of the result directories byte for byte (time.txt ho
 the PDFs embed creation dates, so those are expected to differ between identical runs).
 """
 import argparse
+import hashlib
 import json
 import pickle
 import sys
@@ -23,6 +24,17 @@ from Stonepacker2D.stack.selection import footprint, load_trace, published_event
 
 def result_dirs(run):
     return sorted({p.parent for p in Path(run).rglob('decisions.txt')})
+
+
+def artifact_files(result):
+    """The files of one result directory a run manifest covers: its trace, decisions.txt and base.pkl."""
+    trace = Path(result) / 'trace'
+    files = sorted(p for p in trace.rglob('*') if p.is_file()) if trace.is_dir() else []
+    return files + [p for p in (Path(result) / 'decisions.txt', Path(result) / 'base.pkl') if p.is_file()]
+
+
+def sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def load_result(result):
@@ -58,6 +70,79 @@ def candidate_pose(a, k):
     return int(a['stone_id'][k]), int(a['x_world'][k]), int(a['y'][k]), int(a['rotation_world'][k]), int(a['rotation'][k])
 
 
+def world_wall(meta, a):
+    """Occupied pixels of an event's wall in the world frame (the right side is traced mirrored)."""
+    occupied = np.asarray(a['wall']) != 0
+    return occupied if meta['side'] == 'left' else np.fliplr(occupied)
+
+
+def placement_problems(result, by_event, commits, loose, pending):
+    """What the placed commits say against what was added to the wall. A placed commit must report
+    add_stone_ok, at least one brick added and an int placed_bbox; base.pkl (dumped after every
+    placement) must hold exactly the placed stones in commit order (and the pending attempt's
+    stone, if its decisions.txt line was written), each rock with the commit's placed_bbox; between
+    the first events of consecutive attempts (the last one against base.pkl) the wall must grow by
+    exactly that attempt's placed rock (more only if it added wedges) and by nothing after an
+    attempt without a placement, and never lose pixels. That is the committed geometry, after
+    rock stabilization; a rock that was not stabilized (placed_rot_angle 0) must also have the
+    selected candidate's pixels at its pose. Cut attempts add cut cubes and are not compared."""
+    problems = []
+    placed = [c for c in commits if c['outcome'] == 'placed']
+    for c in placed:
+        bbox = c.get('placed_bbox')
+        if c.get('add_stone_ok') is not True or type(c.get('bricks_added')) is not int or c['bricks_added'] < 1 or \
+                not (isinstance(bbox, list) and len(bbox) == 4 and all(type(v) is int for v in bbox)):
+            problems.append(f"placed commit step {c['step']}: add_stone_ok {c.get('add_stone_ok')!r}, "
+                            f"bricks_added {c.get('bricks_added')!r}, placed_bbox {bbox!r}")
+    if not placed and pending is None:
+        return problems
+    try:
+        with (Path(result) / 'base.pkl').open('rb') as f:
+            base = pickle.load(f)
+        rocks, final = list(base.placed_rocks), np.asarray(base.matrix) != 0
+    except Exception as error:  # no wall to compare with: the placements are unverified
+        return problems + [f'base.pkl cannot be read: {type(error).__name__}']
+    ids = [c['stone_id'] for c in placed] + ([int(pending[1])] if pending else [])
+    if [int(r.id) for r in rocks] != ids:
+        return problems + [f'base.pkl holds the rocks {[int(r.id) for r in rocks][:10]}, the placed commits {ids[:10]}']
+    rock_of = dict(zip(ids, rocks))
+    attempts = [(c, min(s['event'] for s in c['sides'].values())) for c in commits if c['sides']]
+    if loose:
+        attempts.append((None, loose[0][0]['event']))
+    if any(e not in by_event for _, e in attempts):  # already a chain problem; no wall to compare with
+        return problems
+    walls = [world_wall(*by_event[e]) for _, e in attempts] + [final]
+    for k, (c, e) in enumerate(attempts):
+        where = f"attempt of event {e}"
+        before, after = walls[k], walls[k + 1]
+        if before.shape != after.shape or (before & ~after).any():
+            problems.append(f'{where}: the wall lost pixels or changed size')
+            continue
+        growth = after & ~before
+        stone = c['stone_id'] if c is not None and c['outcome'] == 'placed' else int(pending[1]) if c is None and pending else None
+        if stone is None:
+            if growth.any() and (c is None or c['outcome'] != 'cut'):
+                problems.append(f'{where}: the wall grew by {int(growth.sum())} pixels without a placement')
+            continue
+        rock = np.asarray(rock_of[stone].matrix) != 0
+        wedges = c is not None and c['bricks_added'] > 1
+        if rock.shape != before.shape or (rock & before).any() or (rock & ~growth).any() or (not wedges and (growth & ~rock).any()):
+            problems.append(f'{where}: the wall did not grow by the placed rock {stone}')
+            continue
+        if c is None:
+            continue
+        rows, cols = np.nonzero(rock)
+        if [int(cols.min()), int(rows.min()), int(cols.max()), int(rows.max())] != c['placed_bbox']:
+            problems.append(f"{where}: rock {stone} has the bbox {[int(cols.min()), int(rows.min()), int(cols.max()), int(rows.max())]}, "
+                            f"the commit {c['placed_bbox']}")
+        if not c.get('placed_rot_angle'):
+            side = c['sides'][c['chosen_side']]
+            a, i = by_event[side['event']][1], side['index']
+            if footprint(rock, 'left') != a['footprint'][i] or [int(cols.min()), int(rows.min())] != [c['x_world'], c['y']]:
+                problems.append(f'{where}: the unstabilized rock {stone} is not the selected candidate at its pose')
+    return problems
+
+
 def chain_problems(result, events, stopped=False):
     """The trace of one result directory as build_wall writes it, per selection: controller record,
     event eNNNNN.npz, and per sampling attempt a decisions.txt line (placed only), then a commit.
@@ -73,10 +158,15 @@ def chain_problems(result, events, stopped=False):
     prefix of that write order: events of one attempt without its commit, then (once all its sides
     are traced) one decisions.txt line with that attempt's chosen candidate, and one unpublished
     eNNNNN.tmp.npz.
+    Commits are in the order of their events (each attempt after the previous one, its left side
+    before its right), events in step order, and what placed commits report was added to the wall
+    (placement_problems, against base.pkl).
     """
     problems, numbers = [], [m['event'] for m, _ in events]
     if numbers != list(range(len(events))):
         problems.append(f'trace events are not numbered 0..{len(events) - 1}')
+    if [m['step'] for m, _ in events] != sorted(m['step'] for m, _ in events):
+        problems.append('trace events are not in step order')
     trace = Path(result) / 'trace'
     unpublished = sorted(p.name for p in trace.glob('e*.tmp.npz'))
     if unpublished and not (stopped and unpublished == [f'e{len(events):05d}.tmp.npz']):
@@ -120,6 +210,9 @@ def chain_problems(result, events, stopped=False):
                 problems.append(f'{where}: committed pose is not the selected candidate {pose}')
     if len(set(referenced)) != len(referenced):
         problems.append('an event is part of more than one commit side')
+    flat = [s['event'] for c in commits for _, s in sorted(c['sides'].items())]
+    if flat != list(range(len(flat))):
+        problems.append('commits are not in the order of their events (attempt after attempt, left side before right)')
     loose = [by_event[e] for e in sorted(set(numbers) - set(referenced))]
     tail = {(m['step'], m['phase'], m['sample_trial'], m['construction_order']) for m, _ in loose}
     if loose and not (stopped and loose[0][0]['event'] > max(referenced, default=-1) and len(tail) == 1
@@ -140,6 +233,7 @@ def chain_problems(result, events, stopped=False):
     extra = rows[len(placed):]
     if extra and not (stopped and len(extra) == 1 and extra[0] == pending):
         problems.append(f'decisions.txt has {len(extra)} placements without a commit and its selected candidate')
+    problems += placement_problems(result, by_event, commits, loose if stopped else [], extra[0] if stopped and extra else None)
 
     gone, start = set(), None
     last_event = {max(s['event'] for s in c['sides'].values()): c for c in placed if c['sides']}

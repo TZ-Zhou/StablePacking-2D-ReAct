@@ -3,12 +3,15 @@
 Run from the repository root: python -B -m unittest discover -s research/tests
 Tests on a recorded wall replay its trace offline and are skipped when the run is absent.
 Regression tests for the P0/P1 review findings are marked R1..R8, the second review S1..S6, the third T1..T9;
-GeometryReplay G1..G5 covers the live outcome geometry of Mock wall 4.
+GeometryReplay G1..G6 covers the live outcome geometry of Mock wall 4, FourthReview R4-1..R4-10 the
+fourth review and APIAdapter the fake-provider API adapter.
 """
+import base64
 import copy
 import json
 import multiprocessing
 import os
+import pickle
 import random
 import re
 import shutil
@@ -30,6 +33,7 @@ sys.path.insert(0, str(REPO / 'research'))
 import check_case  # noqa: E402
 import controller_worker  # noqa: E402
 import controllers  # noqa: E402
+import llm_adapter  # noqa: E402
 import run_case  # noqa: E402
 
 from Stonepacker2D.stack import selection  # noqa: E402
@@ -246,11 +250,15 @@ class Staging(unittest.TestCase):
             self.assertIn("    set_filter_controller(make_controller({'kind': 'null'}))", added)
 
     def test_r8_launcher_rejects_bad_controller_specs_before_running(self):
-        for spec in ('{"kind": "random", "seed": null}', '{"kind": "random"}', '{"kind": "null", "x": 1}',
-                     '{"kind": "react", "llm": {"kind": "api", "model": "m"}}'):
-            with self.assertRaises(SystemExit, msg=spec):
-                run_case.main(['thangavelu-noise80', 'never-created', '--policy', 'paper', '--controller', spec])
-        self.assertFalse((run_case.RUNS / 'never-created').exists())
+        bad = ('{"kind": "random", "seed": null}', '{"kind": "random"}', '{"kind": "null", "x": 1}',
+               '{"kind": "react", "llm": {"kind": "api", "model": "m"}}',
+               '{"kind": "react", "llm": {"kind": "api", "provider": "anthropic", "model": "m"}}',
+               '{"kind": "react", "llm": {"kind": "mock", "mode": "max_llc"}, "max_total_tokens": 0}')
+        # a spec that slipped through must never reach a wall: the run directory is never made
+        with mock.patch.object(run_case, 'prepare_output', side_effect=AssertionError('the launcher would build a wall')):
+            for spec in bad:
+                with self.assertRaises(SystemExit, msg=spec):
+                    run_case.main(['thangavelu-noise80', 'never-created', '--policy', 'paper', '--controller', spec])
 
 
 class SpecsAndSchema(unittest.TestCase):
@@ -595,8 +603,14 @@ def null_records():
     """NULL_WALL's controller records as the current code writes them (the wall predates
     tool_table_sha256), with the live outcome geometry of its own records."""
     src = check_case.result_dirs(NULL_WALL)[0]
-    geometry = controllers.LiveGeometry(jsonl(src / 'trace' / 'controller.jsonl'))
+    geometry = controllers.LiveGeometry(jsonl(src / 'trace' / 'controller.jsonl'), list(controllers.trace_events(src)))
     return [json.dumps(r) for r in controllers.rerun(src, {'kind': 'null'}, controllers.base_policy(NULL_WALL), geometry=geometry)]
+
+
+def unverified_only(trace):
+    """True if a trace check found no defect, only what walls recorded before candidate pixels,
+    the ledger and the run manifest cannot prove (run_case's 'not fully verified' notes)."""
+    return all(p.startswith('not fully verified: ') for p in trace['problems'])
 
 
 @unittest.skipUnless(NULL_WALL.exists(), 'P1-r2 Null run not present')
@@ -620,6 +634,7 @@ class StoppedRuns(unittest.TestCase):
         (out / 'trace' / 'commits.jsonl').write_text(''.join(l + '\n' for l in commits), encoding='utf-8')
         rows = (src / 'decisions.txt').read_text(encoding='utf-8').splitlines()[:placed]
         (out / 'decisions.txt').write_text(''.join(l + '\n' for l in rows), encoding='utf-8')
+        base_after(src, out, placed)
         lines = null_records()
         keep = lines[:n] if records is None else lines[:records] if isinstance(records, int) else records
         if keep is not False:
@@ -634,17 +649,17 @@ class StoppedRuns(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             full = run_case.verified_trace(self.copy_run(tmp / 'full'), args, 'PROCESS_PASS', None)
-            self.assertTrue(full['ok'], full['problems'])
+            self.assertTrue(unverified_only(full), full['problems'])
             stopped = run_case.verified_trace(self.copy_run(tmp / 'stopped', 10, 11), args, 'STOPPED_AFTER_PLACEMENTS', stop)
-            self.assertTrue(stopped['ok'], stopped['problems'])
+            self.assertTrue(unverified_only(stopped), stopped['problems'])
             self.assertEqual(stopped['controller'][0]['unverified_trailing_records'], 1)
             for name, records in (('a record missing', lines[:3] + lines[4:10]), ('a wrong record', lines[:3] + [json.dumps(wrong)] + lines[4:10]),
                                   ('no records', False), ('two extra records', 12)):
                 trace = run_case.verified_trace(self.copy_run(tmp / name, 10, records), args, 'STOPPED_AFTER_PLACEMENTS', stop)
-                self.assertFalse(trace['ok'], name)
+                self.assertFalse(unverified_only(trace), name)
                 self.assertEqual(run_case.final_status('STOPPED_AFTER_PLACEMENTS', trace, stop), 'INCOMPLETE_TRACE', name)
             unfinished = self.copy_run(tmp / 'unfinished', 10, committed=9)  # event 9 has no commit yet
-            self.assertTrue(run_case.verified_trace(unfinished, args, 'STOPPED_AFTER_PLACEMENTS', stop)['ok'])
+            self.assertTrue(unverified_only(run_case.verified_trace(unfinished, args, 'STOPPED_AFTER_PLACEMENTS', stop)))
             self.assertFalse(controllers.check(check_case.result_dirs(unfinished)[0], stopped=False)['ok'])
 
     def test_t9_a_trailing_record_must_be_the_next_call_of_the_receipt_controller(self):
@@ -671,8 +686,25 @@ def copy_wall(run, dst):
     out = dst / src.relative_to(run)
     shutil.copytree(src / 'trace', out / 'trace')
     shutil.copy2(src / 'decisions.txt', out / 'decisions.txt')
+    shutil.copy2(src / 'base.pkl', out / 'base.pkl')
     shutil.copy2(run / 'receipt.json', dst / 'receipt.json')
     return out
+
+
+def base_after(src, dst, placements):
+    """dst/base.pkl: the wall of result directory src as it stood after its first `placements`
+    placements (rocks and wall matrix, from the first event of the next attempt)."""
+    with (src / 'base.pkl').open('rb') as f:
+        base = pickle.load(f)
+    commits = jsonl(src / 'trace' / 'commits.jsonl')
+    placed = [i for i, c in enumerate(commits) if c['outcome'] == 'placed']
+    if placements < len(placed):
+        nxt = commits[placed[placements - 1] + 1 if placements else 0]
+        meta, a = selection.load_trace(src / 'trace' / f"e{min(s['event'] for s in nxt['sides'].values()):05d}.npz")
+        base.placed_rocks = base.placed_rocks[:placements]
+        base.matrix = np.asarray(a['wall']) if meta['side'] == 'left' else np.fliplr(np.asarray(a['wall']))
+    with (dst / 'base.pkl').open('wb') as f:
+        pickle.dump(base, f)
 
 
 def jsonl(path, items=None):
@@ -682,7 +714,9 @@ def jsonl(path, items=None):
 
 
 def cut(result, events, commits, rows):
-    """Keep the first `events` trace events, `commits` commits and `rows` decisions.txt lines."""
+    """Keep the first `events` trace events, `commits` commits and `rows` decisions.txt lines, and
+    the wall of base.pkl after `rows` placements."""
+    base_after(result, result, rows)
     for p in selection.published_events(result / 'trace'):
         if int(Path(p).stem[1:]) >= events:
             Path(p).unlink()
@@ -858,7 +892,7 @@ class ProcessIsolation(unittest.TestCase):
     def test_a_timed_out_worker_is_killed_and_reaped_and_restarted_lazily(self):
         client, seen = process_client({'kind': 'null'}, timeout=1.0, bad='hang'), []
         close = client.transport.close
-        client.transport.close = lambda: (seen.append(client.transport.process), close())
+        client.transport.close = lambda reason='close': (seen.append(client.transport.process), close(reason))
         for k in range(2):
             start = time.monotonic()
             policy, record = self.call(client)
@@ -955,7 +989,7 @@ class RecordAndReplay(unittest.TestCase):
         cls.max_llc = controllers.rerun(cls.result, cls.MAX_LLC, cls.base)
 
     def replayed(self, records, spec):
-        llm = controllers.ReplayLLM(records)
+        llm = controllers.ReplayLLM(records, *controllers.llm_identity(spec['llm']))
         worker = {k: controllers.full_spec(spec)[k] for k in controllers.WORKER_KEYS['react']}
         transport = controllers.ReplayedFailures(lambda: controllers.ReActPolicy(llm, **worker), records)
         with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
@@ -1009,7 +1043,7 @@ class RecordAndReplay(unittest.TestCase):
             client = react(llm, llm_timeout=0.3)
             client.sink = live.append
             controlled_policy(PAPER, client, two_outcomes())
-            replay, again = controllers.ReplayLLM(live), []
+            replay, again = controllers.ReplayLLM(live, None, {}), []  # test LLMs name no model
             client = controllers.ControllerClient(client.spec_, controllers.ReplayedFailures(
                 lambda: controllers.ReActPolicy(replay, llm_timeout=0.3), live), again.append)
             start = time.monotonic()
@@ -1042,29 +1076,66 @@ class RecordAndReplay(unittest.TestCase):
         json.dumps(record)
 
 
+def pixels_from_base(result, records, events):
+    """The records with outcome_pixels where base.pkl allows: a candidate whose stone was placed
+    and whose traced footprint is one of the rock's 8 rotations and mirrorings gets those pixels at
+    its (x, y); the others get None. Live-like records for testing the pixel path on a real wall."""
+    with (result / 'base.pkl').open('rb') as f:
+        base = pickle.load(f)
+    crops = {}
+    for rock in base.placed_rocks:
+        m = np.asarray(rock.matrix) != 0
+        rows, cols = np.nonzero(m)
+        crops[int(rock.id)] = m[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    labels = {}
+    for _, a in events:
+        for s in a['sampled_ids'].tolist():
+            labels.setdefault(int(s), f'S{len(labels) + 1}')
+    ids, out = {v: k for k, v in labels.items()}, copy.deepcopy(records)
+    for r in out:
+        meta, a = events[r['event']]
+        pixels = []
+        for o in r['observation']['outcomes']:
+            i = np.nonzero((a['stone_id'] == ids[o['stone']]) & (a['rotation'] == o['rotation']) & (a['x'] == o['x']) & (a['y'] == o['y']))[0][0]
+            crop, mask = crops.get(ids[o['stone']]), None
+            for k in range(8 if crop is not None else 0):
+                t = np.fliplr(np.rot90(crop, k % 4)) if k >= 4 else np.rot90(crop, k % 4)
+                if selection.footprint(t, 'left') == a['footprint'][i]:
+                    shape, wall = (t if meta['side'] == 'left' else np.fliplr(t)), np.asarray(a['wall'])
+                    mask = np.zeros(wall.shape, bool)
+                    mask[o['y']:o['y'] + shape.shape[0], o['x']:o['x'] + shape.shape[1]] = shape
+                    break
+            pixels.append(None if mask is None else controllers.encode_pixels(mask))
+        r['outcome_pixels'] = pixels
+    return out
+
+
 @unittest.skipUnless(REACT_WALL.exists(), 'P2 Mock wall 4 (react max_llc) not present')
 class GeometryReplay(unittest.TestCase):
-    """A live ReAct wall whose LLM saw outcome geometry (list_order_outcomes): the trace keeps no
-    stone pixels, so Transcript Replay takes the geometry from the live records by decision key and
-    candidate pose, and Geometry Validation recomputes it from base.pkl where it can."""
+    """A live ReAct wall whose LLM saw outcome geometry (list_order_outcomes). Transcript Replay
+    takes the geometry from the live records by decision key and candidate pose; Geometry
+    Validation recomputes it from recorded candidate pixels or base.pkl, and what neither covers
+    stays unverifiable: the verdict is then PARTIAL, never PASS (fourth review, finding 8)."""
 
     @classmethod
     def setUpClass(cls):
         cls.result = check_case.result_dirs(REACT_WALL)[0]
         cls.records = jsonl(cls.result / 'trace' / 'controller.jsonl')
+        cls.events = list(controllers.trace_events(cls.result))
         cls.points = [i for i, r in enumerate(cls.records) if r['decision_point'] and len(r['observation']['outcomes']) > 1]
+        cls.pixeled = pixels_from_base(cls.result, cls.records, cls.events)
 
-    def check(self, records):
+    def check(self, records, result=None):
         with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-            return controllers.check(self.result, records=records)
+            return controllers.check(result or self.result, records=records)
 
-    def test_g1_the_live_wall_replays_without_an_llm_and_its_geometry_is_recomputed(self):
+    def test_g1_the_live_wall_replays_without_an_llm_but_is_only_partly_verified(self):
         report = self.check(copy.deepcopy(self.records))
-        self.assertTrue(report['ok'], report['problems'])
-        self.assertEqual((report['switches'], report['geometry']['replay_problems']), (6, 0))
-        v = report['geometry']['validation']
-        self.assertGreater(v['verified'], 0)
-        self.assertEqual((v['mismatched'], v['outcomes']), (0, sum(len(r['observation']['outcomes']) for r in self.records)))
+        self.assertEqual((report['ok'], report['verdict'], report['switches']), (True, 'PARTIAL', 6), report['problems'])
+        g = report['geometry']
+        self.assertEqual((g['outcomes'], g['verified_from_pixels'], g['verified_from_base_pkl'], g['unverifiable'], g['complete']),
+                         (65, 0, 47, 18, False))
+        self.assertIn('18 of 65 outcome geometries not verifiable (no candidate pixels recorded)', report['incomplete'])
 
     def test_g2_tampered_missing_or_mispaired_geometry_fails(self):
         a, b = self.points[0], self.points[1]
@@ -1080,13 +1151,7 @@ class GeometryReplay(unittest.TestCase):
             del rs[a]['observation']['outcomes'][-1]
             rs[a]['n_outcomes'] -= 1
 
-        def strip(rs):
-            for r in rs:
-                for o in r['observation']['outcomes']:
-                    o['geometry'] = None
-
         cases = {'one geometry missing': lambda rs: outcome(rs).update(geometry=None),
-                 'all geometry missing': strip,
                  'geometry swapped between two outcomes': swap,
                  'geometry of another decision': lambda rs: outcome(rs).update(geometry=outcome(rs, b)['geometry']),
                  'a value changed': lambda rs: outcome(rs)['geometry'].update(d_h_max=outcome(rs)['geometry']['d_h_max'] + 1),
@@ -1098,51 +1163,343 @@ class GeometryReplay(unittest.TestCase):
             change(records)
             self.assertFalse(self.check(records)['ok'], name)
 
-    def test_g3_geometry_validation_catches_a_changed_value_on_its_own(self):
-        events = list(controllers.trace_events(self.result))
-        self.assertEqual(controllers.validate_geometry(self.result, self.records, events)['mismatched'], 0)
-        i = next(i for i in self.points if controllers.validate_geometry(self.result, [self.records[i]], events)['verified'])
+    def test_g3_unverifiable_geometry_is_never_a_full_pass(self):
+        # Codex: a changed value of an outcome nothing can recompute, and a wall without base.pkl
+        k = next(i for i, r in enumerate(self.pixeled) if None in r['outcome_pixels'])
         records = copy.deepcopy(self.records)
-        for o in records[i]['observation']['outcomes']:
-            o['geometry']['stone_px'] += 1
-        v = controllers.validate_geometry(self.result, records, events)
-        self.assertEqual(v['mismatched'], controllers.validate_geometry(self.result, [self.records[i]], events)['verified'])
-        with tempfile.TemporaryDirectory() as tmp:  # no base.pkl: nothing verified and nothing passed
-            v = controllers.validate_geometry(copy_wall(REACT_WALL, Path(tmp)), self.records, events)
-        self.assertEqual((v['verified'], v['mismatched'], v['unverifiable']), (0, 0, v['outcomes']))
+        records[k]['observation']['outcomes'][self.pixeled[k]['outcome_pixels'].index(None)]['geometry']['stone_px'] += 999
+        report = self.check(records)
+        self.assertNotEqual(report['verdict'], 'PASS')
+        self.assertFalse(report['geometry']['complete'])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = copy_wall(REACT_WALL, Path(tmp))
+            (out / 'base.pkl').unlink()
+            report = self.check(copy.deepcopy(self.records), out)
+        self.assertNotEqual(report['verdict'], 'PASS')
+        self.assertEqual((report['geometry']['verified_from_base_pkl'], report['geometry']['unverifiable']), (0, 65))
 
-    def test_g4_live_geometry_is_found_by_pose_not_by_position(self):
-        live_record = copy.deepcopy(self.records[self.points[0]])
-        obs = copy.deepcopy(live_record['observation'])
-        for o in obs['outcomes']:
-            o['geometry'] = None
+    def test_g4_recorded_candidate_pixels_verify_the_geometry_and_catch_any_change(self):
+        report = self.check(copy.deepcopy(self.pixeled))
+        g = report['geometry']
+        self.assertTrue(report['ok'], report['problems'])
+        self.assertEqual((g['verified_from_pixels'], g['verified_from_base_pkl'], g['unverifiable']), (47, 0, 18))
+        k, j = next((i, n) for i, r in enumerate(self.pixeled) for n, p in enumerate(r['outcome_pixels']) if p is not None)
+
+        def pixels(rs):
+            return rs[k]['outcome_pixels'][j]
+
+        def flip_bit(rs):
+            raw = bytearray(base64.b64decode(pixels(rs)['bits']))
+            raw[0] ^= 0x80
+            pixels(rs)['bits'] = base64.b64encode(bytes(raw)).decode()
+
+        g0 = self.pixeled[k]['observation']['outcomes'][j]['geometry']
+        cases = {'geometry value changed': lambda rs: rs[k]['observation']['outcomes'][j]['geometry'].update(stone_px=g0['stone_px'] + 1),
+                 'pixels moved': lambda rs: pixels(rs).update(origin=[pixels(rs)['origin'][0] + 1, pixels(rs)['origin'][1]]),
+                 'a pixel flipped': flip_bit,
+                 'pixels of another stone': lambda rs: rs[k]['outcome_pixels'].__setitem__(j, next(
+                     p for r in self.pixeled for p in r['outcome_pixels'] if p and p['shape'] != pixels(rs)['shape'])),
+                 'pixels list cut': lambda rs: rs[k]['outcome_pixels'].pop(),
+                 'malformed pixels': lambda rs: rs[k]['outcome_pixels'].__setitem__(j, {'origin': [0, 0], 'shape': [1], 'bits': '!'})}
+        for name, change in cases.items():
+            records = copy.deepcopy(self.pixeled)
+            change(records)
+            self.assertFalse(self.check(records)['ok'], name)
+
+    def test_g5_live_geometry_is_found_by_pose_not_by_position(self):
+        i = self.points[0]
+        observer, base = controllers.Observer(), controllers.base_policy(REACT_WALL)
+        for meta, a in self.events[:self.records[i]['event'] + 1]:
+            obs, info = observer(base, controllers.context_from_trace(meta, a))
+        live_record = copy.deepcopy(self.records[i])
         live_record['observation']['outcomes'].reverse()
-        live = controllers.LiveGeometry([live_record])
-        live.fill(obs)
-        self.assertEqual((obs, live.problems), (self.records[self.points[0]]['observation'], []))
-        for name, change in (('another decision key', lambda o: o.update(step=o['step'] + 1000)),
-                             ('a moved candidate', lambda o: o['outcomes'][0].update(x=o['outcomes'][0]['x'] + 1))):
-            other = copy.deepcopy(obs)
-            change(other)
-            live.problems.clear()
-            live.fill(other)
-            self.assertTrue(live.problems, name)
+        live = controllers.LiveGeometry([live_record], self.events)
+        live.fill(obs, info['classes'])
+        self.assertEqual(([o['geometry'] for o in obs['outcomes']], live.problems),
+                         ([o['geometry'] for o in self.records[i]['observation']['outcomes']], []))
+        moved = copy.deepcopy(obs)
+        moved['outcomes'][0]['x'] += 1
+        live.fill(moved, info['classes'])
+        self.assertTrue(live.problems)
 
-    def test_g5_acceptance_of_a_built_wall_requires_live_geometry(self):
+    def test_g6_acceptance_of_a_built_wall_requires_a_full_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = copy_wall(NULL_WALL, Path(tmp))
+            accepted = run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})
+            self.assertFalse(accepted['ok'])  # recorded before pixels, ledger and manifest
+            self.assertTrue(unverified_only(accepted), accepted['problems'])
             path = out / 'trace' / 'controller.jsonl'
             records = jsonl(path)
-            self.assertNotIn('controller records without live outcome geometry',
-                             run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})['problems'])
             for r in records:
                 for o in r['observation']['outcomes']:
                     o['geometry'] = None
             jsonl(path, records)
             stripped = run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})
-        self.assertFalse(stripped['ok'])
-        self.assertIn('controller records without live outcome geometry', stripped['problems'])
+        self.assertIn('not fully verified: no live outcome geometry', stripped['problems'])
 
+
+def deaf_or_silent_worker(conn, spec):
+    """Worker main: 'silent' never says ready; 'deaf' says ready and never reads a request."""
+    if json.loads(spec)['bad'] == 'deaf':
+        conn.send_bytes(b'{"ready": true}')
+    threading.Event().wait()
+
+
+@unittest.skipUnless(NULL_WALL.exists() and WALL.exists(), 'P1-r2 Null run or pilot wall not present')
+class FourthReview(unittest.TestCase):
+    """The fourth review's counterexamples (R4-1..R4-10), each on the code path it found open."""
+
+    def call(self, client, ctx=None):
+        records = []
+        client.sink = records.append
+        policy = controlled_policy(PAPER, client, ctx or two_outcomes())
+        return policy, records[-1]
+
+    def transport(self, bad, **kw):
+        lines = []
+        t = controller_worker.ProcessTransport({**controllers.full_spec({'kind': 'null'}), 'bad': bad}, target=deaf_or_silent_worker, **kw)
+        t.log = lines.append
+        return t, lines
+
+    def test_r4_1_every_stage_of_a_request_is_bounded(self):
+        t, lines = self.transport('deaf', timeout=2.0)
+        start = time.monotonic()
+        status, text = t.decide({'blob': 'x' * 4_000_000})  # larger than any pipe buffer, never read
+        self.assertEqual((status, t.process), ('worker_timeout', None), text)
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual([(e['action'], e.get('reason'), e.get('alive')) for e in lines], [('start', None, None), ('close', 'worker_timeout', False)])
+        t, lines = self.transport('silent', start_timeout=2.0)
+        start = time.monotonic()
+        self.assertEqual(t.decide({})[0], 'worker_timeout')
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual((t.process, lines[-1]['alive']), (None, False))
+        self.assertFalse(multiprocessing.active_children())
+
+    def test_r4_2_a_rejected_reply_ends_the_worker_at_once(self):
+        lines = []
+        client = process_client({'kind': 'null'}, bad='list_order')
+        client.ledger = client.transport.log = lines.append
+        _, record = self.call(client)
+        self.assertEqual(record['source'], 'fallback:worker_protocol_error')
+        self.assertIsNone(client.transport.process)  # before any test cleanup
+        self.assertFalse(multiprocessing.active_children())
+        self.assertIn(('close', 'protocol_error', False), [(e.get('action'), e.get('reason'), e.get('alive')) for e in lines])
+        self.assertEqual(controllers.worker_problems(lines, False)[0], [])
+
+    def test_r4_3_a_spawn_failure_is_cleaned_up_and_falls_back(self):
+        client = process_client({'kind': 'null'})
+        with mock.patch('multiprocessing.context.SpawnProcess.start', side_effect=OSError('no resources')):
+            policy, record = self.call(client)
+        self.assertIs(policy, PAPER)
+        self.assertEqual((record['source'], client.request_failures), ('fallback:worker_error', 1))
+        self.assertIn('cannot start the worker: OSError: no resources', record['error'])
+        self.assertEqual((client.transport.process, client.transport.conn, client.transport.started), (None, None, 0))
+        _, record = self.call(client)  # the next request starts a worker normally
+        self.assertEqual((record['source'], client.transport.started), ('null', 1))
+        self.assertTrue(reaped(client))
+
+    def test_r4_4_the_fingerprint_covers_every_research_module_a_run_executes(self):
+        self.assertLessEqual({'research/controller_worker.py', 'research/llm_adapter.py', 'research/check_case.py',
+                              'research/controllers.py'}, set(run_case.code_fingerprint()))
+
+    def test_r4_5_placed_means_added_to_the_wall(self):
+        def edited(change):
+            tmp = Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, tmp)
+            result = copy_wall(NULL_WALL, tmp)
+            change(result)
+            return run_case.check_commits(tmp)
+        commits = jsonl(check_case.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
+        k = [i for i, c in enumerate(commits) if c['outcome'] == 'placed'][3]
+
+        def commit(**fields):
+            return lambda result: jsonl(result / 'trace' / 'commits.jsonl', [
+                {**c, **fields} if i == k else c for i, c in enumerate(jsonl(result / 'trace' / 'commits.jsonl'))])
+
+        def base(edit):
+            def change(result):
+                with (result / 'base.pkl').open('rb') as f:
+                    b = pickle.load(f)
+                edit(b)
+                with (result / 'base.pkl').open('wb') as f:
+                    pickle.dump(b, f)
+            return change
+
+        def hide_rock(result):  # the next attempt's wall without the rock: it never arrived
+            nxt = min(s['event'] for s in commits[k + 1]['sides'].values())
+            meta, a = selection.load_trace(result / 'trace' / f'e{nxt:05d}.npz')
+            wall = np.asarray(a['wall']).copy()
+            with (result / 'base.pkl').open('rb') as f:
+                rock = next(r for r in pickle.load(f).placed_rocks if r.id == commits[k]['stone_id'])
+            wall[np.asarray(rock.matrix) != 0] = 0
+            edit_event(result, nxt, wall=wall)
+        cases = {'Codex: add_stone_ok False, no brick, bbox elsewhere': commit(add_stone_ok=False, bricks_added=0, placed_bbox=[999] * 4),
+                 'add_stone_ok False': commit(add_stone_ok=False), 'no brick added': commit(bricks_added=0),
+                 'bbox elsewhere': commit(placed_bbox=[999] * 4), 'bbox missing': commit(placed_bbox=None),
+                 'base.pkl missing': lambda result: (result / 'base.pkl').unlink(),
+                 'rocks out of order': base(lambda b: b.placed_rocks.reverse()),
+                 'a rock missing': base(lambda b: b.placed_rocks.pop(k)),
+                 'final wall without the last rock': base(lambda b: b.matrix.__setitem__(np.asarray(b.placed_rocks[-1].matrix) != 0, 0)),
+                 'the rock never reached the wall': hide_rock}
+        self.assertEqual(edited(lambda result: None), [])
+        for name, change in cases.items():
+            self.assertNotEqual(edited(change), [], name)
+
+    def test_r4_6_commits_and_decisions_must_keep_their_write_order(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        result = copy_wall(NULL_WALL, tmp)
+        jsonl(result / 'trace' / 'commits.jsonl', jsonl(result / 'trace' / 'commits.jsonl')[::-1])
+        rows = (result / 'decisions.txt').read_text(encoding='utf-8').splitlines()[::-1]
+        (result / 'decisions.txt').write_text(''.join(l + '\n' for l in rows), encoding='utf-8')
+        problems = run_case.check_commits(tmp)
+        self.assertTrue(any('not in the order of their events' in p for p in problems), problems)
+        self.assertNotEqual(run_case.check_commits(tmp, stopped=True), [])
+
+    def test_r4_7_a_stopped_react_or_rule_tail_is_checked_against_the_full_spec(self):
+        src, base = check_case.result_dirs(NULL_WALL)[0], controllers.base_policy(NULL_WALL)
+        events = list(controllers.trace_events(src))[:10]
+        for spec in ({'kind': 'rule'}, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'keep'}}):
+            record = controllers.rerun(src, spec, base)[10]
+            self.assertEqual(controllers.trailing_problems(record, spec, events), [], spec)  # the receipt keeps the spec as given
+            self.assertNotEqual(controllers.trailing_problems(record, {**spec, 'kind': 'null'} if spec['kind'] == 'rule'
+                                                              else {**spec, 'max_tool_calls': 2}, events), [], spec)
+
+    def test_r4_9_model_ledger_and_manifest_bind_what_the_records_say(self):
+        keep = {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'keep'}}
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        result, ledger = copy_wall(WALL, tmp), []
+        records = controllers.rerun(result, keep, controllers.base_policy(WALL), ledger=ledger)
+        jsonl(result / 'trace' / 'controller.jsonl', records)
+        jsonl(result / 'trace' / 'transport.jsonl', ledger)
+        receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
+
+        def check(rs=None):
+            with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+                return controllers.check(result, rs, keep)
+        clean = check()
+        self.assertEqual((clean['ok'], clean['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), clean['problems'])
+        k = next(i for i, r in enumerate(records) if r['decision_point'])
+        renamed = copy.deepcopy(records)  # Codex: every model renamed, every request hash recomputed
+        for r in renamed:
+            for t in r.get('transcripts', []):
+                t['request']['model'] = 'another-model'
+                t['request_sha256'] = controllers.request_sha256(t['request'])
+        self.assertFalse(check(renamed)['ok'])
+        relabelled = copy.deepcopy(records)  # Codex: an LLM decision turned into a worker failure
+        relabelled[k] = {**{x: v for x, v in records[k].items() if x not in ('transcripts', 'react', 'prompt_sha256')},
+                         'source': 'fallback:worker_timeout', 'error': 'no reply within 30 s',
+                         'final': {**records[k]['final'], 'order': '3-0-2-1-4'}}
+        report = check(relabelled)
+        self.assertFalse(report['ok'])
+        self.assertTrue(any(p.startswith('ledger:') for p in report['problems']), report['problems'])
+        jsonl(result / 'trace' / 'controller.jsonl', relabelled)  # the same edit on disk: the manifest sees it too
+        self.assertTrue(any(p.startswith('manifest:') for p in check()['problems']))
+        jsonl(result / 'trace' / 'controller.jsonl', records)
+        (result / 'trace' / 'transport.jsonl').unlink()
+        self.assertEqual(check()['provenance']['ledger'], 'missing')
+        self.assertNotEqual(check()['verdict'], 'PASS')
+
+    def test_r4_10_usage_is_restored_by_the_replay(self):
+        records = controllers.rerun(check_case.result_dirs(WALL)[0], RecordAndReplay.KEEP, controllers.base_policy(WALL))
+        for r in records:
+            for t in r.get('transcripts', []):
+                t['response']['usage'] = {'input_tokens': 7, 'output_tokens': 3}
+        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            report = controllers.check(check_case.result_dirs(WALL)[0], records, RecordAndReplay.KEEP)
+        self.assertTrue(report['ok'], report['problems'][:3])
+
+    def test_worker_lifecycle_evidence(self):
+        start, close = {'type': 'worker', 'action': 'start', 'pid': 1}, {'type': 'worker', 'action': 'close', 'pid': 1, 'alive': False}
+        failed = {'type': 'request', 'event': 0, 'status': 'worker_timeout', 'restart': False, 'worker_pid': 1}
+        self.assertEqual(controllers.worker_problems([start, failed, close], False)[0], [])
+        self.assertNotEqual(controllers.worker_problems([start, failed], False)[0], [])  # a failed worker never closed
+        self.assertNotEqual(controllers.worker_problems([start, {**close, 'alive': True}], False)[0], [])
+        self.assertEqual(controllers.worker_problems([start], True)[0], [])  # a stopped run's last worker
+        self.assertNotEqual(controllers.worker_problems([start, close, {**start, 'pid': 2}], False)[0], [])
+
+
+SAMPLE = {'kind': 'api', 'provider': 'fake', 'model': 'fake-1', 'retry_backoff_s': 0.0}
+
+
+class APIAdapter(unittest.TestCase):
+    """llm_adapter with the fake provider only: no real API is called anywhere."""
+
+    def client(self, llm=None, **params):
+        spec = {'kind': 'react', 'llm': llm or SAMPLE, **params}
+        return controllers.ControllerClient(spec, controllers.InlineTransport(lambda: controllers.make_policy(spec)), ledger=[].append)
+
+    def call(self, client):
+        records = []
+        client.sink = records.append
+        controlled_policy(PAPER, client, two_outcomes())
+        return records[-1]
+
+    def test_specs_name_model_and_params_and_only_the_fake_provider_is_enabled(self):
+        self.assertEqual(controllers.llm_identity(SAMPLE), ('fake-1', {'temperature': 0.0, 'max_tokens': 1024}))
+        for bad in ({**SAMPLE, 'provider': 'anthropic'}, {**SAMPLE, 'provider': 'openai'}):
+            with self.assertRaises(NotImplementedError):
+                controllers.make_controller({'kind': 'react', 'llm': bad})
+        for bad in ({**SAMPLE, 'temperature': 3}, {**SAMPLE, 'max_tokens': 0}, {**SAMPLE, 'max_retries': -1}, {**SAMPLE, 'model': ''},
+                    {**SAMPLE, 'key': 'x'}, {k: v for k, v in SAMPLE.items() if k != 'model'}):
+            with self.assertRaises(ValueError, msg=bad):
+                controllers.make_controller({'kind': 'react', 'llm': bad})
+
+    def test_the_main_process_never_builds_the_client(self):
+        with mock.patch.object(llm_adapter.APILLM, '__init__', side_effect=AssertionError('built in the main process')):
+            client = controllers.make_controller({'kind': 'react', 'llm': SAMPLE})
+        self.assertIsNone(client.transport.process)
+        client.ledger = client.transport.log = [].append
+        record = self.call(client)  # the worker builds it and answers
+        self.assertEqual(record['source'], 'llm')
+        self.assertTrue(reaped(client))
+
+    def test_transcripts_hold_model_params_usage_and_attempts(self):
+        record = self.call(self.client())
+        self.assertEqual(record['source'], 'llm')
+        for t in record['transcripts']:
+            self.assertEqual((t['request']['model'], t['request']['params']), ('fake-1', {'temperature': 0.0, 'max_tokens': 1024}))
+            self.assertEqual(set(t['response']['usage']), {'input_tokens', 'output_tokens'})
+            self.assertEqual([a['error'] for a in t['response']['attempts']], [None])
+
+    def test_transient_failures_are_retried_and_others_fail_the_call(self):
+        record = self.call(self.client({**SAMPLE, 'fake_mode': 'max_llc+transient@1'}))
+        self.assertEqual(record['source'], 'llm')
+        self.assertEqual([a['error'] is None for a in record['transcripts'][0]['response']['attempts']], [False, True])
+        record = self.call(self.client({**SAMPLE, 'fake_mode': 'max_llc+fatal@1'}))
+        self.assertEqual((record['source'], record['final']['order']), ('fallback:llm_error', '3-0-2-1-4'))
+        always = mock.Mock(side_effect=llm_adapter.TransientError('overloaded'))
+        llm = llm_adapter.APILLM({**SAMPLE, 'max_retries': 1}, sender=always)
+        with self.assertRaises(controllers.LLMFailure):
+            llm([], [])
+        self.assertEqual((always.call_count, len(llm.attempts)), (2, 2))
+
+    def test_illegal_truncated_or_huge_replies_never_commit(self):
+        for text in ('{"tool": "commit_order", "arguments": {"order": "0-0-1-2-3"', '{"tool": "commit_order", "arguments": {"order": [3,0,2,1,4]}}',
+                     '"' + 'x' * 200_000 + '"', '{"tool": "commit_order", "arguments": {"order": "0-1-2-3-4", "stone": "S1"}}', ''):
+            llm = llm_adapter.APILLM(SAMPLE, sender=lambda payload, attempt, text=text: {'text': text, 'usage': None})
+            client = controllers.ControllerClient({'kind': 'react', 'llm': SAMPLE}, controllers.InlineTransport(
+                lambda: controllers.ReActPolicy(llm, max_tool_calls=2)), ledger=[].append)
+            record = self.call(client)
+            self.assertEqual((record['source'], record['final']['order']), ('fallback:no_valid_commit', '3-0-2-1-4'), text[:40])
+
+    def test_the_token_budget_is_the_clients(self):
+        client = self.client(max_total_tokens=1)
+        first, second = self.call(client), self.call(client)
+        self.assertEqual((first['source'], second['source']), ('llm', 'skip:token_budget'))
+        self.assertGreater(client.tokens, 1)
+
+    def test_an_api_wall_replays_without_the_provider(self):
+        result, base = check_case.result_dirs(WALL)[0], controllers.base_policy(WALL)
+        step = next(r['step'] for r in controllers.rerun(result, {'kind': 'null'}, base) if r['decision_point'])
+        spec = {'kind': 'react', 'llm': {**SAMPLE, 'fake_mode': f'keep+transient@{step}'}}  # keep: Paper's own wall
+        records = controllers.rerun(result, spec, base)  # inline: the fake provider answers
+        self.assertTrue(any(len(t['response']['attempts']) == 2 for r in records for t in r.get('transcripts', [])))
+        with mock.patch.object(llm_adapter.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
+            report = controllers.check(result, records, spec)
+        self.assertTrue(report['ok'], report['problems'][:3])
 
 if __name__ == '__main__':
     unittest.main()
