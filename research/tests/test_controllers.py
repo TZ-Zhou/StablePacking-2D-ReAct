@@ -2,7 +2,8 @@
 
 Run from the repository root: python -B -m unittest discover -s research/tests
 Tests on a recorded wall replay its trace offline and are skipped when the run is absent.
-Regression tests for the P0/P1 review findings are marked R1..R8, the second review S1..S6, the third T1..T9.
+Regression tests for the P0/P1 review findings are marked R1..R8, the second review S1..S6, the third T1..T9;
+GeometryReplay G1..G5 covers the live outcome geometry of Mock wall 4.
 """
 import copy
 import json
@@ -39,6 +40,7 @@ PAPER = {'policy': 'paper', 'order': (3, 0, 2, 1, 4), 'tol': 1e-9}
 WALL = REPO / 'research' / 'runs' / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
 RANDOM_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1' / 'random1-seed20-a'
 NULL_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1-r2' / 'null-seed20'
+REACT_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p2-mock' / 'react-maxllc-seed20'  # Mock wall 4, live geometry
 
 
 class Brick:
@@ -590,9 +592,11 @@ class InterventionTrace(unittest.TestCase):
 
 
 def null_records():
-    """NULL_WALL's controller records as the current code writes them (the wall predates tool_table_sha256)."""
+    """NULL_WALL's controller records as the current code writes them (the wall predates
+    tool_table_sha256), with the live outcome geometry of its own records."""
     src = check_case.result_dirs(NULL_WALL)[0]
-    return [json.dumps(r) for r in controllers.rerun(src, {'kind': 'null'}, controllers.base_policy(NULL_WALL))]
+    geometry = controllers.LiveGeometry(jsonl(src / 'trace' / 'controller.jsonl'))
+    return [json.dumps(r) for r in controllers.rerun(src, {'kind': 'null'}, controllers.base_policy(NULL_WALL), geometry=geometry)]
 
 
 @unittest.skipUnless(NULL_WALL.exists(), 'P1-r2 Null run not present')
@@ -1036,6 +1040,108 @@ class RecordAndReplay(unittest.TestCase):
         policy, record = LiveDecisions.call(None, react(lambda m, t: Evil()))
         self.assertEqual((record['source'], record['react'][0]['status']), ('fallback:no_valid_commit', 'rejected'))
         json.dumps(record)
+
+
+@unittest.skipUnless(REACT_WALL.exists(), 'P2 Mock wall 4 (react max_llc) not present')
+class GeometryReplay(unittest.TestCase):
+    """A live ReAct wall whose LLM saw outcome geometry (list_order_outcomes): the trace keeps no
+    stone pixels, so Transcript Replay takes the geometry from the live records by decision key and
+    candidate pose, and Geometry Validation recomputes it from base.pkl where it can."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = check_case.result_dirs(REACT_WALL)[0]
+        cls.records = jsonl(cls.result / 'trace' / 'controller.jsonl')
+        cls.points = [i for i, r in enumerate(cls.records) if r['decision_point'] and len(r['observation']['outcomes']) > 1]
+
+    def check(self, records):
+        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            return controllers.check(self.result, records=records)
+
+    def test_g1_the_live_wall_replays_without_an_llm_and_its_geometry_is_recomputed(self):
+        report = self.check(copy.deepcopy(self.records))
+        self.assertTrue(report['ok'], report['problems'])
+        self.assertEqual((report['switches'], report['geometry']['replay_problems']), (6, 0))
+        v = report['geometry']['validation']
+        self.assertGreater(v['verified'], 0)
+        self.assertEqual((v['mismatched'], v['outcomes']), (0, sum(len(r['observation']['outcomes']) for r in self.records)))
+
+    def test_g2_tampered_missing_or_mispaired_geometry_fails(self):
+        a, b = self.points[0], self.points[1]
+
+        def outcome(rs, i=a, k=0):
+            return rs[i]['observation']['outcomes'][k]
+
+        def swap(rs):
+            o = rs[a]['observation']['outcomes']
+            o[0]['geometry'], o[1]['geometry'] = o[1]['geometry'], o[0]['geometry']
+
+        def drop(rs):
+            del rs[a]['observation']['outcomes'][-1]
+            rs[a]['n_outcomes'] -= 1
+
+        def strip(rs):
+            for r in rs:
+                for o in r['observation']['outcomes']:
+                    o['geometry'] = None
+
+        cases = {'one geometry missing': lambda rs: outcome(rs).update(geometry=None),
+                 'all geometry missing': strip,
+                 'geometry swapped between two outcomes': swap,
+                 'geometry of another decision': lambda rs: outcome(rs).update(geometry=outcome(rs, b)['geometry']),
+                 'a value changed': lambda rs: outcome(rs)['geometry'].update(d_h_max=outcome(rs)['geometry']['d_h_max'] + 1),
+                 'malformed geometry': lambda rs: outcome(rs).update(geometry={'d_h_max': 'x'}),
+                 'an outcome dropped': drop,
+                 'a candidate moved': lambda rs: outcome(rs).update(x=outcome(rs)['x'] + 1)}
+        for name, change in cases.items():
+            records = copy.deepcopy(self.records)
+            change(records)
+            self.assertFalse(self.check(records)['ok'], name)
+
+    def test_g3_geometry_validation_catches_a_changed_value_on_its_own(self):
+        events = list(controllers.trace_events(self.result))
+        self.assertEqual(controllers.validate_geometry(self.result, self.records, events)['mismatched'], 0)
+        i = next(i for i in self.points if controllers.validate_geometry(self.result, [self.records[i]], events)['verified'])
+        records = copy.deepcopy(self.records)
+        for o in records[i]['observation']['outcomes']:
+            o['geometry']['stone_px'] += 1
+        v = controllers.validate_geometry(self.result, records, events)
+        self.assertEqual(v['mismatched'], controllers.validate_geometry(self.result, [self.records[i]], events)['verified'])
+        with tempfile.TemporaryDirectory() as tmp:  # no base.pkl: nothing verified and nothing passed
+            v = controllers.validate_geometry(copy_wall(REACT_WALL, Path(tmp)), self.records, events)
+        self.assertEqual((v['verified'], v['mismatched'], v['unverifiable']), (0, 0, v['outcomes']))
+
+    def test_g4_live_geometry_is_found_by_pose_not_by_position(self):
+        live_record = copy.deepcopy(self.records[self.points[0]])
+        obs = copy.deepcopy(live_record['observation'])
+        for o in obs['outcomes']:
+            o['geometry'] = None
+        live_record['observation']['outcomes'].reverse()
+        live = controllers.LiveGeometry([live_record])
+        live.fill(obs)
+        self.assertEqual((obs, live.problems), (self.records[self.points[0]]['observation'], []))
+        for name, change in (('another decision key', lambda o: o.update(step=o['step'] + 1000)),
+                             ('a moved candidate', lambda o: o['outcomes'][0].update(x=o['outcomes'][0]['x'] + 1))):
+            other = copy.deepcopy(obs)
+            change(other)
+            live.problems.clear()
+            live.fill(other)
+            self.assertTrue(live.problems, name)
+
+    def test_g5_acceptance_of_a_built_wall_requires_live_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = copy_wall(NULL_WALL, Path(tmp))
+            path = out / 'trace' / 'controller.jsonl'
+            records = jsonl(path)
+            self.assertNotIn('controller records without live outcome geometry',
+                             run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})['problems'])
+            for r in records:
+                for o in r['observation']['outcomes']:
+                    o['geometry'] = None
+            jsonl(path, records)
+            stripped = run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})
+        self.assertFalse(stripped['ok'])
+        self.assertIn('controller records without live outcome geometry', stripped['problems'])
 
 
 if __name__ == '__main__':

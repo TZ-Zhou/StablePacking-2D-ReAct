@@ -32,6 +32,7 @@ import argparse
 import copy
 import hashlib
 import json
+import pickle
 import re
 import sys
 import threading
@@ -45,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from failure_analysis import FILTERS, wall_state  # noqa: E402
 
 from check_case import chain_problems  # noqa: E402
-from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, load_trace, published_events, select  # noqa: E402
+from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, footprint, load_trace, published_events, select  # noqa: E402
 
 ORDER_TEXT = re.compile(r'[0-4](-[0-4]){4}')
 
@@ -95,8 +96,9 @@ def placement_geometry(wall, pixels):
 class Observer:
     """Builds the controller-visible observation and keeps the controller's memory of earlier calls."""
 
-    def __init__(self):
+    def __init__(self, geometry=None):
         self.labels, self.stones, self.recent = {}, {}, []
+        self.geometry = geometry  # LiveGeometry when re-executing a live wall from its trace
 
     def label(self, sid):
         return self.labels.setdefault(int(sid), f'S{len(self.labels) + 1}')
@@ -144,6 +146,8 @@ class Observer:
                           'recent': list(self.recent)},
                'outcomes': outcomes}
         obs = plain(obs)  # also detaches the memory entries updated below
+        if self.geometry is not None:
+            self.geometry.fill(obs)
         for s in obs['sampled']:  # memory is updated after the observation, so it only holds the past
             m = self.stones.setdefault(s['stone'], {'times_sampled': 0, 'min_feasible_rotations': 4})
             m.update(times_sampled=m['times_sampled'] + 1, last_step=obs['step'],
@@ -683,12 +687,14 @@ def base_policy(run):
     return {'policy': 'paper', 'order': None if fp['order'] is None else tuple(fp['order']), 'tol': fp['tol']}
 
 
-def rerun(result, spec, base, transport='inline'):
+def rerun(result, spec, base, transport='inline', geometry=None):
     """The records a controller writes when it sees the traced selections of one result directory;
-    transport: 'inline', 'process' or a transport object (check() replays LLM walls with one)."""
+    transport: 'inline', 'process' or a transport object (check() replays LLM walls with one);
+    geometry: a LiveGeometry giving the observations the live outcome geometry."""
     records = []
     controller = make_controller(spec, records.append, transport) if isinstance(transport, str) else \
         ControllerClient(spec, transport, records.append)
+    controller.observer.geometry = geometry
     try:
         for meta, a in trace_events(result):
             controller(types.MappingProxyType(dict(base)), context_from_trace(meta, a))
@@ -720,6 +726,113 @@ def comparable(v):
     return v
 
 
+GEOMETRY_KEYS = {f'd_{k}' for k in wall_state(np.zeros((6, 6)))} | {'stone_px'}
+
+
+def geometry_ok(g):
+    """The schema placement_geometry writes: its keys, each an int, a finite float or None (NaN)."""
+    return isinstance(g, dict) and set(g) == GEOMETRY_KEYS and all(
+        v is None or (type(v) in (int, float) and np.isfinite(v)) for v in g.values())
+
+
+def pose_of(outcome):
+    """An outcome's candidate: stone label, rotation and evaluation-frame position."""
+    return tuple(outcome.get(k) for k in ('stone', 'rotation', 'x', 'y')) if isinstance(outcome, dict) else None
+
+
+class LiveGeometry:
+    """Outcome geometry as a wall's live records hold it, for re-executing the wall from its trace,
+    which keeps no stone pixels (Transcript Replay: the policy must see what it saw live). Found by
+    decision key and candidate pose (pose_of), never by position or count. fill() lists in
+    `problems` a selection without a live record, outcome poses that differ from the re-executed
+    ones (missing, extra or duplicated candidates) and geometry that is missing or malformed. This
+    only carries the live values over; whether they are right is validate_geometry's question."""
+
+    def __init__(self, records):
+        self.by_key, self.problems = {}, []
+        for r in records:
+            if not (isinstance(r, dict) and isinstance(r.get('observation'), dict)):
+                continue
+            key, outcomes = decision_key(r), r['observation'].get('outcomes')
+            if key in self.by_key:
+                self.problems.append(f'two live records for {key}')
+                continue
+            poses = [pose_of(o) for o in outcomes] if isinstance(outcomes, list) else []
+            if len(set(poses)) != len(poses) or None in poses:
+                self.problems.append(f'{key}: live outcomes without a pose or with a pose twice')
+            self.by_key[key] = {p: o.get('geometry') for p, o in zip(poses, outcomes or []) if p is not None}
+
+    def fill(self, obs):
+        key = decision_key(obs)
+        recorded = self.by_key.get(key)
+        if recorded is None:
+            self.problems.append(f'{key}: no live record to take the geometry from')
+            return
+        if {pose_of(o) for o in obs['outcomes']} != set(recorded):
+            self.problems.append(f'{key}: the live outcomes are not the candidates the trace re-executes')
+        for o in obs['outcomes']:
+            g = recorded.get(pose_of(o))
+            if not geometry_ok(g):
+                self.problems.append(f'{key}: outcome {o["id"]} {pose_of(o)} has no valid live geometry')
+            o['geometry'] = g
+
+
+def validate_geometry(result, records, events):
+    """Geometry Validation, independent of the records: every outcome geometry that can be
+    recomputed from the stone pixels base.pkl holds must equal the record's. A placed rock gives its
+    stone's world-frame pixel crop; a candidate of that stone whose traced footprint hash equals one
+    of the crop's 8 rotations and mirrorings has exactly those pixels, which are pasted at the
+    candidate's evaluation-frame (x, y) on the traced wall (placement_geometry). Stones whose rock
+    stabilization turned or moved off the pixel grid, stones never placed and a missing base.pkl
+    leave outcomes unverifiable; they are counted, not passed."""
+    crops, path = {}, Path(result) / 'base.pkl'
+    if path.exists():
+        with path.open('rb') as f:
+            base = pickle.load(f)
+        for rock in base.placed_rocks:
+            m = np.asarray(rock.matrix) != 0
+            if m.any():
+                rows, cols = np.nonzero(m)
+                crops[int(rock.id)] = m[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    labels = {}  # stone labels as the Observer gives them: S1, S2, ... in order of first sampling
+    for _, a in events:
+        for s in a['sampled_ids'].tolist():
+            labels.setdefault(int(s), f'S{len(labels) + 1}')
+    ids = {v: k for k, v in labels.items()}
+    by_event, problems, total, verified = {m['event']: (m, a) for m, a in events}, [], 0, 0
+    for r in records:
+        if not (isinstance(r, dict) and r.get('event') in by_event and isinstance(r.get('observation'), dict)):
+            continue
+        meta, a = by_event[r['event']]
+        for o in r['observation'].get('outcomes') or []:
+            total += 1
+            stone, rotation, x, y = pose_of(o)
+            match = np.nonzero((a['stone_id'] == ids.get(stone, -1)) & (a['rotation'] == rotation) & (a['x'] == x) & (a['y'] == y))[0]
+            if len(match) != 1:
+                problems.append(f"event {r['event']}: outcome {pose_of(o)} is not one candidate of the trace")
+                continue
+            crop, world = crops.get(ids[stone]), None
+            for k in range(8 if crop is not None else 0):
+                t = np.rot90(crop, k % 4)
+                t = np.fliplr(t) if k >= 4 else t
+                if footprint(t, 'left') == a['footprint'][match[0]]:
+                    world = t
+                    break
+            if world is None:
+                continue
+            wall = np.asarray(a['wall'])
+            shape = world if meta['side'] == 'left' else np.fliplr(world)
+            piece = shape[:wall.shape[0] - y, :wall.shape[1] - x]
+            pixels = np.zeros(wall.shape, bool)
+            pixels[y:y + piece.shape[0], x:x + piece.shape[1]] = piece
+            if placement_geometry(wall, pixels) != o.get('geometry'):
+                problems.append(f"event {r['event']}: geometry of outcome {pose_of(o)} differs from its recomputation from base.pkl")
+            else:
+                verified += 1
+    return {'outcomes': total, 'verified': verified, 'mismatched': len(problems), 'unverifiable': total - verified - len(problems),
+            'problems': problems}
+
+
 def check(result, records=None, spec=None, stopped=None):
     """Controller records of a built wall against its receipt and trace. The controller named in
     the receipt (spec only for tests on walls without one) is re-executed on the traced inputs from
@@ -728,7 +841,10 @@ def check(result, records=None, spec=None, stopped=None):
     select with it must give the traced pick, decision keys must be unique and the trace itself
     must be complete and consistent (check_case.chain_problems). A stopped run (stopped; by
     default read from the receipt) may hold one record more than events: the controller is called
-    before its event is written. Counts come from the re-execution, not from the records."""
+    before its event is written. Counts come from the re-execution, not from the records.
+    Records holding live outcome geometry are re-executed with it (LiveGeometry: Transcript
+    Replay) and that geometry is recomputed where base.pkl allows (validate_geometry: Geometry
+    Validation); report['geometry'] counts both."""
     result, run = Path(result), run_of(result)
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
     spec = receipt.get('controller') if spec is None else spec
@@ -744,7 +860,10 @@ def check(result, records=None, spec=None, stopped=None):
     if full_spec(spec)['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
         llm, worker = ReplayLLM(records), {k: full_spec(spec)[k] for k in WORKER_KEYS['react']}
         transport = ReplayedFailures(lambda: ReActPolicy(llm, **worker), records)
-    expected, events = rerun(result, spec, base, transport), list(trace_events(result))
+    live = any(isinstance(r, dict) and isinstance(r.get('observation'), dict) and isinstance(r['observation'].get('outcomes'), list)
+               and any(isinstance(o, dict) and o.get('geometry') is not None for o in r['observation']['outcomes']) for r in records)
+    geometry = LiveGeometry(records) if live else None
+    expected, events = rerun(result, spec, base, transport, geometry), list(trace_events(result))
     problems = chain_problems(result, events, stopped)
     if not len(events) <= len(records) <= len(events) + int(stopped):
         problems.append(f'{len(records)} records for {len(events)} selections')
@@ -775,7 +894,14 @@ def check(result, records=None, spec=None, stopped=None):
     if failed and full_spec(spec)['kind'] != 'react':
         problems.append(f'the worker of this deterministic controller failed at events {failed[:5]}: '
                         'its decisions are not the controller ones, the wall is no valid result')
+    validation = None
+    if geometry is not None:
+        problems += [f'live geometry: {p}' for p in geometry.problems[:5]]
+        validation = validate_geometry(result, records, events)
+        problems += validation.pop('problems')[:5]
     report = {'ok': not problems, 'problems': problems, 'records': len(records),
+              'geometry': {'source': 'live records' if live else 'none recorded',
+                           'replay_problems': None if geometry is None else len(geometry.problems), 'validation': validation},
               'decision_points': sum(x['decision_point'] for x in expected),
               'switches': sum(x['final']['switched'] for x in expected)}
     if len(records) > len(events):

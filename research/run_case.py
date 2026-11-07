@@ -192,10 +192,11 @@ def check_controller(output, trace, stopped=False):
         reports = [controllers.check(r, stopped=stopped) for r in check_case.result_dirs(output)]
         problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
         problems += ['controller records without tool_table_sha256 (written before P2)' for r in reports if r.get('legacy_records')]
+        problems += ['controller records without live outcome geometry' for r in reports if r.get('geometry', {}).get('source') != 'live records']
     except Exception as error:  # an unreadable record or trace leaves the run unverified
         reports, problems = [], [f'controller check failed: {error!r}']
     return {**trace, 'ok': trace['ok'] and not problems, 'problems': trace['problems'] + problems,
-            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches', 'unverified_trailing_records')
+            'controller': [{k: r[k] for k in ('ok', 'records', 'decision_points', 'switches', 'unverified_trailing_records', 'geometry')
                             if k in r} for r in reports]}
 
 
