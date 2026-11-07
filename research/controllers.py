@@ -421,13 +421,24 @@ class InlineTransport:
         self.policy = None
 
 
+SECRETS = set()  # the API keys this process read (llm_adapter.api_key registers them): never written anywhere
+KEY_PATTERN = re.compile(r'(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_*-]{8,}')  # a key, or a provider's partly starred echo of one
+
+
+def masked(text):
+    """text without any registered key or key-shaped string; masked before anything shortens it."""
+    for secret in SECRETS:
+        text = text.replace(secret, '***') if secret else text
+    return KEY_PATTERN.sub('sk-***', text)
+
+
 def error_text(error):
-    """'Type: message' of an exception, at most 300 characters, without trusting its __str__."""
+    """'Type: message' of an exception, masked, then at most 300 characters, without trusting its __str__."""
     try:
         text = str(error)
     except Exception:
         text = '(unprintable)'
-    return f'{type(error).__name__}: {text}'[:300]
+    return masked(f'{type(error).__name__}: {text}')[:300]
 
 
 class NullPolicy:
@@ -619,7 +630,7 @@ class ReActPolicy:
             try:
                 box['reply'] = self.llm(*args)
             except LLMFailure as failure:
-                box['failure'] = (failure.status, str(failure.text)[:300])
+                box['failure'] = (failure.status, masked(str(failure.text))[:300])
             except Exception as error:  # any client failure is a failed call, never a decision
                 box['failure'] = ('error', error_text(error))
         start = time.monotonic()
