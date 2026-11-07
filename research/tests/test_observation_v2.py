@@ -119,16 +119,23 @@ class Version2(unittest.TestCase):
         text = controllers.SYSTEM_V2
         for c in range(5):  # number, abbreviation and the feature name of selection.FEATURE_NAMES
             self.assertIn(f'- {c} {controllers.FILTERS[c]} {FEATURE_NAMES[c]}:', text)
-        for needle in ('higher score is better', 'LLC > 0', 'w >= m - tol x max(1, |m|)', 'tol the base policy',
+        for needle in ('higher score is better', 'LLC > 0', 'w >= m - tol x max(1, |m|)', "tol being the base policy's tolerance",
                        'largest sum of all five', '3-0-2-1-4', 'advantages and costs', 'Never cite a geometry value that is null',
-                       'median height of the sampled stones', '0.7 or less', 'friction coefficient',
-                       # the two states Wang evaluates a candidate in, and the proxy apart from both
-                       'LFR at the candidate pose', 'NHR, GDS, IWR and LLC after the candidate is added',
-                       "copy of the wall with the stabilized stone", "candidate's own unstabilized pixels",
-                       'not a state any filter uses',
-                       # LFR with its bottom gaps and normalization, IWR's denominator
-                       '-(L + D) / (wall width x stone height + wall height x stone width)', 'the ground counts',
-                       'flush on the left and on the bottom', "that stone's horizontal span"):
+                       'median stored height of the sampled stones', '0.7 or less', 'friction coefficient',
+                       # the two states, what turning updates and what it leaves (test_stabilization_turns_only_the_pixels)
+                       'LFR: the candidate at the pose convolution found', 'NHR, GDS, IWR and LLC: a copy of the current wall',
+                       "Turning replaces only the stone's pixels", 'stay those of the unturned candidate',
+                       'before its own stabilization', "candidate's own unstabilized pixels", 'not a state any filter uses',
+                       # the frame (test_lfr_as_the_prompt_defines_it_is_wangs, test_filter_rules_on_the_recorded_trace,
+                       # test_iwr_touch_as_the_prompt_defines_it)
+                       'never a wall pixel for LFR, GDS or LLC', "its sides are edges for IWR's touch test",
+                       'frame pixels count as empty', 'ground included, frame excluded',
+                       '-(L + D) / (matrix width x stone height + matrix height x stone width)',
+                       'flush on the left and on the bottom', "that stone's stored span", 'over at least 3 rows',
+                       'upper half of the side',
+                       # the cascade's fallback (test_cascade_fallback_as_the_prompt_defines_it)
+                       'With finite w and m the best candidate always passes', 'If a stage keeps none',
+                       'this one included, and the later filters are not used'):
             self.assertIn(needle, text)
         commit = {t['name']: t for t in controllers.TOOLS_V2}['commit_order']
         self.assertIn('advantages and costs', commit['parameters']['properties']['rationale']['description'])
@@ -175,6 +182,9 @@ class Version2(unittest.TestCase):
         s[3:6, 5:9] = 1  # no wall to the left: the gap runs to the matrix edge
         s[6, 6:8] = 1  # an irregular top row
         cases.append((w2, s))
+        w3 = wall_()
+        w3[:, 1:5] = 255  # a thick frame directly left of the stone: frame pixels count as empty
+        cases.append((w3, s))
         values = []
         for wall, stone in cases:
             rows, cols = np.nonzero(stone)
@@ -187,17 +197,104 @@ class Version2(unittest.TestCase):
         self.assertLess(values[0], 0)
         self.assertEqual(values[1], 0)  # flush: 0
         self.assertLess(values[2], 0)
+        self.assertEqual(values[3], values[2])  # the frame changes nothing
+
+    def test_iwr_touch_as_the_prompt_defines_it(self):
+        """IWR's touch test, by local_void.evaluate_convolve at one pinned pose: a vertical edge of the
+        wall matrix over at least 3 rows within 1 px, along the upper half of the side (one row lower
+        for an even height); the frame's side is an edge."""
+        from skimage.measure import regionprops
+        from Stonepacker2D.evaluate.local_void import evaluate_convolve
+
+        def left_touch(h, rows, frame=False):
+            wall = np.zeros((30, 30))
+            wall[:2], wall[-1], wall[:, 0], wall[:, -1] = 1, 255, 255, 255
+            if frame:
+                wall[:, :10] = 255
+            for r in rows:
+                wall[2 + r, 9] = 2  # wall pixels directly left of the stone's row r
+            stone = np.zeros((30, 30))
+            stone[:h, :6] = 1
+            box = regionprops(stone.astype(np.uint8))[0].image
+            pinned = np.zeros((30, 30))
+            pinned[2, 10] = 1  # the only allowed pose: bottom-left corner at row 2, column 10
+            r = evaluate_convolve(types.SimpleNamespace(matrix=wall, rock_left_tops=[], rock_right_tops=[]),
+                                  types.SimpleNamespace(matrix=stone, width=6, height=h), np.flip(box), pinned)
+            self.assertEqual(tuple(r['best_loc']), (2, 10))
+            return r['best_left_touch'] <= 1
+        self.assertTrue(left_touch(9, range(4, 9)))  # upper half (rows 4-8 of 9)
+        self.assertFalse(left_touch(9, range(0, 4)))  # lower half only
+        self.assertTrue(left_touch(8, range(0, 4)))  # even height: one row lower
+        self.assertTrue(left_touch(9, range(6, 9)))  # 3 rows make an edge
+        self.assertFalse(left_touch(9, range(6, 8)))  # 2 rows do not
+        self.assertFalse(left_touch(9, []))  # no wall beside it
+        self.assertTrue(left_touch(9, [], frame=True))  # the frame's side
+
+    def test_stabilization_turns_only_the_pixels(self):
+        """Wang's Base.add_stone with the 'rotation' method on a stone overhanging a lower stone:
+        rotate_brick turns its pixels, but its stored center, width, height and the corner points and
+        centers the wall stored for it stay those of the unturned stone (what NHR and IWR read)."""
+        from Stonepacker2D.entity.base import Base
+        from Stonepacker2D.entity.stone import Stone
+        from Stonepacker2D.utils import constant
+        saved = (constant.get_world_size(), constant.get_rotate_state(), constant.get_stabalize_method())
+        self.addCleanup(lambda: (constant.set_world_size(*saved[0]), constant.set_rotate_state(saved[1]),
+                                 constant.set_stabalize_method(saved[2])))
+        constant.set_world_size(40, 40)
+        constant.set_rotate_state(True)
+        constant.set_stabalize_method('rotation')
+
+        def stone(rows, cols, id_):
+            s = Stone()
+            s.matrix = np.zeros((40, 40))
+            s.matrix[:rows, :cols] = 1
+            s.center, s.height, s.width, s.id, s.cluster, s.area = [(cols - 1) / 2, (rows - 1) / 2], rows, cols, id_, 0, rows * cols
+            return s
+        base = Base()
+        ground = stone(2, 40, constant.get_base_id())
+        base.add_stone(ground, [0, 0])
+        base.add_stone(stone(8, 10, 1), [2, 2])
+        top = stone(6, 12, 2)
+        unturned = top.transformed([11, 10])
+        base.add_stone(top, [11, 10])  # center past the lower stone's right side: turned
+        rock = base.placed_rocks[-1]
+        pixels, before = np.argwhere(rock.matrix), np.argwhere(unturned.matrix)
+        self.assertNotEqual(rock.rot_angle, 0)
+        self.assertFalse(np.array_equal(rock.matrix != 0, unturned.matrix != 0))  # the pixels turned
+        self.assertEqual(np.ptp(pixels[:, 0]) + 1, 7)  # the turned stone is 7 rows high
+        self.assertEqual((rock.height, rock.width), (6, 12))  # stored: unturned
+        self.assertEqual(list(rock.center), list(unturned.center))
+        self.assertEqual(list(base.rock_centers[-1]), list(unturned.center))
+        self.assertEqual(base.rock_left_tops[-1], [before[:, 1].min(), before[:, 0].max()])
+        self.assertEqual(base.rock_right_tops[-1], [before[:, 1].max(), before[:, 0].max()])
+
+    def test_cascade_fallback_as_the_prompt_defines_it(self):
+        """selection._paper: with finite scores the best candidate always passes; a stage keeps none
+        only when the arithmetic is not finite, and then the pick is the largest sum of the filters
+        applied so far, this one included, over that stage's input."""
+        rng = np.random.default_rng(0)
+        for _ in range(300):
+            raw = rng.normal(size=(int(rng.integers(1, 12)), 6)) * 10.0 ** rng.integers(-6, 7)
+            raw[:, 3] = np.abs(raw[:, 3]) + 1e-12
+            for order in ((3, 0, 2, 1, 4), (4, 1, 2, 0, 3)):
+                self.assertEqual(select(raw, [1.0] * 6, 'paper', order, 1e-9).branch, 'full')
+        raw = np.array([[1e308, 0, 0, 1, 0, 0], [1.7e308, 1, 0, 1, 0, 0], [1e308, 5, 0, 1, 0, 0]], dtype=float)
+        s = select(raw, [1.0] * 6, 'paper', (3, 0, 2, 1, 4), 1e-9)  # the NHR mean overflows at stage 2
+        self.assertEqual(s.branch, 'fallback_2')
+        self.assertEqual(s.index, 1)  # largest LLC + NHR among the stage's input, not the largest GDS
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
     def test_filter_rules_on_the_recorded_trace(self):
         """What the trace can confirm without stone pixels, at the first selection (nothing placed yet):
         NHR is the no-left-neighbour rule with the sampled stones' median height, IWR 0.5 (no stone
-        below), GDS 0 (the stone lies outside the ground band B)."""
+        below), GDS 0: B is the ground band. Were the frame (255, all around the wall) a wall pixel, B
+        would be the whole matrix and every GDS 1."""
         m, a = next(iter(controllers.trace_events(result_of(WALL))))
         raw, n = a['features_raw'], len(a['sampled_ids'])
         median = np.percentile(a['height'][:n], 50)  # rotation-0 rows: the sampled stones themselves
         np.testing.assert_allclose(raw[:, 0], -np.abs(median - a['height']) / a['height'])
         np.testing.assert_allclose(raw[:, 2], 0.5)
+        self.assertTrue((a['wall'][-1] == 255).all() and (a['wall'][:, 0] == 255).all())
         np.testing.assert_allclose(raw[:, 1], 0.0)
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
