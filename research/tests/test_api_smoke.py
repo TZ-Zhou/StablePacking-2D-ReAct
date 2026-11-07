@@ -371,10 +371,28 @@ class LoopbackRuns(unittest.TestCase):
         self.assertEqual(report['check']['expected_on_base_trajectory'], [])
         self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
 
+    def test_a_request_for_another_decision_point_is_refused_before_sending(self):
+        """The guard right before the worker, should the preflight's pin ever be bypassed: another
+        event, decision key or seed than the target's sends nothing and ends the run 'aborted'."""
+        target = api_smoke.parse_target(TARGET)
+        for k, wrong in enumerate(({**target, 'event': 8, 'step': 9}, {**target, 'seed': 1}, {**target, 'event': 10})):
+            name = f'smoke-00{k + 1}'
+            with mock.patch.object(api_smoke, 'target_problems', return_value=[]), \
+                    mock.patch.object(api_smoke, 'journal_problems', return_value=[]):  # each run aborts and would block the next
+                with self.assertRaises(RuntimeError) as refused:
+                    self.run_smoke(name, api_smoke.spec_of(1, 2, 10), target=wrong)  # the step-10 spec, a wrong target
+            self.assertIn('refused before sending', str(refused.exception))
+            self.assertEqual(len(self.server.requests), 0, wrong)
+            journal = self.journal(name)
+            self.assertEqual(journal['state'], 'aborted')
+            self.assertTrue(any('refused before sending' in r for r in journal['reasons']), journal['reasons'])
+            self.assertFalse((self.out / api_smoke.LOCK).exists())
+        self.assertFalse(multiprocessing.active_children())
+
     def test_a_request_outside_the_target_ends_the_run_uncertain(self):
-        """The ledger check after the run, should the preflight's pin ever be bypassed."""
+        """The ledger check after the run, a second net behind the guard (disabled here)."""
         wrong = {**api_smoke.parse_target(TARGET), 'event': 8, 'step': 9}
-        with mock.patch.object(api_smoke, 'target_problems', return_value=[]):
+        with mock.patch.object(api_smoke, 'target_problems', return_value=[]), mock.patch.object(api_smoke, 'guard'):
             report = self.run_smoke('smoke-001', api_smoke.spec_of(1, 2, 10), target=wrong)
         self.assertEqual(report['target']['requests_elsewhere'], [9])  # one ledger line per decision request
         journal = self.journal('smoke-001')

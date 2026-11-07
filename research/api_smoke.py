@@ -41,7 +41,9 @@ observation is built, so the history is the trajectory's, but nothing is sent an
 the budget is used) and needs max_decisions 1 (every later one is skip:wall_budget). The
 preflight replays the trajectory offline with a scripted mock LLM (plan_of) and refuses unless
 that one decision point is exactly the target (the wall's seed, event, step, phase, trial, side);
-it never moves to another one. After the run, a request anywhere else ends it 'uncertain'.
+it never moves to another one. Right before each request reaches the worker the run checks the
+copied wall's seed, the event and the request's decision key again (guard: else nothing is sent
+and the run ends 'aborted'); after the run, a ledger request anywhere else ends it 'uncertain'.
 --observation-version 2 gives the controller Observation and prompt version 2 (default 1).
 --loopback is for tests only: it requires OPENAI_BASE_URL on 127.0.0.1/localhost (a mock server).
 """
@@ -392,6 +394,23 @@ def run_smoke(name, spec, out=OUT, after=None, loopback=False, target=None):
         (out / LOCK).unlink()
 
 
+def guard(transport, client, target, run):
+    """Checks the target once more right before each request reaches the worker: the copied wall's
+    seed, the event number (the client's call count) and the decision key of the observation the
+    request carries must be the target's; otherwise it raises, nothing is sent and the run ends
+    'aborted' (pinned by the preflight, this only fails if the trajectory changed in between)."""
+    seed, send = json.loads((run / 'receipt.json').read_text(encoding='utf-8')).get('seed'), transport.decide
+    at = (target['seed'], target['event'], *(target[k] for k in DECISION_KEYS))
+
+    def decide(request, settle=None):
+        obs = request['observation']
+        here = (seed, client.calls, *(obs.get(k) for k in DECISION_KEYS))
+        if here != at:
+            raise RuntimeError(f'refused before sending: the request is for {here}, the target is {at}')
+        return send(request, settle)
+    transport.decide = decide
+
+
 def locked_run(name, spec, out, after, loopback, target=None):
     run = out / name
     run.mkdir()
@@ -408,6 +427,8 @@ def locked_run(name, spec, out, after, loopback, target=None):
         # controllers.rerun's loop, with the client kept: its own unknown_usage counts a worker
         # failure after which no transcript came back (a request may have been sent)
         client = controllers.ControllerClient(full, transport, records.append, ledger.append)
+        if target is not None:
+            guard(transport, client, target, run)
         try:
             for meta, a in controllers.trace_events(result):
                 client(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))

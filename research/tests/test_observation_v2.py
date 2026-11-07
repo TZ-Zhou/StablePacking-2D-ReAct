@@ -119,14 +119,113 @@ class Version2(unittest.TestCase):
         text = controllers.SYSTEM_V2
         for c in range(5):  # number, abbreviation and the feature name of selection.FEATURE_NAMES
             self.assertIn(f'- {c} {controllers.FILTERS[c]} {FEATURE_NAMES[c]}:', text)
-        for needle in ('higher score is better', 'LLC > 0', '>= the mean over the candidates still kept',
+        for needle in ('higher score is better', 'LLC > 0', 'w >= m - tol x max(1, |m|)', 'tol the base policy',
                        'largest sum of all five', '3-0-2-1-4', 'advantages and costs', 'Never cite a geometry value that is null',
-                       'median height of the sampled stones', '0.7 or less', 'friction coefficient'):
+                       'median height of the sampled stones', '0.7 or less', 'friction coefficient',
+                       # the two states Wang evaluates a candidate in, and the proxy apart from both
+                       'LFR at the candidate pose', 'NHR, GDS, IWR and LLC after the candidate is added',
+                       "copy of the wall with the stabilized stone", "candidate's own unstabilized pixels",
+                       'not a state any filter uses',
+                       # LFR with its bottom gaps and normalization, IWR's denominator
+                       '-(L + D) / (wall width x stone height + wall height x stone width)', 'the ground counts',
+                       'flush on the left and on the bottom', "that stone's horizontal span"):
             self.assertIn(needle, text)
         commit = {t['name']: t for t in controllers.TOOLS_V2}['commit_order']
         self.assertIn('advantages and costs', commit['parameters']['properties']['rationale']['description'])
         self.assertEqual(controllers.reply_problem(  # the schema still accepts the same commits
             {'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 'x'}}, controllers.TOOLS_V2), None)
+
+    def test_lfr_as_the_prompt_defines_it_is_wangs(self):
+        """SYSTEM_V2's LFR, implemented from its text alone, against local_void.get_void_to_left
+        (place_stone's filters[4] = -get_void_to_left) on small walls; row 0 is the bottom."""
+        from Stonepacker2D.evaluate.local_void import get_void_to_left
+
+        def as_prompt(wall, stone, center):
+            material = (wall != 0) & (wall != 255)  # wall pixels: the ground counts, the 255 boundary does not
+            rows, cols = np.nonzero(stone)
+            h, w = rows.max() - rows.min() + 1, cols.max() - cols.min() + 1
+            left = 0
+            for r in set(rows):  # each row: empty pixels between the leftmost stone pixel and the wall left of the center column
+                c0 = cols[rows == r].min()
+                walls = np.flatnonzero(material[r, :int(center[0])])
+                left += max(0, c0 - (walls.max() if walls.size else -1) - 1)
+            down = 0
+            for c in set(cols):  # each column: empty pixels between the lowest stone pixel and the wall below the center row
+                r0 = rows[cols == c].min()
+                walls = np.flatnonzero(material[:int(center[1]), c])
+                down += max(0, r0 - (walls.max() if walls.size else -1) - 1)
+            return -(left + down) / (wall.shape[1] * h + wall.shape[0] * w)
+
+        def wall_():
+            w = np.zeros((12, 14))
+            w[:2] = 1  # ground
+            w[-1], w[:, 0], w[:, -1] = 255, 255, 255
+            return w
+        cases = []
+        w = wall_()
+        w[2:6, 1:4] = 2  # a placed stone on the left
+        s = np.zeros_like(w)
+        s[4:8, 6:10] = 1  # gap of 2 to the left, 2 above the ground
+        cases.append((w, s))
+        s = np.zeros_like(w)
+        s[2:6, 4:8] = 1  # flush on the left and on the ground
+        cases.append((w, s))
+        w2 = wall_()
+        s = np.zeros_like(w2)
+        s[3:6, 5:9] = 1  # no wall to the left: the gap runs to the matrix edge
+        s[6, 6:8] = 1  # an irregular top row
+        cases.append((w2, s))
+        values = []
+        for wall, stone in cases:
+            rows, cols = np.nonzero(stone)
+            center = ((cols.min() + cols.max()) / 2, (rows.min() + rows.max()) / 2)
+            h, wd = rows.max() - rows.min() + 1, cols.max() - cols.min() + 1
+            wang = -get_void_to_left(types.SimpleNamespace(matrix=wall),
+                                     types.SimpleNamespace(matrix=stone, center=center, height=h, width=wd))
+            self.assertAlmostEqual(as_prompt(wall, stone, center), wang, places=12)
+            values.append(wang)
+        self.assertLess(values[0], 0)
+        self.assertEqual(values[1], 0)  # flush: 0
+        self.assertLess(values[2], 0)
+
+    @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
+    def test_filter_rules_on_the_recorded_trace(self):
+        """What the trace can confirm without stone pixels, at the first selection (nothing placed yet):
+        NHR is the no-left-neighbour rule with the sampled stones' median height, IWR 0.5 (no stone
+        below), GDS 0 (the stone lies outside the ground band B)."""
+        m, a = next(iter(controllers.trace_events(result_of(WALL))))
+        raw, n = a['features_raw'], len(a['sampled_ids'])
+        median = np.percentile(a['height'][:n], 50)  # rotation-0 rows: the sampled stones themselves
+        np.testing.assert_allclose(raw[:, 0], -np.abs(median - a['height']) / a['height'])
+        np.testing.assert_allclose(raw[:, 2], 0.5)
+        np.testing.assert_allclose(raw[:, 1], 0.0)
+
+    @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
+    def test_stone_ids_stay_anonymous(self):
+        """Renaming every stone id (one bijection for the whole wall; sampling order, candidates and
+        scores unchanged) gives byte-identical serialized observations and order tables in version 2."""
+        events = list(controllers.trace_events(result_of(WALL)))
+        ids = sorted({int(s) for _, a in events for k in ('sampled_ids', 'inventory_ids') for s in a[k]})
+        rename = dict(zip(ids, reversed([1000 + i for i in range(len(ids))])))  # reverses the id order
+        base = controllers.base_policy(WALL)
+
+        def run(mapping):
+            observer, out = controllers.Observer(version=2), []
+            for meta, a in events:
+                a = {**a, **{k: np.array([mapping.get(int(s), int(s)) for s in a[k]]) for k in ('sampled_ids', 'inventory_ids')}}
+                obs, info = observer(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
+                out.append(json.dumps(obs) + json.dumps(controllers.tool_table(info, observer.label)))
+            return out
+        original, renamed = run({}), run(rename)
+        self.assertEqual(len(original), len(events))
+        for k, (x, y) in enumerate(zip(original, renamed)):
+            self.assertEqual(x, y, f'event {k}')
+        # version 1 keeps its recorded behaviour (stone-id order in memory.stones), unchanged here
+        v1 = controllers.Observer()
+        for meta, a in events[:10]:
+            obs, _ = v1(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
+        labels = {int(s): v1.label(s) for s in ids if int(s) in v1.labels}
+        self.assertEqual(list(obs['memory']['stones']), [labels[s] for s in sorted(labels) if labels[s] in obs['memory']['stones']])
 
     def test_geometry_availability(self):
         obs, _ = controllers.Observer(version=2)(PAPER, live(two_outcomes()))

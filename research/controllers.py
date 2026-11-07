@@ -155,7 +155,8 @@ class Observer:
     weights, the wall size, each outcome's bounding box (shape), which geometry exists
     (geometry_available: pixels live, summary offline, none) with its note, the remaining stones
     (sizes of those already sampled, the count never seen), up to 10 earlier calls (history) and
-    the change since the last one (trend)."""
+    the change since the last one (trend). Every stone-keyed list or mapping is in label order, so
+    the serialized observation is the same under any renaming of the stone ids."""
 
     def __init__(self, geometry=None, version=1):
         self.labels, self.stones, self.recent = {}, {}, []
@@ -249,7 +250,8 @@ class Observer:
                 'geometry_available': mode, 'geometry_note': GEOMETRY_NOTES[mode],
                 'remaining': {'n': len(remaining), 'n_sampled_before_or_now': len(seen),
                               'n_never_sampled': len(remaining) - len(seen), 'sampled_sizes': seen},
-                'memory': {**obs['memory'], 'recent': list(self.history)},
+                'memory': {'stones': dict(sorted(obs['memory']['stones'].items(), key=lambda kv: int(kv[0][1:]))),
+                           'recent': list(self.history)},  # label order (version 1 keeps its stone-id order)
                 'trend': {'since_step': None if last is None else last['step'],
                           'feasible_share': delta('feasible_share'), 'mean_feasible_llc': delta('mean_feasible_llc')}}
 
@@ -594,40 +596,51 @@ TOOLS = [{'name': 'list_order_outcomes', 'description': 'Distinct candidates the
                          'properties': {'order': {'type': 'string'}}}},
          COMMIT]
 
-# Version 2: the filters as Stonepacker2D/stack/place_stone.py computes them (place_one_stone) and the
-# cascade of selection._paper; the observation fields of Observer.version_2.
+# Version 2: the filters as Stonepacker2D/stack/place_stone.py computes them (place_one_stone: LFR from
+# local_void.get_void_to_left before future_base.add_stone; NHR, GDS, IWR, LLC on the stabilized rock
+# after it), the cascade of selection._paper and the observation fields of Observer.version_2.
 SYSTEM_V2 = (
     "You choose the filter order of Wang's hierarchical filtering for one stone placement. The candidates "
     "(one per sampled stone and rotation, each at the position Wang's image convolution found), their scores and "
     "the LLC > 0 gate are fixed; you only choose the order of the five filters (a permutation 'a-b-c-d-e' of "
     "0 NHR, 1 GDS, 2 IWR, 3 LLC, 4 LFR) or keep the base order (keep_paper). You cannot pick a stone or a position.\n"
-    "Filters (raw scores; for every filter a higher score is better). Coordinates are in the evaluation frame: "
-    "mirrored when building from the right, so 'left' is the side the course is built from.\n"
+    "Filters (raw scores; for every filter a higher score is better). Rows count upward from the ground; "
+    "coordinates are in the evaluation frame: mirrored when building from the right, so 'left' is the side the "
+    "course is built from. Wang evaluates each candidate in two states: LFR at the candidate pose as convolution "
+    "found it; NHR, GDS, IWR and LLC after the candidate is added to a copy of the current wall with Wang's "
+    "stabilization (add_stone: the 'rotation' method turns the stone, or wedges it if turning fails), on the "
+    "stabilized stone's pixels.\n"
     "- 0 NHR course_height: -|top row of the stone - top row of its left neighbour| / stone height, the neighbour "
-    "being the placed stone left of its center whose top-right corner is nearest to its top-left corner; with no "
-    "placed stone to its left, -|median height of the sampled stones - stone height| / stone height. 0 = level with "
-    "its left neighbour.\n"
-    "- 1 GDS global_density: B = the box from the lowest to the highest occupied row of the current wall and from its "
-    "leftmost occupied column to the right edge (rows 0-2 on an empty wall); score = (|stone & B| / |stone | B|) / "
-    "(|stone| / |B|), set to 0 when it is 0.7 or less. Higher = the stone fits inside the current wall's band.\n"
-    "- 2 IWR interlocking: 'touching' a side = the lower half of that side of its bounding box is within 1 px of an "
-    "edge of the current wall. Touching both sides: 0.5. Touching only the left: the distance from its bottom-right "
-    "corner to the nearest top-left corner of a stone below (a placed stone whose center is lower than its bottom), "
-    "divided by that stone's width. Touching only the right: the same from its bottom-left corner to the nearest "
-    "top-right corner. Touching neither: the mean of the two. Each distance is 0.5 when no stone lies below. "
-    "Higher = its vertical joint is farther from the joints below.\n"
-    "- 3 LLC kinematic: the kinematic limit load (tilting table) of the wall with this stone added at its pose, before "
-    "stabilization, divided by the friction coefficient. Only candidates with LLC > 0 and five finite scores are feasible.\n"
-    "- 4 LFR local_void: -(sum over the stone's rows of the empty pixels between its left side and the wall to its "
-    "left). 0 = flush on the left.\n"
+    "being the placed stone (its top-right corner left of the stone's center) whose top-right corner is nearest to "
+    "the stone's top-left corner; with no such stone, -|median height of the sampled stones - stone height| / stone "
+    "height. 0 = level with its left neighbour.\n"
+    "- 1 GDS global_density: B = the box from the lowest to the highest occupied row of the current wall (ground "
+    "included) and from its leftmost occupied column to the right edge; score = (|stone & B| / |stone | B|) / "
+    "(|stone| / |B|), set to 0 when it is 0.7 or less. Higher = the stone lies inside the wall's current band.\n"
+    "- 2 IWR interlocking: 'touching' a side = Wang's convolution at the candidate pose finds an edge of the current "
+    "wall within 1 px along that side of its bounding box (from its center row). Stones below = placed stones whose "
+    "center row is lower than the stone's bottom row. Touching both sides: 0.5. Touching only the left: d1 = the "
+    "distance from the stone's bottom-right corner to the nearest top-left corner of a stone below, divided by that "
+    "stone's horizontal span (its rightmost minus its leftmost column). Touching only the right: d2 = the same from "
+    "its bottom-left corner to the nearest top-right corner. Touching neither: (d1 + d2) / 2. d1 and d2 are 0.5 when "
+    "no stone lies below. Higher = its vertical joint is farther from the joints below.\n"
+    "- 3 LLC kinematic: the kinematic limit load (tilting table) of the copy of the wall with the stabilized stone "
+    "added, divided by the friction coefficient. Only candidates with LLC > 0 and five finite scores are feasible.\n"
+    "- 4 LFR local_void: -(L + D) / (wall width x stone height + wall height x stone width), with L = for each row of "
+    "the stone, the empty pixels between its leftmost pixel and the rightmost wall pixel left of its center column "
+    "(or the wall's left edge), summed; D = for each column of the stone, the empty pixels between its lowest pixel "
+    "and the highest wall pixel below its center row (the ground counts), summed; sizes in pixels of the wall matrix "
+    "and of the stone's bounding box. 0 = flush on the left and on the bottom.\n"
     "Cascade: start from the feasible candidates; for each filter in the chosen order keep the candidates whose "
-    "weighted score (raw x filter_weights) is >= the mean over the candidates still kept; if a stage would keep "
-    "none, take the best sum of the filters applied so far; otherwise the final pick is the largest sum of all five "
-    "weighted scores among the survivors. The mean is taken over the current survivors, so the order decides which "
+    "weighted score w (raw x filter_weights) satisfies w >= m - tol x max(1, |m|), m being the mean of w over the "
+    "candidates still kept and tol the base policy's tolerance (1e-9: float rounding only); the best one always "
+    "stays, so a stage never empties with finite scores. The final pick is the largest sum of all five weighted "
+    "scores among the survivors. The mean is taken over the current survivors, so the order decides which "
     "candidates are compared with which; the base order is 3-0-2-1-4.\n"
-    "Data: geometry_available says what geometry exists (pixels: outcome.geometry from the stone's pixels, a "
-    "pre-stabilization proxy; summary: only bounding-box sizes, never the wall after placement; none). Never cite a "
-    "geometry value that is null. memory, history and trend are your own earlier calls; nothing about future "
+    "Data: geometry_available says what geometry exists. pixels: outcome.geometry is the change of the wall after "
+    "pasting the candidate's own unstabilized pixels at its pose, without physics: a proxy computed for you, not a "
+    "state any filter uses. summary: only bounding-box sizes, never the wall after placement. none: neither. Never "
+    "cite a geometry value that is null. memory, history and trend are your own earlier calls; nothing about future "
     "samples or the final wall is known.\n"
     "Before committing, compare the main candidates on all five filters: in the rationale state each one's main "
     "advantages and costs, not one score alone. Finish with commit_order.")
