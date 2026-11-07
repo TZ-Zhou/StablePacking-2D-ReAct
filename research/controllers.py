@@ -274,10 +274,11 @@ def tool_table(info, label):
 SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
                            'llm_timeout': 60.0, 'max_llm_failures': 3}}
-# max_total_tokens, max_cost_usd, observation_version (react, optional): only in specs that set them,
-# so earlier walls keep their spec; observation_version 1 (the default) or 2 (Observer, SYSTEM_V2, TOOLS_V2)
+# max_total_tokens, max_cost_usd, observation_version, first_step (react, optional): only in specs that
+# set them, so earlier walls keep their spec; observation_version 1 (the default) or 2 (Observer,
+# SYSTEM_V2, TOOLS_V2); first_step: decision points of earlier steps are skip:before_first_step
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
-             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version'}}
+             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'}}
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
 SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
            'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
@@ -320,6 +321,8 @@ def validate_spec(spec):
         llm_identity(spec['llm'])
         if spec.get('observation_version', 1) not in (1, 2) or type(spec.get('observation_version', 1)) is not int:
             raise ValueError(f"observation_version is 1 or 2, got {spec['observation_version']!r}")
+        if 'first_step' in spec and not (type(spec['first_step']) is int and spec['first_step'] >= 1):
+            raise ValueError(f"first_step is a step number >= 1, got {spec['first_step']!r}")
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -380,7 +383,8 @@ class ControllerClient:
     the client holds the wall's counters: request failures (LLM and worker), LLM decisions and the
     tokens the replies report; after max_llm_failures failures every later decision point is
     skip:llm_unavailable, after max_decisions skip:wall_budget, after max_total_tokens
-    skip:token_budget, after max_cost_usd skip:cost_budget, and none of them sends a request.
+    skip:token_budget, after max_cost_usd skip:cost_budget, before a spec's first_step
+    skip:before_first_step (no decision of the budget is used), and none of them sends a request.
     For an API LLM the spend is llm_adapter.spend's: reported and estimated tokens (both count)
     and their cost; an attempt whose usage is unknown (a call abandoned or failed after it may have
     been sent, a worker failure of the decision, a reply without usage) is never counted as free:
@@ -406,6 +410,8 @@ class ControllerClient:
     def ask(self, obs, info):
         spec, base = self.spec_, info['base']
         if spec['kind'] == 'react':
+            if spec.get('first_step') is not None and obs['step'] < spec['first_step']:
+                return base, {'source': 'skip:before_first_step'}
             if self.request_failures >= spec['max_llm_failures']:
                 return base, {'source': 'skip:llm_unavailable'}
             if self.llm_decisions >= spec['max_decisions']:

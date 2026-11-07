@@ -221,6 +221,26 @@ class Version2(unittest.TestCase):
         self.assertTrue(all(np.array_equal(ctx[k], before[k]) if isinstance(before[k], np.ndarray) else ctx[k] == before[k]
                             for k in before))
 
+    @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
+    def test_first_step(self):
+        """first_step: earlier decision points are skipped without a request or a decision of the
+        budget; without it (every earlier spec) the first decision point is answered as before."""
+        for bad in (0, -1, '10', True, 2.5):
+            with self.assertRaises(ValueError):
+                controllers.validate_spec({**V2_SPEC, 'first_step': bad})
+        with self.assertRaises(ValueError):  # react only: the other controllers are unchanged
+            controllers.validate_spec({'kind': 'random', 'seed': 1, 'first_step': 10})
+        mock_ = {'kind': 'mock', 'mode': 'max_llc'}
+        for first, step in ((None, 1), (10, 10)):
+            spec = {**V2_SPEC, 'llm': mock_, 'max_decisions': 1, **({} if first is None else {'first_step': first})}
+            records = controllers.rerun(result_of(WALL), spec, controllers.base_policy(WALL))
+            asked = [r for r in records if r['source'] == 'llm']
+            self.assertEqual([(r['event'], r['step']) for r in asked], [(step - 1, step)])
+            before = {r['source'] for r in records if r['decision_point'] and r['step'] < step}
+            self.assertEqual(before, set() if first is None else {'skip:before_first_step'})
+            self.assertEqual({r['source'] for r in records if r['decision_point'] and r['step'] > step}, {'skip:wall_budget'})
+            self.assertTrue(all('transcripts' not in r for r in records if r not in asked))
+
     def test_through_the_build_wall_hook(self):
         """controlled_policy (what build_wall calls) accepts a version 2 controller: global RNGs,
         settings and the selection inputs unchanged, and 'keep' returns the base policy itself."""

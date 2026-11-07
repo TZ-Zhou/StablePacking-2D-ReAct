@@ -6,6 +6,8 @@ only the controller's first `decisions` decision points call the API.
   python research/api_smoke.py preflight --name smoke-001            # checks only, sends nothing
   STONEPACKING_ALLOW_PAID_API=1 python research/api_smoke.py run --name smoke-001 --confirm-paid
   python research/api_smoke.py check --name smoke-001                # offline: never the API
+  python research/api_smoke.py preflight --name smoke-002 --after smoke-001 \
+      --observation-version 2 --target 184947496:10:9:single:0:left   # one decision point, pinned
 
 Run it with the isolated venv that has the openai SDK (the stablepacking-baseline environment
 stays untouched). What a run guarantees:
@@ -33,9 +35,18 @@ stays untouched). What a run guarantees:
   differences of switched decisions are set aside; the raw one is verdict_of_check), PARTIAL here:
   the copied wall has no live outcome geometry, so the smoke validates the API flow, never
   geometry or wall quality.
+--target SEED:STEP:EVENT:PHASE:TRIAL:SIDE pins the one decision point that may call the API: the
+spec gets first_step STEP (every decision point of an earlier step is skip:before_first_step: its
+observation is built, so the history is the trajectory's, but nothing is sent and no decision of
+the budget is used) and needs max_decisions 1 (every later one is skip:wall_budget). The
+preflight replays the trajectory offline with a scripted mock LLM (plan_of) and refuses unless
+that one decision point is exactly the target (the wall's seed, event, step, phase, trial, side);
+it never moves to another one. After the run, a request anywhere else ends it 'uncertain'.
+--observation-version 2 gives the controller Observation and prompt version 2 (default 1).
 --loopback is for tests only: it requires OPENAI_BASE_URL on 127.0.0.1/localhost (a mock server).
 """
 import argparse
+import collections
 import datetime
 import hashlib
 import importlib.util
@@ -71,12 +82,77 @@ GEOMETRY = 'PARTIAL: an offline smoke on the copied Paper trajectory: no live ou
 REPO_FILES = ('research/api_smoke.py', 'research/controllers.py', 'research/controller_worker.py', 'research/llm_adapter.py')
 
 
-def spec_of(decisions=1):
+def spec_of(decisions=1, observation_version=1, first_step=None):
+    """The smoke spec; observation_version and first_step are in it only when they are not the default."""
     return {'kind': 'react',
             'llm': {'kind': 'api', 'provider': 'openai', 'model': MODEL, 'max_tokens': 4096, 'effort': 'low',
                     'request_timeout_s': 60.0, 'max_retries': 0, 'retry_backoff_s': 0.0, 'price_per_mtok': PRICE},
             'llm_timeout': 90.0, 'max_tool_calls': 3, 'max_decisions': decisions, 'max_total_tokens': 100_000,
-            'max_cost_usd': 0.50, 'max_llm_failures': 1}
+            'max_cost_usd': 0.50, 'max_llm_failures': 1,
+            **({'observation_version': observation_version} if observation_version != 1 else {}),
+            **({'first_step': first_step} if first_step is not None else {})}
+
+
+TARGET_KEYS = ('seed', 'step', 'event', 'phase', 'sample_trial', 'side')
+DECISION_KEYS = ('step', 'phase', 'sample_trial', 'side')
+
+
+def parse_target(text):
+    """'SEED:STEP:EVENT:PHASE:TRIAL:SIDE' -> a dict of TARGET_KEYS; raises on anything else."""
+    parts = text.split(':') if isinstance(text, str) else []
+    if len(parts) != 6 or not all(p.isdigit() for p in parts[:3] + parts[4:5]) or not parts[3] or parts[5] not in ('left', 'right'):
+        raise ValueError(f'a target is SEED:STEP:EVENT:PHASE:TRIAL:SIDE, got {text!r}')
+    return dict(zip(TARGET_KEYS, [int(parts[0]), int(parts[1]), int(parts[2]), parts[3], int(parts[4]), parts[5]]))
+
+
+def plan_of(spec):
+    """Where the API would be called, offline: the wall's trajectory replayed inline with a scripted
+    mock LLM ('max_llc': list_order_outcomes, explain_order, commit_order) in place of the API.
+    Gives the decision points that would call the LLM ({event, decision key, n_outcomes}), the
+    skipped ones by source and, for the first, each request the mock flow sends: bytes of the
+    Responses API body and the adapter's reservation (what one attempt may cost at most). The
+    real model's replies add their own output items (reasoning) to calls 2 and 3."""
+    full = controllers.full_spec(spec)
+    mock_spec = {**full, 'llm': {'kind': 'mock', 'mode': 'max_llc'}}
+    records = controllers.rerun(check_case.result_dirs(WALL)[0], mock_spec, controllers.base_policy(WALL))
+    sizer = llm_adapter.APILLM(full['llm'], sender=object())  # reserve() only: no client, no key
+    calls, estimate = [r for r in records if r.get('source') == 'llm'], []
+    for t in calls[0]['transcripts'] if calls else []:
+        payload = {'model': sizer.model, **sizer.params, 'messages': t['request']['messages'], 'tools': t['request']['tools']}
+        body = llm_adapter.OpenAISender.request(types.SimpleNamespace(turns=[]), payload)
+        tokens, usd = sizer.reserve(body)
+        estimate.append({'call': t['call'], 'tool_called': (t['response']['parsed'] or {}).get('tool'),
+                         'body_bytes': len(json.dumps(body, ensure_ascii=False).encode()),
+                         'reserved_tokens': tokens, 'reserved_usd': round(usd, 6)})
+    skipped = collections.Counter(r['source'] for r in records if r['decision_point'] and r['source'] != 'llm')
+    return {'llm_decisions': [{'event': r['event'], **dict(zip(DECISION_KEYS, controllers.decision_key(r))), 'n_outcomes': r['n_outcomes']}
+                              for r in calls],
+            'decision_points': sum(r['decision_point'] for r in records), 'skipped': dict(sorted(skipped.items())),
+            'observation_version': controllers.observation_version(full), 'requests_of_the_mock_flow': estimate}
+
+
+def target_problems(spec, target):
+    """Why the decision point the spec's controller would call the API at is not exactly the target
+    (target None: then the spec may not set first_step)."""
+    full = controllers.full_spec(spec)
+    if target is None:
+        return ['target: first_step needs --target'] if 'first_step' in full else []
+    problems = [] if full.get('first_step') == target['step'] else [f"target: spec first_step {full.get('first_step')}, target step {target['step']}"]
+    if full['max_decisions'] != 1:
+        problems.append('target: a pinned decision point allows max_decisions 1 only')
+    seed = json.loads((WALL / 'receipt.json').read_text(encoding='utf-8')).get('seed')
+    if seed != target['seed']:
+        problems.append(f"target: the wall's seed is {seed}, not {target['seed']}")
+    if problems:
+        return problems
+    want = {k: target[k] for k in TARGET_KEYS[1:]}
+    traced = {meta['event']: {k: meta[k] for k in DECISION_KEYS} for meta, _ in controllers.trace_events(check_case.result_dirs(WALL)[0])}
+    if traced.get(target['event']) != {k: want[k] for k in DECISION_KEYS}:
+        problems.append(f"target: trace event {target['event']} is {traced.get(target['event'])}, not {want}")
+    calls = plan_of(spec)['llm_decisions']
+    if [{k: c[k] for k in want} for c in calls] != [want]:
+        problems.append(f"target: the controller would call the LLM at {calls}, not only at {want}")
+    return problems
 
 
 def max_requests(spec):
@@ -100,6 +176,7 @@ def spec_problems(spec):
              f"call_bound <= llm_timeout <= {LIMITS['llm_timeout']}": within(full['llm_timeout'], llm_adapter.call_bound(llm), LIMITS['llm_timeout']),
              f"1 <= max_tool_calls <= {LIMITS['max_tool_calls']}": 1 <= full['max_tool_calls'] <= LIMITS['max_tool_calls'],
              'max_llm_failures 1': full['max_llm_failures'] == 1,
+             'first_step only with max_decisions 1': 'first_step' not in full or full['max_decisions'] == 1,
              f'the price table PRICE {PRICE}': list(llm['price_per_mtok'] or []) == PRICE}
     return [f'spec: needs {rule}' for rule, ok in rules.items() if not ok]
 
@@ -160,10 +237,12 @@ def wall_problems():
     return problems
 
 
-def preflight(name, spec, out=OUT, after=None, loopback=False, paid=False, holding=False):
-    """Every problem that forbids the run; empty: it may send at most max_requests(spec) requests."""
-    return spec_problems(spec) + env_problems(loopback, paid) + wall_problems() + \
+def preflight(name, spec, out=OUT, after=None, loopback=False, paid=False, holding=False, target=None):
+    """Every problem that forbids the run; empty: it may send at most max_requests(spec) requests,
+    all at the target decision point if one is given."""
+    problems = spec_problems(spec) + env_problems(loopback, paid) + wall_problems() + \
         journal_problems(out, name, after, spec.get('max_decisions', 0) if isinstance(spec, dict) else 0, holding)
+    return problems + (target_problems(spec, target) if not spec_problems(spec) and not wall_problems() else [])
 
 
 def write_json(path, data, exclusive=False):
@@ -294,9 +373,9 @@ def refuse(problems):
     raise SystemExit('refused, nothing sent:\n  ' + '\n  '.join(problems))
 
 
-def run_smoke(name, spec, out=OUT, after=None, loopback=False):
+def run_smoke(name, spec, out=OUT, after=None, loopback=False, target=None):
     """One smoke run (see the module docstring) under the lock; returns its report (report.json)."""
-    problems = preflight(name, spec, out, after, loopback, paid=True)
+    problems = preflight(name, spec, out, after, loopback, paid=True, target=target)
     if problems:
         refuse(problems)
     out.mkdir(parents=True, exist_ok=True)
@@ -305,21 +384,21 @@ def run_smoke(name, spec, out=OUT, after=None, loopback=False):
     except FileExistsError:
         refuse(journal_problems(out, name, after, 0))
     try:
-        problems = preflight(name, spec, out, after, loopback, paid=True, holding=True)  # again, under the lock
+        problems = preflight(name, spec, out, after, loopback, paid=True, holding=True, target=target)  # again, under the lock
         if problems:
             refuse(problems)
-        return locked_run(name, spec, out, after, loopback)
+        return locked_run(name, spec, out, after, loopback, target)
     finally:  # only after the run's final journal state is written (a killed run leaves the lock)
         (out / LOCK).unlink()
 
 
-def locked_run(name, spec, out, after, loopback):
+def locked_run(name, spec, out, after, loopback, target=None):
     run = out / name
     run.mkdir()
     full = controllers.full_spec(spec)
     journal = {'state': 'started', 'started_at': datetime.datetime.now().isoformat(timespec='seconds'), 'after': after,
                'wall': WALL.relative_to(run_case.REPO).as_posix(), 'spec': full, 'max_http_requests': max_requests(full),
-               'mode': 'loopback mock' if loopback else 'paid', **provenance()}
+               'mode': 'loopback mock' if loopback else 'paid', **({'target': target} if target else {}), **provenance()}
     write_json(run / 'journal.json', journal, exclusive=True)  # before the first request
     report, transport, reasons = {}, None, []
     try:
@@ -359,8 +438,14 @@ def locked_run(name, spec, out, after, loopback):
         report['check'] = offline_check(run, full)
         write_json(run / 'report.json', report)
         report['key_scan'] = key_scan(run)  # report.json included
+        elsewhere = []
+        if target is not None:  # every request of the ledger at the target decision point, nothing else
+            at = (target['event'], *(target[k] for k in DECISION_KEYS))
+            elsewhere = [x.get('event') for x in ledger if x.get('type') == 'request' and (x.get('event'), *(x.get(k) for k in DECISION_KEYS)) != at]
+            report['target'] = {**target, 'requests_elsewhere': elsewhere}
         reasons = [why for why, bad in (('unknown usage', unknown), ('a worker failure', failures), ('a worker not reaped', not reaped),
-                                        ('worker lifecycle problems', worker), ('the key in an output file', report['key_scan'])) if bad]
+                                        ('worker lifecycle problems', worker), ('the key in an output file', report['key_scan']),
+                                        ('a request outside the target decision point', elsewhere)) if bad]
         report['clean'] = bool(report['check']['ok'] and not reasons)
         report['api_success'] = bool(report['clean'] and any(x.get('outcome') == 'reply' and x.get('billed') == 'reported' for x in rows)
                                      and any(r['source'] == 'llm' for r in decisions))
@@ -385,21 +470,31 @@ def main(argv=None):
     parser.add_argument('--after', help='the earlier run this one follows (required once any run exists)')
     parser.add_argument('--confirm-paid', action='store_true', help='run: send real, paid requests')
     parser.add_argument('--loopback', action='store_true', help='tests only: OPENAI_BASE_URL is a local mock server')
+    parser.add_argument('--observation-version', type=int, choices=[1, 2], default=1)
+    parser.add_argument('--target', type=parse_target, metavar='SEED:STEP:EVENT:PHASE:TRIAL:SIDE',
+                        help='the one decision point that may call the API (first_step STEP; --decisions 1)')
     args = parser.parse_args(argv)
-    spec = spec_of(args.decisions)
+    target = args.target
+    spec = spec_of(args.decisions, args.observation_version, None if target is None else target['step'])
     if args.action == 'check':
         report = offline_check(OUT / args.name, controllers.full_spec(json.loads((OUT / args.name / 'journal.json').read_text(encoding='utf-8'))['spec']))
         report['key_scan'] = key_scan(OUT / args.name)
         print(json.dumps(report, indent=1))
         return 0 if report['ok'] and not report['key_scan'] else 1
     if args.action == 'preflight':
-        problems = preflight(args.name, spec, OUT, after=args.after, loopback=args.loopback, paid=False)
-        print(json.dumps({'spec': controllers.full_spec(spec), 'max_http_requests': max_requests(spec),
+        problems = preflight(args.name, spec, OUT, after=args.after, loopback=args.loopback, paid=False, target=target)
+        full = controllers.full_spec(spec)
+        print(json.dumps({'spec': full, 'observation_version': controllers.observation_version(full), 'target': target,
+                          'plan': plan_of(spec) if not spec_problems(spec) and not wall_problems() else None,
+                          'limits': {'transport': 'ProcessTransport', 'max_http_requests': max_requests(spec),
+                                     'max_retries': full['llm']['max_retries'], 'max_total_tokens': full['max_total_tokens'],
+                                     'max_output_tokens_per_call': full['llm']['max_tokens'], 'max_cost_usd': full['max_cost_usd']},
+                          'max_http_requests': max_requests(spec),
                           'problems': problems, 'ready_for_paid_run': not problems and not env_problems(args.loopback, True)}, indent=1))
         return 1 if problems else 0
     if not (args.confirm_paid or args.loopback):
         raise SystemExit('run needs --confirm-paid (real, paid requests)')
-    report = run_smoke(args.name, spec, OUT, after=args.after, loopback=args.loopback)
+    report = run_smoke(args.name, spec, OUT, after=args.after, loopback=args.loopback, target=target)
     summary = {'api_success': report['api_success'], 'clean': report['clean'], 'check_verdict': report['check']['verdict'],
                'geometry_validation': report['geometry_validation']}
     print(json.dumps({**summary, **{k: v for k, v in report.items() if k not in summary and k != 'requests'}}, indent=1))

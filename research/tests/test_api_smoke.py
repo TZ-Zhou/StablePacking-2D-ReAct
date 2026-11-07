@@ -125,6 +125,58 @@ class SmokeRules(unittest.TestCase):
                 api_smoke.main(['run', '--name', 'smoke-001'])  # neither --confirm-paid nor --loopback
 
 
+TARGET = '184947496:10:9:single:0:left'  # smoke-002: the Paper wall's step 10, event 9
+SMOKE_001 = REPO / 'research' / 'runs' / 'api-smoke' / 'smoke-001'
+
+
+@unittest.skipUnless(api_smoke.WALL.exists(), 'pilot wall not present')
+class TargetRules(unittest.TestCase):
+    """--observation-version and --target: version 1 specs unchanged, the target pinned exactly."""
+
+    def test_version_1_spec_unchanged(self):
+        self.assertNotIn('observation_version', api_smoke.spec_of(1))
+        self.assertNotIn('first_step', api_smoke.spec_of(1))
+        self.assertEqual(api_smoke.spec_of(1), api_smoke.spec_of(1, 1, None))
+        if SMOKE_001.exists():  # the spec smoke-001 ran with is still what the default builds
+            journal = json.loads((SMOKE_001 / 'journal.json').read_text(encoding='utf-8'))
+            self.assertEqual(controllers.full_spec(api_smoke.spec_of(1)), journal['spec'])
+
+    def test_the_target_is_pinned_exactly(self):
+        v2 = lambda step=10, decisions=1: api_smoke.spec_of(decisions, 2, step)
+        target = api_smoke.parse_target(TARGET)
+        self.assertEqual(target, {'seed': 184947496, 'step': 10, 'event': 9, 'phase': 'single', 'sample_trial': 0, 'side': 'left'})
+        self.assertEqual(api_smoke.spec_problems(v2()), [])
+        self.assertEqual(api_smoke.target_problems(v2(), target), [])
+        plan = api_smoke.plan_of(v2())
+        self.assertEqual(plan['llm_decisions'], [{'event': 9, 'step': 10, 'phase': 'single', 'sample_trial': 0, 'side': 'left', 'n_outcomes': 5}])
+        self.assertEqual((plan['skipped'], plan['observation_version'], len(plan['requests_of_the_mock_flow'])),
+                         ({'skip:before_first_step': 7, 'skip:wall_budget': 6}, 2, 3))
+        for wrong in ('184947496:10:8:single:0:left', '184947496:10:9:single:0:right', '184947496:10:9:single:1:left',
+                      '184947496:10:9:sample_twice:0:left', '1:10:9:single:0:left',
+                      '184947496:2:1:single:0:left'):  # step 2 is no decision point: never moved on to step 3
+            t = api_smoke.parse_target(wrong)
+            problems = api_smoke.target_problems(v2(t['step']), t)
+            self.assertTrue(problems and all(p.startswith('target:') for p in problems), (wrong, problems))
+        self.assertTrue(api_smoke.target_problems(v2(9), target))  # first_step and target disagree
+        self.assertTrue(api_smoke.target_problems(v2(), None))  # first_step needs a target
+        self.assertTrue(api_smoke.target_problems(v2(10, 2), target))
+        self.assertTrue(any('first_step only with max_decisions 1' in p for p in api_smoke.spec_problems(v2(10, 2))))
+        for bad in ('184947496:10:9:single:0', '184947496:10:9:single:0:up', 'a:10:9:single:0:left', None):
+            with self.assertRaises(ValueError):
+                api_smoke.parse_target(bad)
+
+    def test_a_refused_target_creates_nothing_and_sends_nothing(self):
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out)
+        wrong = api_smoke.parse_target('184947496:10:8:single:0:left')
+        with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY, llm_adapter.PAID_GATE: '1'}, clear=True), \
+                mock.patch.object(importlib.util, 'find_spec', return_value=object()):
+            with self.assertRaises(SystemExit) as refused:
+                api_smoke.run_smoke('smoke-001', api_smoke.spec_of(1, 2, 10), out=out, target=wrong)
+        self.assertIn('target: trace event 8', str(refused.exception))
+        self.assertEqual(list(out.iterdir()), [])
+
+
 @unittest.skipUnless(SDK, 'the openai SDK is only in the isolated venv')
 class SenderClient(unittest.TestCase):
     def test_the_real_client_follows_no_redirect_and_reads_nothing_from_the_environment(self):
@@ -175,8 +227,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if kind == '500':
             return self.reply(500, {'error': {'message': 'internal', 'type': 'server_error', 'code': None}}, n)
         listed = body['input'][-1].get('type') == 'function_call_output'
-        order = '0-1-2-3-4' if kind == 'switch' else 'keep_paper'
+        order = '0-1-2-3-4' if kind == 'switch' else kind[len('order:'):] if kind.startswith('order:') else 'keep_paper'
         name, args = ('commit_order', {'order': order, 'rationale': 'smoke'}) if listed else ('list_order_outcomes', {})
+        if kind == 'explain' and listed:  # explain_order after the listing; the next request commits
+            name, args = 'explain_order', {'order': '3-2-0-1-4'}
         data = {'id': f'resp_{n}', 'object': 'response', 'created_at': 1, 'model': api_smoke.MODEL, 'status': 'completed', 'error': None,
                 'incomplete_details': None, 'output': [
                     {'type': 'reasoning', 'id': f'rs_{n}', 'summary': [], 'encrypted_content': f'gAAAA-{n}'},
@@ -218,9 +272,9 @@ class LoopbackRuns(unittest.TestCase):
         return mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY, 'OPENAI_BASE_URL': url or self.server.url,
                                             llm_adapter.PAID_GATE: '1'}, clear=True)
 
-    def run_smoke(self, name, s=None, url=None, after=None, out=None):
+    def run_smoke(self, name, s=None, url=None, after=None, out=None, target=None):
         with self.env(url):
-            return api_smoke.run_smoke(name, s or spec(), out=out or self.out, after=after, loopback=True)
+            return api_smoke.run_smoke(name, s or spec(), out=out or self.out, after=after, loopback=True, target=target)
 
     def journal(self, name, out=None):
         return json.loads(((out or self.out) / name / 'journal.json').read_text(encoding='utf-8'))
@@ -263,6 +317,69 @@ class LoopbackRuns(unittest.TestCase):
                 self.assertEqual(api_smoke.main(['preflight', '--name', 'smoke-002']), 1)  # --after smoke-001 missing
                 self.assertEqual(api_smoke.main(['preflight', '--name', 'smoke-002', '--after', 'smoke-001']), 0)
         self.assertEqual(len(self.server.requests), 2)
+
+    def records(self, name):
+        result = api_smoke.check_case.result_dirs(self.out / name)[0]
+        return [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
+
+    def test_a_v2_run_calls_only_the_target_decision_point(self):
+        self.server.script = ['ok', 'explain', 'order:3-2-0-1-4']  # list, explain, commit S11 (a switch at step 10)
+        target, s = api_smoke.parse_target(TARGET), api_smoke.spec_of(1, 2, 10)
+        report = self.run_smoke('smoke-001', s, target=target)
+        self.assertEqual(len(self.server.requests), 3)
+        policy = controllers.ReActPolicy(None, observation_version=2)
+        # what GPT gets is built from events 0..9 alone (the observer fed the prefix of the trace)
+        observer, base = controllers.Observer(version=2), controllers.base_policy(api_smoke.WALL)
+        for meta, a in list(controllers.trace_events(api_smoke.check_case.result_dirs(api_smoke.WALL)[0]))[:10]:
+            obs, _ = observer(base, controllers.context_from_trace(meta, a))
+        view = json.dumps({k: v for k, v in obs.items() if k != 'outcomes'})
+        for r in self.server.requests:
+            self.assertEqual((r['body']['instructions'], r['body']['input'][0]['content']), (controllers.SYSTEM_V2, view))
+            self.assertEqual([t['name'] for t in r['body']['tools']], ['list_order_outcomes', 'explain_order', 'commit_order'])
+        listing = json.loads(self.server.requests[1]['body']['input'][-1]['output'])  # list_order_outcomes' feedback
+        self.assertEqual(listing['outcomes'], obs['outcomes'])
+        self.assertTrue(all(o['geometry'] is None and o['shape'] for o in listing['outcomes']))
+        explained = json.loads(self.server.requests[2]['body']['input'][-1]['output'])
+        self.assertEqual(explained['branch'], 'full')
+        self.assertEqual(report['decisions'], [{'event': 9, 'source': 'llm', 'order': '3-2-0-1-4', 'switched': True, 'calls': 3}])
+        self.assertEqual(report['target'], {**target, 'requests_elsewhere': []})
+        self.assertEqual(report['skips'], ['not_a_decision_point', 'skip:before_first_step', 'skip:wall_budget'])
+        self.assertEqual(report['client']['llm_decisions'], 1)
+        records = self.records('smoke-001')
+        self.assertTrue(all(r['observation']['observation_version'] == 2 and r['controller'] == controllers.full_spec(s) for r in records))
+        early = [r for r in records if r['step'] < 10 and r['decision_point']]
+        self.assertEqual({r['source'] for r in early}, {'skip:before_first_step'})
+        self.assertTrue(all('transcripts' not in r for r in records if r['event'] != 9))
+        at = next(r for r in records if r['event'] == 9)
+        self.assertEqual((at['prompt_sha256'], at['final']['stone_id']), (policy.prompt_sha256, 13))
+        self.assertTrue(all(t['request']['messages'][0]['content'] == controllers.SYSTEM_V2 for t in at['transcripts']))
+        journal = self.journal('smoke-001')
+        self.assertEqual((journal['spec'], journal['target']), (controllers.full_spec(s), target))
+        receipt = json.loads((self.out / 'smoke-001' / 'receipt.json').read_text(encoding='utf-8'))
+        self.assertEqual((receipt['controller']['observation_version'], receipt['controller']['first_step']), (2, 10))
+        self.assertEqual(len(report['check']['expected_on_base_trajectory']), 2)  # the switch at event 9, listed apart
+        self.assertTrue(all(p.startswith('event 9 ') for p in report['check']['expected_on_base_trajectory']))
+        self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
+        with mock.patch.object(api_smoke, 'OUT', self.out):  # offline again: Transcript Replay with version 2
+            self.assertEqual(api_smoke.main(['check', '--name', 'smoke-001']), 0)
+        self.assertEqual(len(self.server.requests), 3)
+
+    def test_keeping_paper_at_the_target_is_a_legal_decision(self):
+        report = self.run_smoke('smoke-001', api_smoke.spec_of(1, 2, 10), target=api_smoke.parse_target(TARGET))
+        self.assertEqual(len(self.server.requests), 2)
+        self.assertEqual(report['decisions'], [{'event': 9, 'source': 'llm', 'order': '3-0-2-1-4', 'switched': False, 'calls': 2}])
+        self.assertEqual(report['check']['expected_on_base_trajectory'], [])
+        self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
+
+    def test_a_request_outside_the_target_ends_the_run_uncertain(self):
+        """The ledger check after the run, should the preflight's pin ever be bypassed."""
+        wrong = {**api_smoke.parse_target(TARGET), 'event': 8, 'step': 9}
+        with mock.patch.object(api_smoke, 'target_problems', return_value=[]):
+            report = self.run_smoke('smoke-001', api_smoke.spec_of(1, 2, 10), target=wrong)
+        self.assertEqual(report['target']['requests_elsewhere'], [9])  # one ledger line per decision request
+        journal = self.journal('smoke-001')
+        self.assertEqual((journal['state'], journal['clean'], journal['api_success']), ('uncertain', False, False))
+        self.assertIn('a request outside the target decision point', journal['reasons'])
 
     def test_a_switched_order_is_checked_on_the_base_trajectory(self):
         self.server.script = ['ok', 'switch']
