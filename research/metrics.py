@@ -27,7 +27,10 @@ The author renders the label image at the stones' original resolution
 resolution, not by method. The formal metrics are wall_quality: 02's rendering (render_original)
 then 03, as 02 does it: a stone moved beyond its own canvas (the stone image's size, 400 rows for
 noise 80, under the 559-row wall) is cut silently, and one overlapping the stones before by
-200 px or more is left out; render_original reports both per stone.
+200 px or more is left out; render_original reports both per stone. wall_quality(...,
+canvas='corrected') moves each stone on a canvas covering the wall instead, so only the wall's
+bounds cut it; everything else is 02's. The two modes are separate methods: never mix them in one
+comparison.
 """
 import json
 import pickle
@@ -232,15 +235,22 @@ def stone_source(run):
     return Path(run) / 'data' / image[0]
 
 
-def render_original(run, result):
+def render_original(run, result, canvas='author'):
     """02's stacked_wall_label.png of a wall, at the stones' original resolution: the wall size
     from the stone label image (5 mean bounding boxes, + 2/rescale and 3/rescale), every stone
     (region >= 50 px, holes filled) centered on a canvas of that image's size, then for each line
     of transformation.txt in order turned by its angle about the canvas center, moved so its
     centroid is at (d_x, d_y), cropped to the wall and drawn with its placement number, unless it
     overlaps the stones drawn before by 200 px or more (then 02 leaves it out).
-    Returns the uint8 label image and, per stone, its drawn pixels, the pixels the canvas crop
-    lost (02 clips silently) and whether it was left out."""
+    canvas='author' moves the stone on its own canvas, as 02 does (line 183), which cuts what lands
+    beyond it (rows >= 400 for noise 80, inside the 559-row wall); canvas='corrected' moves it on a
+    canvas covering both, so only the wall's bounds crop it. Nothing else differs.
+    Returns the uint8 label image and, per stone: pixels drawn, lost_to_crop (all this mode cut),
+    canvas_cut (pixels inside the wall that 02's own canvas cuts, the same in both modes; the
+    corrected mode keeps them), outside_wall (beyond the wall, cut in both), turn_at_edge (the
+    turned stone touches its canvas border, so the turn itself may have cut it), overlap, left_out."""
+    if canvas not in ('author', 'corrected'):
+        raise ValueError(canvas)
     from skimage.measure import label
     image = label(cv2.imread(str(stone_source(run)), cv2.IMREAD_GRAYSCALE).astype(np.uint8))
     regions = [r for r in regionprops(image) if r.area >= 50]
@@ -263,38 +273,51 @@ def render_original(run, result):
         raise ValueError(f'transformation.txt ids not one per stone image: {ids}')
     drawn = np.zeros((size[1], size[0]), np.uint8)
     labels, stones_out = np.zeros_like(drawn), []
+    wide = (max(image.shape[1], size[0]), max(image.shape[0], size[1]))
+
+    def to_wall(s):
+        s = s[:drawn.shape[0], :drawn.shape[1]]
+        return np.pad(s, ((0, drawn.shape[0] - s.shape[0]), (0, drawn.shape[1] - s.shape[1])))
+
     for seq, (stone_id, x, y, angle) in enumerate(placed):
         s = stones[stone_id % 1000]
         turn = cv2.getRotationMatrix2D((s.shape[1] // 2, s.shape[0] // 2), angle, 1.0)
         s = cv2.warpAffine(s, turn, (s.shape[1], s.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
+        edge = bool(s[0].any() or s[-1].any() or s[:, 0].any() or s[:, -1].any())
         c = regionprops(s.astype(np.uint8))[0].centroid
         move = np.float32([[1, 0, x - c[1]], [0, 1, y - c[0]]])
         before = np.count_nonzero(s)
-        s = cv2.warpAffine(s, move, (s.shape[1], s.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
-        s = s[:drawn.shape[0], :drawn.shape[1]]
-        s = np.pad(s, ((0, drawn.shape[0] - s.shape[0]), (0, drawn.shape[1] - s.shape[1])))
+        own = cv2.warpAffine(s, move, (s.shape[1], s.shape[0]), flags=cv2.WARP_FILL_OUTLIERS)
+        full = cv2.warpAffine(s, move, wide, flags=cv2.WARP_FILL_OUTLIERS)
+        if not np.array_equal(own, full[:own.shape[0], :own.shape[1]]):
+            raise RuntimeError(f'stone {stone_id}: the wider canvas moved its pixels')  # the corrected mode's premise
+        own, full = to_wall(own), to_wall(full)
+        s = own if canvas == 'author' else full
         overlap = np.count_nonzero((s != 0) & (drawn != 0))
         stones_out.append({'id': stone_id, 'seq': seq + 1, 'pixels': int(np.count_nonzero(s)),
-                           'lost_to_crop': int(before - np.count_nonzero(s)), 'overlap': int(overlap),
-                           'left_out': overlap >= 200})
+                           'lost_to_crop': int(before - np.count_nonzero(s)),
+                           'canvas_cut': int(np.count_nonzero(full) - np.count_nonzero(own)),
+                           'outside_wall': int(before - np.count_nonzero(full)), 'turn_at_edge': edge,
+                           'overlap': int(overlap), 'left_out': overlap >= 200})
         if overlap >= 200:
             continue
         drawn = np.where(s != 0, s, drawn)
         labels = np.where(s != 0, seq + 1, labels).astype(np.uint8)
-    return labels, {'size': [size[1], size[0]], 'canvas': list(image.shape), 'stones': stones_out}
+    return labels, {'size': [size[1], size[0]], 'canvas': list(image.shape), 'mode': canvas, 'stones': stones_out}
 
 
-def wall_quality(run, result):
+def wall_quality(run, result, canvas='author'):
     """The four formal metrics of a wall, by the author's method: 02's rendering at the original
-    resolution, then 03 (wang_metrics). Kept apart from wall_metrics; raw values, no total score."""
+    resolution (canvas: 'author' as 02 does it, or 'corrected', see render_original), then 03
+    (wang_metrics). Kept apart from wall_metrics; raw values, no total score."""
     result = Path(result)
-    labels, render = render_original(run, result)
+    labels, render = render_original(run, result, canvas)
     rocks = [r.id for r in pickle.load(open(result / 'base.pkl', 'rb')).placed_rocks]
     if rocks != [s['id'] for s in render['stones']]:
         raise ValueError(f'transformation.txt does not list the placed rocks of base.pkl: {rocks}')
     m = wang_metrics(result, labels=labels.astype(int))
     return {'F_SF': m['F_SF_author'], 'F_AH': m['F_AH'], 'F_AV': m['F_AV'], 'F_LR': m['F_LR'],
-            'lambda_min': m['lambda_min'], 'mu': m['mu'], 'method': 'Tests/Thangavelu 02 + 03, original resolution',
+            'lambda_min': m['lambda_min'], 'mu': m['mu'], 'method': f'Tests/Thangavelu 02 + 03, original resolution, {canvas} canvas',
             'F_AH_factors': [p['factor'] for p in m['F_AH_paths'] or []],
             'F_AV_factors': [p['factor'] for p in m['F_AV_paths'] or []],
             'render': render}

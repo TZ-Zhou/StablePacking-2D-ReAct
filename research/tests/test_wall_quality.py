@@ -190,6 +190,73 @@ class Refusals(unittest.TestCase):
                 self.assertEqual(2 in labels, not out)
 
 
+class CorrectedCanvas(unittest.TestCase):
+    # wall: F_SF, F_AH, F_AV of the corrected canvas (p24); F_LR is the author mode's
+    CORRECTED = {
+        WALL: (0.36848513718663883, 3.7344681717058616, 22.966398000168624),
+        BRANCHES / 'seed184947496-step10-control-stone19-0-3-1-4-2': (0.36838496845798036, 5.199073757854951, 12.892530705853012),
+        BRANCHES / 'seed184947496-step10-control-stone19-3-2-0-4-1': (0.4044813263230063, 5.342931404001881, 21.079431089587914),
+        BRANCHES / 'seed184947496-step10-control-stone19-3-4-0-1-2': (0.4047217312717867, 5.304597680206227, 17.359502304785867),
+        BRANCHES / 'seed184947496-step10-target-stone13-3-2-0-1-4': (0.40454587950369736, 5.284193071222321, 19.723024024351478),
+    }
+
+    def test_five_walls(self):
+        """Only the pixels 02's own canvas cut (rows >= 400) come back; the rest of the image, the
+        stones left out and the wall bounds stay; a wall 02 does not cut renders the same."""
+        for wall, (sf, ah, av) in self.CORRECTED.items():
+            if not wall.exists():
+                continue
+            with self.subTest(wall.name):
+                result = next(wall.glob('result_*'))
+                a_img, a = metrics.render_original(wall, result)
+                c_img, c = metrics.render_original(wall, result, 'corrected')
+                q, qa = metrics.wall_quality(wall, result, 'corrected'), metrics.wall_quality(wall, result)
+                self.assertEqual((q['F_SF'], q['F_AH'], q['F_AV'], q['F_LR']), (sf, ah, av, qa['F_LR']))
+                self.assertEqual(c_img.shape, a_img.shape)
+                self.assertTrue(np.array_equal(c_img[:400], a_img[:400]))
+                self.assertTrue(np.array_equal(c_img[a_img != 0], a_img[a_img != 0]))
+                restored = {s['id']: s['canvas_cut'] for s in c['stones'] if s['canvas_cut']}
+                self.assertEqual(restored, FIVE[wall][5])
+                self.assertEqual(np.count_nonzero(c_img) - np.count_nonzero(a_img), sum(restored.values()))
+                for sa, sc in zip(a['stones'], c['stones']):
+                    self.assertEqual(sa['lost_to_crop'], sa['canvas_cut'] + sa['outside_wall'])
+                    self.assertEqual(sc['lost_to_crop'], sc['outside_wall'])
+                    self.assertEqual((sa['canvas_cut'], sa['outside_wall'], sa['left_out']),
+                                     (sc['canvas_cut'], sc['outside_wall'], sc['left_out']))
+                    self.assertFalse(sc['turn_at_edge'])
+                if not restored:
+                    self.assertTrue(np.array_equal(c_img, a_img))
+
+    @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
+    def test_the_wall_bounds_still_crop(self):
+        """The Paper wall's first stone alone at (x, y): beyond 02's 400-row canvas but in the wall
+        the corrected mode keeps it; beyond the wall's top row 558 or right column 809 both modes
+        cut it; past the wall's right edge but inside 02's 851-column canvas both are the same."""
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d)
+            shutil.copy(WALL / '00_run.py', run_dir)
+            shutil.copytree(WALL / 'data', run_dir / 'data')
+            result = run_dir / next(WALL.glob('result_*')).name
+            result.mkdir()
+            lines = (next(WALL.glob('result_*')) / 'transformation.txt').read_text().splitlines()
+            first = lines[1].split(';')
+            # (x, y): author pixels, corrected pixels, outside the wall
+            for (x, y), (a_px, c_px, out) in {(400, 500): (0, 15850, 0), (400, 545): (0, 10420, 5430),
+                                              (800, 200): (8647, 8647, 7203), (830, 500): (0, 5643, 10207)}.items():
+                (result / 'transformation.txt').write_text('\n'.join([lines[0], ';'.join([first[0], str(x), str(y), first[3]])]))
+                a_img, a = metrics.render_original(run_dir, result)
+                c_img, c = metrics.render_original(run_dir, result, 'corrected')
+                with self.subTest((x, y)):
+                    self.assertEqual((a['stones'][0]['pixels'], c['stones'][0]['pixels'], c['stones'][0]['outside_wall']),
+                                     (a_px, c_px, out))
+                    self.assertEqual(c_img.shape, (559, 810))
+                    self.assertEqual(c['stones'][0]['pixels'] + out, 15850)  # what is not drawn lies beyond the wall
+                    if a_px:
+                        self.assertTrue(np.array_equal(a_img, c_img))
+            with self.assertRaises(ValueError):
+                metrics.render_original(run_dir, result, 'wider')
+
+
 class RecordsUnchanged(unittest.TestCase):
     def test_record_trees(self):
         for rel, pinned in RECORDS.items():
