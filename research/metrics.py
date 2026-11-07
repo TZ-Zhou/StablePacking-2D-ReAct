@@ -11,18 +11,37 @@ Stability: lambda_min = min(left, right) unrounded load multipliers of the final
 evaluation (Eq. 28), read from the img/{left,right}<value>_mechanism.png names as the author's
 script does; lambda_wang_code is the value evaluate_kine returned (rounded by the code).
 Rock pixels exclude the ground and wedges; wedges are reported separately.
+
+The four wall metrics of Wang et al. Section 5.2 (wang_metrics; not part of wall_metrics yet), as the
+author's Tests/Thangavelu/03_evaluate_wall_metrics.py computes them on a stone label image, with
+these departures from the paper's Eqs. 25-28:
+- F_SF (Eq. 25, higher is better): the script crops empty columns on the right first and divides
+  by H*W - 2H - 3W of the cropped image, not by a target wall area.
+- F_AH (Eq. 26, lower is better) and F_AV (Eq. 27, higher is better): the paper averages n
+  shortest joint paths; the script starts about 10 (every H//10 rows / W//10 columns from 10 px
+  in), keeps the 5 smallest (length - span) / span and reports their mean x 100.
+- F_LR (Eq. 28, higher is better): min(alpha_left, alpha_right) / mu; the script and lambda_min
+  leave out the division by mu.
+The author renders the label image at the stones' original resolution
+(02_view_transformation_ori_reso.py); rock_labels is the simulation grid, so values differ by
+resolution, not by method.
 """
 import json
 import pickle
 import re
 from pathlib import Path
 
+import cv2
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import dijkstra
+from skimage.measure import regionprops
 
 from Stonepacker2D.stack.selection import load_trace, select, tie_count
 from Stonepacker2D.utils.constant import get_base_id, get_wedge_id
 
 METRICS_VERSION = 1
+MU = 0.58  # Stonepacker2D.utils.constant.MU; no run here calls set_mu
 
 
 def mechanism_lambdas(result):
@@ -84,6 +103,116 @@ def wall_metrics(run, result):
         'termination': next((c['termination'] for c in reversed(commits) if c.get('termination')), None),
         'metrics_version': METRICS_VERSION,
     }
+
+
+def rock_labels(base):
+    """Placed rocks numbered in placement order (1..n) on the simulation grid, row 0 at the ground
+    as in the author's label image; ground, frame and wedges are 0."""
+    labels = np.zeros(base.matrix.shape, int)
+    for k, rock in enumerate(base.placed_rocks, 1):
+        labels[rock.matrix != 0] = k
+    return labels
+
+
+def crop_right(labels):
+    """03: drop the empty columns right of the last stone column."""
+    return labels[:, :np.flatnonzero(labels.sum(axis=0) != 0).max() + 1]
+
+
+def filling_author(labels):
+    """03's wall_stone_ratio: stone pixels / (H*W - 2H - 3W) of the right-cropped label image."""
+    img = crop_right(labels)
+    H, W = img.shape
+    return np.count_nonzero(img) / (H * W - 2 * H - 3 * W)
+
+
+def joint_image(labels):
+    """03's joint image: right-cropped, every stone eroded alone with a 3x3 kernel (so touching
+    stones are parted), empty rows past the last stone row dropped, then zeros padded (1 row
+    before, 2 after, 1 column left, 2 right). 255 = stone, 0 = joint or empty."""
+    img = crop_right(labels)
+    eroded = np.zeros(img.shape, np.uint8)
+    for region in regionprops(img):
+        stone = np.zeros(img.shape, np.uint8)
+        stone[region.bbox[0]:region.bbox[2], region.bbox[1]:region.bbox[3]] = region.image
+        eroded += cv2.erode(stone, np.ones((3, 3), np.uint8), iterations=1)
+    eroded = np.where(eroded != 0, 255, 0)
+    eroded = eroded[:np.flatnonzero(eroded.sum(axis=1) != 0).max() + 1]
+    return np.pad(eroded, ((1, 2), (1, 2)))
+
+
+def joint_graph(img):
+    """graph.build_graph(img, erosion=False) as a sparse matrix over the joint pixels, with the
+    Euclidean weights 03 assigns afterwards (they replace build_graph's 1, 1.44 and x0.3 interface
+    weights): neighbours down and right, the down-right diagonal and the up-right diagonal (whose
+    lower end is never the last row, as in build_graph). build_graph zips every edge list with a
+    weight list as long as the first one (row neighbours), so it keeps only that many of the other
+    three, the first in row-major order; so does this."""
+    H, W = img.shape
+    free = img == 0
+    index = np.arange(H * W).reshape(H, W)
+    a, b, w = [], [], []
+    n = None
+    for mask, s, t, weight in (
+            (free[1:, :] & free[:-1, :], (slice(0, -1), slice(None)), (slice(1, None), slice(None)), 1.0),
+            (free[:, 1:] & free[:, :-1], (slice(None), slice(0, -1)), (slice(None), slice(1, None)), 1.0),
+            (free[1:, 1:] & free[:-1, :-1], (slice(0, -1), slice(0, -1)), (slice(1, None), slice(1, None)), np.sqrt(2)),
+            (free[:-2, 1:] & free[1:-1, :-1], (slice(1, -1), slice(0, -1)), (slice(0, -2), slice(1, None)), np.sqrt(2))):
+        n = mask.sum() if n is None else n  # ponytail: the author's truncation, kept on purpose to match 03
+        a.append(index[s][mask][:n])
+        b.append(index[t][mask][:n])
+        w.append(np.full(min(n, mask.sum()), weight))
+    a, b, w = np.concatenate(a), np.concatenate(b), np.concatenate(w)
+    return coo_matrix((w, (a, b)), shape=(H * W, H * W)).tocsr()
+
+
+def joint_paths(img, vertical):
+    """03's compute_FAV (vertical) / compute_FAH: shortest joint paths across the image from every
+    H//10-th row (from the left edge, if it is a joint) or W//10-th column (from the top), starting
+    10 px in; per path (length - span) / span. None if the step is 0 (03 fails there)."""
+    H, W = img.shape
+    step = (W if vertical else H) // 10
+    if step == 0:
+        return None
+    if vertical:
+        pairs = [((0, c), (H - 1, c)) for c in range(10, W - 10, step)]
+    else:
+        pairs = [((r, 0), (r, W - 1)) for r in range(10, H - 10, step) if img[r, 0] == 0]
+    if not pairs:
+        return []
+    starts = [s[0] * W + s[1] for s, _ in pairs]
+    dist = dijkstra(joint_graph(img), directed=False, indices=starts)
+    span = H - 1 if vertical else W - 1
+    return [{'start': s, 'end': e, 'length': float(d[e[0] * W + e[1]]),
+             'factor': float((d[e[0] * W + e[1]] - span) / span)} for (s, e), d in zip(pairs, dist)]
+
+
+def path_metric(paths):
+    """03: the mean of the 5 smallest factors x 100; None without paths (03 returns nan) or with an
+    unreachable end (03 raises)."""
+    if not paths or not all(np.isfinite(p['factor']) for p in paths):
+        return None
+    return 100 * float(np.mean(np.sort([p['factor'] for p in paths])[:5]))
+
+
+def wang_metrics(result, labels=None):
+    """The four metrics of Wang et al. Section 5.2 of one wall, raw values; see the module notes.
+    labels: a stone label image (e.g. the author's stacked_wall_label.png); by default the
+    simulation grid's rock_labels of result/base.pkl."""
+    result = Path(result)
+    if labels is None:
+        base = pickle.load(open(result / 'base.pkl', 'rb'))
+        labels = rock_labels(base)
+    out = {'F_SF_author': None, 'F_AH': None, 'F_AV': None, 'F_AH_paths': None, 'F_AV_paths': None}
+    if np.count_nonzero(labels):  # 03 fails on a wall without stones
+        img = joint_image(labels)
+        horizontal, vertical = joint_paths(img, False), joint_paths(img, True)
+        out.update(F_SF_author=filling_author(labels), F_AH=path_metric(horizontal), F_AV=path_metric(vertical),
+                   F_AH_paths=horizontal, F_AV_paths=vertical, joint_image_shape=list(img.shape))
+    lam = mechanism_lambdas(result)
+    lam_min = min(lam['left'], lam['right']) if None not in lam.values() else None
+    out.update(lambda_min=lam_min, F_LR=None if lam_min is None else lam_min / MU, mu=MU)
+    return out
 
 
 def step_rows(result):
