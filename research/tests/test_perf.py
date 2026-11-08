@@ -54,7 +54,7 @@ class FakeExecutor:
     def submit(self, *call):
         self.submitted += 1
         future = concurrent.futures.Future()
-        future.set_result("result")
+        future.set_result(("result", None))  # a worker's result and the height it compared with the median
         return future
 
 
