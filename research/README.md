@@ -13,8 +13,9 @@
 | `load_env.ps1` | 把 repo 根目錄 `.env.local`（授權與 API 金鑰，已被 git 忽略）載入目前 PowerShell 視窗，只印名稱不印值 |
 | `findings.md` | 研究結論 |
 | `quality/` | 各品質方法一個子資料夾，放批次彙總 json 與品質 csv、jsonl 輸出 |
+| `reports/` | 已提交的離線報告，每面 GPT 實牆一個子資料夾（目前 `gpt-001`） |
 | `tests/` | 測試（unittest 寫法，pytest 也可跑） |
-| `validation/` | 登記的環境清單、環境驗證、Windows 執行期相容層與 worker venv 登記 |
+| `validation/` | 登記的環境清單、環境驗證、Windows 執行期相容層與 worker venv 登記，以及每台電腦自己的本機路徑設定（`local_setup.py`，詳見該處 README） |
 
 ### walls/
 | 檔案 | 說明 |
@@ -38,6 +39,7 @@
 | `gpt_smoke.py` | 在既有牆的決策軌跡上做少量真實 GPT 決策的煙霧測試 |
 | `gpt_wall.py` | 以 OpenAI 模型選濾波順序跑完整面牆的安全執行器與花費帳本 |
 | `dev_walls.py` | 在 GPT 牆之前，以開發種子建 Paper 牆與各控制器牆並檢查 |
+| `gpt_wall_report.py` | 唯讀產生一面 GPT 實牆的離線報告（決策、切換、軌跡、品質），寫到 `reports/<名稱>/` |
 
 ## 使用
 - 從 repo 根目錄以模組執行，例如 `python -B -m research.walls.run_wall ...`；各檔開頭的 docstring 有子指令與參數。

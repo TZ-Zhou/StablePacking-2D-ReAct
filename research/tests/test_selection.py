@@ -400,17 +400,9 @@ class LauncherSafety(unittest.TestCase):
             )
             self.assertEqual(ls.env_prefix("C:/registered"), Path("D:/mine"))
             self.assertEqual(ls.worker_venv_manifest("C:/registered/w.json"), Path(tmp) / "w.local.json")
-        ignored = subprocess.run(
-            [
-                "git",
-                "check-ignore",
-                "-q",
-                "research/validation/local-setup.json",
-                "research/validation/worker-venv.local.json",
-            ],
-            cwd=REPO,
-        )
-        self.assertEqual(ignored.returncode, 0, "the local files must stay out of git")
+        for local in ("local-setup.json", "worker-venv.local.json"):
+            ignored = subprocess.run(["git", "check-ignore", "-q", f"research/validation/{local}"], cwd=REPO)
+            self.assertEqual(ignored.returncode, 0, f"{local} must stay out of git")
 
 
 class MirrorFrame(unittest.TestCase):
