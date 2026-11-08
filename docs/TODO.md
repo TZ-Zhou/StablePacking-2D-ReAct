@@ -4,6 +4,7 @@
 
 - 在 pc1 跑 `al-th-all-orders`（`research/walls/batch_al_th.yaml`：`AL_R`、`AL_PR`、`AL_IR`、`TH_T20`、`TH_T80`，121 面）。pc1 的 hostname 要先加進 `research/storage/case_id.py` 的 `PCS`，代碼 `pc1`。
 - 輸出在 pc1 的 `runs/batch/al-th-all-orders/`，不進 git。
+- 濾波順序的完整交叉批次：規模由 pc1 決定，見 `docs/plans/factorial-filter-order-batch.md`。
 
 ## 待驗證
 
@@ -28,7 +29,7 @@
 
 ## 砌牆加速（`docs/plans/case-speedup-2s-per-stone.md`）
 
-第二顆起每顆 < 2 秒已達成，結果與決定都在該計畫。`pref/speed-up` 尚未合併 `main`。
+第二顆起每顆 < 2 秒已達成，結果與決定都在該計畫，已合併 `main`。
 
 | 項 | 要做什麼 |
 | --- | --- |
