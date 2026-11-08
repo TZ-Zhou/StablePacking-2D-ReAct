@@ -75,7 +75,7 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 | 模組 | 改動 |
 | --- | --- |
 | `paths.py` | 封存路徑 `LEGACY_RUNS`（唯讀）；新牆 `CASES_DIR`、一組牆 `STUDIES_DIR`（`run_wall.CASES` 已是場景表，故不用 `CASES`） |
-| `walls/run_wall.py` | 配 case_id、寫到 `cases/`、receipt 新欄位、結束時產生 `derived/steps.csv`、拒寫舊資料夾；`CASES` 新增 `TH_T20` |
+| `runner/run_wall.py` | 配 case_id、寫到 `cases/`、receipt 新欄位、結束時產生 `derived/steps.csv`、拒寫舊資料夾；`CASES` 新增 `TH_T20` |
 | `walls/campaign.py`、`llm_walls/dev_walls.py` | 以 study 記錄 arm × 種子，不再巢狀命名 |
 | `analysis/counterfactual_branches.py`、`analysis/lookahead_study.py` | 母牆以 `parent` 記錄 |
 | `llm_walls/gpt_wall.py`、`llm_walls/gpt_smoke.py` | 輸出改到 `cases/`，LLM 紀錄放 `llm/`，study 為 `gpt-walls`、`gpt-walls-loopback`、`api-smoke`；封存內的舊牆仍計入名稱唯一性與預算。smoke 是舊牆的副本，也佔一個 case，receipt 有 `smoke_of`，統計牆數時要排除。建牆期間的鎖在 study 資料夾的 `.lock`（不進版控） |

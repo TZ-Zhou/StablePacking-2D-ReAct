@@ -2,13 +2,16 @@
 
 Usage: python -B -m research.perf.profile_report show <run name or directory> [--top 18]
 
-Reads perf.json, events.jsonl and perf/ of a run written by research/perf/profile_case.py and prints
+Reads perf.json, events.jsonl and perf/ of a run written by research/runner/profile_case.py and prints
+- seconds per stone of the building loop, right under the title,
 - phase wall-clock from launch to exit (events of the registered runtime plus the launch and configure times),
 - the main-process timers, sorted by time (inclusive: nested timers overlap),
+- the payload sent to the workers: MB per task, total GB and estimated pickling seconds,
 - the worker sections summed over every place_one_stone call and the share of the worker busy time,
 - the average number of busy workers: worker busy time per starmap wall second,
+- the peak working set of the worst worker at the workers' first and last records,
 - with a cProfile run (profile_case --cprofile): the functions with the most own time over all workers.
-Nothing is written.
+A run without a measurement prints `not available` for it. Nothing is written.
 """
 
 import argparse
@@ -24,6 +27,9 @@ CASE_MARKS = (
     ("build_return", "build_wall_vendor"),
     ("final_evaluation_complete", "final evaluate_kine and failure plot"),
 )
+COUNTERS = ("main.pool.tasks", "main.payload.bytes")  # main-process STATS rows that do not hold seconds
+BYTES_PER_MB = 1024**2
+BYTES_PER_GB = 1024**3
 
 
 def resolve_run(run):
@@ -41,6 +47,16 @@ def load_events(run_dir):
         record = json.loads(line)
         events.setdefault(record["event"], record["elapsed_seconds"])
     return events
+
+
+def seconds_per_stone(run_dir):
+    """Building-loop seconds per placed stone of the first wall; None for a wall that did not return."""
+    records = [json.loads(line) for line in (Path(run_dir) / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    enter = next((record for record in records if record["event"] == "build_enter"), None)
+    done = next((record for record in records if record["event"] == "build_return"), None)
+    if enter is None or done is None or not done["placed_rocks"]:
+        return None
+    return (done["elapsed_seconds"] - enter["elapsed_seconds"]) / done["placed_rocks"]
 
 
 def load_worker_records(perf_dir):
@@ -66,12 +82,12 @@ def phase_rows(events, meta, launch_epoch, wall_seconds):
 
 
 def main_rows(stats):
-    """[(label, seconds, calls)] of the main-process timers, largest first; the task counter is not a timer."""
+    """[(label, seconds, calls)] of the main-process timers, largest first; the counters are not timers."""
     return sorted(
         (
             (label, seconds, int(calls))
             for label, (seconds, calls) in stats.items()
-            if label.startswith("main.") and label != "main.pool.tasks"
+            if label.startswith("main.") and label not in COUNTERS
         ),
         key=lambda row: -row[1],
     )
@@ -113,12 +129,38 @@ def phase_lines(run_dir, record, stats_file):
     return [header] + [f"{label:48s} {seconds:9.2f} {100 * seconds / wall:6.1f}%" for label, seconds in rows]
 
 
+def stone_line(run_dir):
+    seconds = seconds_per_stone(run_dir)
+    return "seconds per stone: not available" if seconds is None else f"seconds per stone: {seconds:.2f}"
+
+
 def main_lines(stats, top):
     header = "main process timers (inclusive)                    seconds  calls   ms/call"
     rows = main_rows(stats)[:top]
     return [header] + [
         f"{label:48s} {seconds:9.2f} {calls:6d} {1000 * seconds / max(calls, 1):9.2f}" for label, seconds, calls in rows
     ]
+
+
+def payload_line(stats):
+    """Every pose of a step is in exactly one batch, so main.pool.tasks counts the tasks sent for both pool kinds."""
+    total, tasks = stats.get("main.payload.bytes", [0, 0])[0], stats.get("main.pool.tasks", [0, 0])[0]
+    if not total or not tasks:
+        return "payload: not available"
+    per_task, pickling = total / tasks / BYTES_PER_MB, stats["main.payload.pickle"][0]
+    return f"payload: {per_task:.2f} MB per task, {total / BYTES_PER_GB:.2f} GB total, {pickling:.2f} s pickling"
+
+
+def memory_line(records):
+    """The largest peak working set over the workers at their first and at their last records (time-ordered records)."""
+    peaks = {}
+    for record in (record for record in records if "peak_wset" in record):
+        peaks.setdefault(record["pid"], []).append(record["peak_wset"])
+    if not peaks:
+        return "worker peak working set: not available"
+    first = max(series[0] for series in peaks.values()) / BYTES_PER_MB
+    last = max(series[-1] for series in peaks.values()) / BYTES_PER_MB
+    return f"worker peak working set (worst worker): first record {first:.1f} MB, last record {last:.1f} MB"
 
 
 def worker_lines(records, starmap_seconds):
@@ -133,6 +175,7 @@ def worker_lines(records, starmap_seconds):
             for label, (seconds, calls) in sections
         ]
         + [f"average busy workers during starmap: {average_busy_workers(records, starmap_seconds):.1f}"]
+        + [memory_line(records)]
     )
 
 
@@ -153,9 +196,9 @@ def format_report(run_dir, top):
     stats = stats_file["stats"]
     title = f"{run_dir.name}: {record['case']} wall {record['wall_seconds']:.1f}s"
     sections = [
-        [f"{title} persistent_pool={record['persistent_pool']}"],
+        [f"{title} persistent_pool={record['persistent_pool']}", stone_line(run_dir)],
         phase_lines(run_dir, record, stats_file),
-        main_lines(stats, top),
+        main_lines(stats, top) + [payload_line(stats)],
         worker_lines(load_worker_records(perf_dir), stats.get("main.pool.starmap", [0.0, 0])[0]),
         cprofile_lines(perf_dir, top),
     ]

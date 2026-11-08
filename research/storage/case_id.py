@@ -6,7 +6,7 @@ the computer. The policy, filter order, switch, controller, seed and placements 
 purpose (the order can change while a wall is built): they live in the case's receipt.json, and
 spec_sha256 hashes them so that reruns of one definition can be grouped.
 
-Imported by research/walls/run_wall.py (allocate) and by every reader of walls (wall_dir). Walls in the
+Imported by research/runner/run_wall.py (allocate) and by every reader of walls (wall_dir). Walls in the
 research/runs archive have no case id: their path there is their id.
 """
 import hashlib

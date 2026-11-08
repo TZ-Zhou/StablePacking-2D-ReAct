@@ -24,7 +24,8 @@ from Stonepacker2D.stack.selection import (ALL_ORDERS, PAPER_ORDER, filter_log, 
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
-from research.walls import run_wall  # noqa: E402
+from research.runner import run_wall  # noqa: E402
+from research.walls import case_definition  # noqa: E402
 from research.analysis import order_sensitivity  # noqa: E402
 
 
@@ -415,14 +416,14 @@ class LauncherSafety(unittest.TestCase):
             selector = Path(tmp) / 'Stonepacker2D' / 'stack' / 'selection.py'
             selector.parent.mkdir(parents=True)
             selector.write_text('A = 1\n')
-            before = run_wall.code_fingerprint(tmp)
+            before = case_definition.code_fingerprint(tmp)
             selector.write_text('A = 2\n')
-            after = run_wall.code_fingerprint(tmp)
+            after = case_definition.code_fingerprint(tmp)
             self.assertIn('Stonepacker2D/stack/selection.py', before)
             self.assertNotEqual(before, after)
-        real = run_wall.code_fingerprint()
+        real = case_definition.code_fingerprint()
         self.assertIn('Stonepacker2D/stack/selection.py', real)
-        self.assertIn('research/walls/run_wall.py', real)
+        self.assertIn('research/runner/run_wall.py', real)
         self.assertIn('research/validation/windows_case_runtime.py', real)
 
     def test_launcher_tools_reach_a_clone_and_need_no_baseline(self):
@@ -433,7 +434,7 @@ class LauncherSafety(unittest.TestCase):
             self.assertTrue((run_wall.VALIDATION / tool).is_file(), tool)
             ignored = subprocess.run(['git', 'check-ignore', '--no-index', '-q', f'research/validation/{tool}'], cwd=REPO)
             self.assertEqual(ignored.returncode, 1, f'{tool} would not reach a clone')
-        for source in ('research/walls/run_wall.py', 'research/validation/verify_environment.py'):
+        for source in ('research/runner/run_wall.py', 'research/validation/verify_environment.py'):
             code = (REPO / source).read_text(encoding='utf-8')
             self.assertNotRegex(code, r"['\"]baseline['\"]|baseline[/\\]validation|Users[/\\]", source)
         manifest = json.loads((run_wall.VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))
@@ -606,20 +607,20 @@ class OutputProtection(unittest.TestCase):
             self.assertEqual(folder, (Path(tmp) / first).resolve())
 
     def test_noise20_reads_its_own_stones(self):
-        text = run_wall.source_text('thangavelu-noise20')
+        text = case_definition.source_text('thangavelu-noise20')
         self.assertIn('/data/stones_noise_20_labels.png', text)
         self.assertNotIn('noise_80', text)
-        self.assertEqual(run_wall.source_text('thangavelu-noise80'),
-                         (REPO / run_wall.CASES['thangavelu-noise80'][0]).read_text(encoding='utf-8'))
+        self.assertEqual(case_definition.source_text('thangavelu-noise80'),
+                         (REPO / case_definition.CASES['thangavelu-noise80'][0]).read_text(encoding='utf-8'))
 
     def test_staged_cleanup_never_deletes(self):
         # Every original rm -rf line is staged as a guard: empty target passes, files raise.
-        for case, (script, _) in run_wall.CASES.items():
+        for case, (script, _) in case_definition.CASES.items():
             source = (REPO / script).read_text(encoding='utf-8')
-            staged = run_wall.stage(source, {'filter': {'policy': 'code_original'}, 'run_id': 'x'})
+            staged = case_definition.stage(source, {'filter': {'policy': 'code_original'}, 'run_id': 'x'})
             live = [l for l in staged.splitlines() if not l.lstrip().startswith('#')]
             self.assertFalse([l for l in live if 'rm -rf' in l and 'glob' not in l], case)
-        line = run_wall.stage("os.system('rm -rf '+d+'/*')\nseed_everything()\n",
+        line = case_definition.stage("os.system('rm -rf '+d+'/*')\nseed_everything()\n",
                               {'filter': {}, 'run_id': 'x'}).splitlines()[0]
         with tempfile.TemporaryDirectory() as d:
             exec(line, {'d': d})                       # empty: proceeds

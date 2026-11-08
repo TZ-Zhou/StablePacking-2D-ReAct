@@ -16,7 +16,7 @@ We have another implementation of the algorithm online! The [new implementation]
 | **A. Wang 原版** | Wang 的固定規則：五個濾波器依固定順序一層層篩選候選位置 | 不用 |
 | **B. ReAct／LLM** | 每次選石前，控制器從 120 種濾波順序中挑一種，其餘（候選、卷積、穩定性分析）完全不變 | 離線控制器與 mock 不用；真 GPT 要付費 |
 
-兩條路線共用同一個建牆程式 `research/walls/run_wall.py`，差別只在命令列參數。建牆的力學分析需要 **MOSEK 授權**。
+兩條路線共用同一個建牆程式 `research/runner/run_wall.py`，差別只在命令列參數。建牆的力學分析需要 **MOSEK 授權**。
 
 # 一、前置條件（每台電腦做一次）
 
@@ -94,21 +94,23 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 
 ```powershell
 # A1. 單面牆、Wang 的原始行為（--policy code_original）
-& $PY -B -m research.walls.run_wall bricks --policy code_original
+& $PY -B -m research.runner.run_wall bricks --policy code_original
 
 # A2. 論文的濾波級聯，預設順序 3,0,2,1,4
-& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20
+& $PY -B -m research.runner.run_wall thangavelu-noise80 --policy paper --seed 20
 
 # A3. 指定濾波順序（五個濾波器 0–4 的排列）
-& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --order 2,4,3,1,0 --seed 20
+& $PY -B -m research.runner.run_wall thangavelu-noise80 --policy paper --order 2,4,3,1,0 --seed 20
 
 # A4. 先試跑：只放 3 塊就停（確認環境、授權、流程都通）
-& $PY -B -m research.walls.run_wall bricks --policy code_original --placements 3
+& $PY -B -m research.runner.run_wall bricks --policy code_original --placements 3
 ```
 
 `code_original` 是重現 Wang 程式碼的濾波順序（含它的實作細節）；`paper` 是論文描述的順序，各濾波器只套用一次。兩者差別見 `Stonepacker2D/stack/selection.py`。
 
-選項：`--parent 牆`（這面牆分支自哪面牆：case_id 或 `research/runs` 內的路徑）、`--seed S`（預設 20）、`--timeout 秒`（預設 1800）、`--no-trace`（不寫候選追蹤，只留輸出）、`--placements N`（放 N 塊後停）、`--tol`（數值容差，預設 1e-9）。
+選項：`--parent 牆`（這面牆分支自哪面牆：case_id 或 `research/runs` 內的路徑）、`--seed S`（預設 20）、`--timeout 秒`（預設 1800）、`--no-trace`（不寫候選追蹤，只留輸出）、`--placements N`（放 N 塊後停）、`--tol`（數值容差，預設 1e-9）、`--fresh-pool`（對照用：像原始程式一樣每批重開 worker；預設整面牆共用一組 worker）、`--workers N`（worker 數，預設用案例自己的數字；不影響牆的結果）。
+
+在終端機執行時，每面牆會顯示進度條：已放石頭數／給定石頭數（牆放不完所有石頭時，結束時不會到 100%）。
 
 ## 案例
 
@@ -121,7 +123,7 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 | `thangavelu-noise80` | Figures 22–25 | 20 | 多邊形、雜訊 80；研究層的主要案例 |
 | `thangavelu-noise20` | 同一組資料的雜訊 20 | 20 | 與 noise80 共用建牆程式，只換石頭影像 |
 
-`run_wall` 一次只建批次中的第一面牆。實驗要建多面牆請用 `campaign`（見第四節）。
+`run_wall` 一次只建批次中的第一面牆。實驗要建多面牆請用 `campaign`（見第四節），或用 `batch` 抽樣多種場景與濾波順序（見 [docs/specs/batch-runner.md](docs/specs/batch-runner.md)）。
 
 ## 看結果
 
@@ -180,10 +182,10 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 
 ```powershell
 # Null 控制器（約 10 個放置；Thangavelu 有真正的決策點）
-& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"null\"}' --placements 10
+& $PY -B -m research.runner.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"null\"}' --placements 10
 
 # 假 LLM 的 ReAct，控制器在獨立 worker venv 的子行程中執行
-& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"react\", \"llm\": {\"kind\": \"mock\", \"mode\": \"max_llc\"}}' --worker-venv --placements 10
+& $PY -B -m research.runner.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"react\", \"llm\": {\"kind\": \"mock\", \"mode\": \"max_llc\"}}' --worker-venv --placements 10
 ```
 
 實測（本機，MOSEK 授權就位）：Thangavelu 放 10 塊，Null 控制器約 9 分鐘、mock LLM 的 ReAct（經 worker venv）約 11 分鐘，兩者都是 7 個決策點、檢查 `verdict: PASS`，ReAct 的傳輸帳本 `ledger: ok`。控制器牆比 Wang 原版慢。
@@ -201,9 +203,9 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 在 GPT 牆之前，以 2 個開發種子建 Paper 牆與各控制器牆，並檢查 Null 牆等於 Paper 牆：
 
 ```powershell
-& $PY -B -m research.llm_walls.dev_walls init my-dev     # 寫 research/studies/my-dev/study.json（只寫一次）
-& $PY -B -m research.llm_walls.dev_walls run my-dev      # 建尚未建的牆，然後檢查（要建很久）
-& $PY -B -m research.llm_walls.dev_walls check my-dev    # 檢查每面牆，寫 manifest.csv
+& $PY -B -m research.runner.dev_walls init my-dev     # 寫 research/studies/my-dev/study.json（只寫一次）
+& $PY -B -m research.runner.dev_walls run my-dev      # 建尚未建的牆，然後檢查（要建很久）
+& $PY -B -m research.runner.dev_walls check my-dev    # 檢查每面牆，寫 manifest.csv
 & $PY -B -m research.walls.campaign_quality my-dev --out research\quality\my-dev
 ```
 
@@ -230,15 +232,15 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 
 ```powershell
 # 1. 先預檢（不送任何請求）
-& $PY -B -m research.llm_walls.gpt_wall preflight --name gpt-002 --seed <種子> --after gpt-001
+& $PY -B -m research.runner.gpt_wall preflight --name gpt-002 --seed <種子> --after gpt-001
 
 # 2. 真的送出（付費）
 $env:STONEPACKING_ALLOW_PAID_API = '1'
-& $PY -B -m research.llm_walls.gpt_wall run --name gpt-002 --seed <種子> --after gpt-001 --confirm-paid
+& $PY -B -m research.runner.gpt_wall run --name gpt-002 --seed <種子> --after gpt-001 --confirm-paid
 Remove-Item Env:STONEPACKING_ALLOW_PAID_API
 
 # 3. 看花費
-& $PY -B -m research.llm_walls.gpt_wall ledger
+& $PY -B -m research.runner.gpt_wall ledger
 
 # 4. 離線報告（唯讀，不呼叫 API）：寫到 research/reports/<名稱>/
 & $PY -B -m research.llm_walls.gpt_wall_report gpt-002
@@ -264,16 +266,16 @@ Remove-Item Env:STONEPACKING_ALLOW_PAID_API
 
 ```powershell
 # 登記（只寫一次，不能覆蓋）：arms 可為 code_original、paper=順序、或 random
-& $PY -B -m research.walls.campaign init my-camp --case thangavelu-noise80 --arms code_original paper=3,0,2,1,4 alt=2,4,3,1,0 random --n-seeds 3 --timeout 1200
+& $PY -B -m research.runner.campaign init my-camp --case thangavelu-noise80 --arms code_original paper=3,0,2,1,4 alt=2,4,3,1,0 random --n-seeds 3 --timeout 1200
 
 # 先看會跑什麼
-& $PY -B -m research.walls.campaign run my-camp --dry-run
+& $PY -B -m research.runner.campaign run my-camp --dry-run
 
 # 真的跑；--max-runs 可限制這次最多建幾面
-& $PY -B -m research.walls.campaign run my-camp --max-runs 2
+& $PY -B -m research.runner.campaign run my-camp --max-runs 2
 
 # 重新彙整 manifest.csv 與 steps.csv
-& $PY -B -m research.walls.campaign summarize my-camp
+& $PY -B -m research.runner.campaign summarize my-camp
 
 # 四項牆品質指標（Wang 的 F_SF、F_AH、F_AV、F_LR），寫到 research\quality\<id>
 & $PY -B -m research.walls.campaign_quality my-camp --out research\quality\my-camp

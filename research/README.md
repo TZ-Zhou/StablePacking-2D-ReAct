@@ -6,7 +6,8 @@
 | 項目 | 說明 |
 | --- | --- |
 | `paths.py` | repo、`runs`（封存）、`cases`、`studies`、`validation/`、`quality/` 的路徑，全套件只在這裡定義 |
-| `walls/` | 建牆、檢查、批次實驗與品質評分（見下表） |
+| `runner/` | 所有建牆的啟動點與執行邏輯（單面牆、批次、campaign 等）；見該處 README |
+| `walls/` | 牆與批次的定義、檢查與品質評分（見下表） |
 | `controller/` | 濾波順序控制器與 LLM（見下表） |
 | `analysis/` | 離線分析與 P0–P2 探索研究；見該處 README |
 | `llm_walls/` | LLM 實牆與付費 API；見該處 README |
@@ -22,9 +23,10 @@
 ### walls/
 | 檔案 | 說明 |
 | --- | --- |
-| `run_wall.py` | 以指定濾波政策與候選追蹤建牆（跑一個原始測試案例） |
+| `case_definition.py` | 場景表、入口腳本的暫存改寫與程式指紋 |
+| `batch_plan.py` | 批次的設定檔、拉丁超立方抽樣與案例清單 |
 | `check_run.py` | 唯讀檢查追蹤過的 run，並可逐位元組比對兩個 run |
-| `campaign.py` | 預先登記濾波順序 × 種子的 campaign，一次建一面牆並彙整 |
+| `campaign.py` | 預先登記濾波順序 × 種子的 campaign：設計與彙整 |
 | `wall_metrics.py` | 單一 run 的牆品質與過程指標，以及決策軌跡的步驟列 |
 | `campaign_quality.py` | 對 campaign 的每個 run 批次計算 Wang 的四項牆品質指標 |
 
@@ -44,7 +46,7 @@
 | `studies.py` | 讀寫各 study 的 study.json（一組事先設計的 case） |
 
 ## 使用
-- 從 repo 根目錄以模組執行，例如 `python -B -m research.walls.run_wall ...`；各檔開頭的 docstring 有子指令與參數。
+- 從 repo 根目錄以模組執行，例如 `python -B -m research.runner.run_wall ...`；各檔開頭的 docstring 有子指令與參數。
 - 付費 API 呼叫需設 `STONEPACKING_ALLOW_PAID_API=1` 並加 `--confirm-paid`；先用 `preflight` 檢查。
 - 測試：`python -m unittest discover -s research/tests`（或 `python -m pytest research/tests`）。
 - 新牆在 `cases`（未追蹤，一 case 一資料夾），一組牆的設計與 case 清單在 `studies`；`runs` 是唯讀封存，說明在該處的 ARCHIVE.md。

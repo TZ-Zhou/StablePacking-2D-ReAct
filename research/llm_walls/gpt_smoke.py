@@ -77,7 +77,6 @@ from research.controller import llm_api
 from research.paths import LEGACY_RUNS, REPO
 from research.storage import case_id as cid
 from research.storage import studies
-from research.walls import run_wall
 
 WALL = LEGACY_RUNS / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
 STUDY = 'api-smoke'  # research/studies/api-smoke: one entry {'case_id', 'name'} per run
@@ -506,7 +505,7 @@ def locked_run(name, spec, after, loopback, target=None):
         write_jsonl(result / 'trace' / 'controller.jsonl', records)
         write_jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
-        write_json(run / 'receipt.json', {**receipt, 'manifest': run_wall.manifest(run)})
+        write_json(run / 'receipt.json', {**receipt, 'manifest': check_run.manifest(run)})
         reaped = transport.process is None and transport.unreaped is None and not multiprocessing.active_children()
         worker = order_controller.worker_problems(ledger, False)[0]
         decisions = [r for r in records if r.get('decision_point') and not r['source'].startswith('skip')]

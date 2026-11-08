@@ -329,13 +329,21 @@ def compare_runs(a, b):
             ex, ey = load_result(x)[0], load_result(y)[0]
             if sorted(ex) != sorted(ey):
                 diffs.append(f'trace events {len(ex)} vs {len(ey)}')
-            for e in sorted(set(ex) & set(ey)):
-                (mx, ax), (my, ay) = ex[e], ey[e]
-                if {k: v for k, v in mx.items() if k != 'run_id'} != {k: v for k, v in my.items() if k != 'run_id'}:
-                    diffs.append(f'event {e}: meta differs')
-                if sorted(ax) != sorted(ay) or any(not np.array_equal(ax[k], ay[k], equal_nan=ax[k].dtype.kind == 'f')
-                                                   for k in ax):
-                    diffs.append(f'event {e}: arrays differ')
+            diffs += event_differences(ex, ey)
+    return diffs
+
+
+def event_differences(ex, ey):
+    """Differences between the trace events two runs share; the id of the run is the only field allowed to differ."""
+    diffs = []
+    for e in sorted(set(ex) & set(ey)):
+        (mx, ax), (my, ay) = ex[e], ey[e]
+        if {k: v for k, v in mx.items() if k != "run_id"} != {k: v for k, v in my.items() if k != "run_id"}:
+            diffs.append(f"event {e}: meta differs")
+        if sorted(ax) != sorted(ay) or any(
+            not np.array_equal(ax[k], ay[k], equal_nan=ax[k].dtype.kind == "f") for k in ax
+        ):
+            diffs.append(f"event {e}: arrays differ")
     return diffs
 
 
@@ -351,6 +359,11 @@ def differing_files(a, b):
         out += sorted(set(fx) ^ set(fy))
         out += sorted(k for k in set(fx) & set(fy) if fx[k].read_bytes() != fy[k].read_bytes())
     return out
+
+
+def manifest(output):
+    """sha256 of every trace and result file of the run, taken when the case process has ended."""
+    return {p.relative_to(output).as_posix(): sha256_file(p) for r in result_dirs(output) for p in artifact_files(r)}
 
 
 def main(argv=None):

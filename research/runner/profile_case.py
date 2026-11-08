@@ -1,17 +1,18 @@
 """Run an original test case once with stage timers (untraced, outside the registered run_wall receipt chain).
 
-Usage: python -B -m research.perf.profile_case <case> <run name> [--policy code_original|paper] [--order 3,0,2,1,4]
+Usage: python -B -m research.runner.profile_case <case> <run name> [--policy code_original|paper] [--order 3,0,2,1,4]
                                               [--seed S] [--persistent-pool] [--pool-size N] [--cprofile]
+                                              [--dump-tasks N]
 Then:  python -B -m research.perf.profile_report show <run name>
 
 Staging follows run_wall (same CASES, same stage(), copied inputs, shell cleanup refused); only the runtime that the
 staged case imports changes: perf_runtime.py (timers, optional persistent pool) on top of the registered
 windows_case_runtime.py. Output goes to a new research/perf/runs/<name>: perf.json (launcher record), perf/ (timer
-output), events.jsonl, execution.log and the case's own result directory. The case runs without trace and without a
-controller, so nothing here is a registered run; to check that a pool mode leaves the result unchanged, run the same
-case, policy, order and seed twice and compare the two folders with research.walls.check_run.compare_runs.
+output and task samples), events.jsonl, execution.log and the case's own result directory. The case runs without trace
+and without a controller, so nothing here is a registered run; to check that a pool mode leaves the result unchanged,
+run the same case, policy, order and seed twice and compare the two folders with research.walls.check_run.compare_runs.
 The case needs MOSEK: load .env.local first (. .\\research\\load_env.ps1); the API keys are dropped from the case
-environment (run_wall.quiet_env).
+environment (case_definition.quiet_env).
 """
 
 import argparse
@@ -23,16 +24,17 @@ import time
 from pathlib import Path
 
 from research.paths import PERF_RUNS, REPO, VALIDATION
-from research.walls import run_wall
+from research.runner import run_wall
+from research.walls import case_definition
 
 RUNTIME_IMPORT = "from windows_case_runtime import configure"
-PERF_RUNTIME = Path(__file__).with_name("perf_runtime.py")
+PERF_RUNTIME = REPO / "research" / "perf" / "perf_runtime.py"
 PYTHON_HASH_SEED = "20"  # run_wall's launcher value
 
 
 def stage_perf(source, filter_policy, seed):
-    """run_wall.stage with the runtime import pointed at perf_runtime (which applies the registered one first)."""
-    staged = run_wall.stage(
+    """case_definition.stage with the runtime import pointed at perf_runtime (it applies the registered one first)."""
+    staged = case_definition.stage(
         source, {"filter": filter_policy, "run_id": None, "controller": None, "worker_venv": False}, seed=seed
     )
     assert RUNTIME_IMPORT in staged, "staged case has no runtime import"
@@ -45,9 +47,10 @@ def case_environment(output, replicates, args):
         "PERF_PERSISTENT": "1" if args.persistent_pool else "0",
         "PERF_CPROFILE": "1" if args.cprofile else "0",
         "PERF_POOL_SIZE": str(args.pool_size),
+        "PERF_DUMP_TASKS": str(args.dump_tasks),
     }
     return {
-        **run_wall.quiet_env(),
+        **case_definition.quiet_env(),
         "MPLBACKEND": "Agg",
         "MPLCONFIGDIR": str(output / "matplotlib-config"),
         "PYTHONHASHSEED": PYTHON_HASH_SEED,
@@ -64,6 +67,7 @@ def stage_inputs(output, source_name, filter_policy, seed):
     target = output / original.name
     target.write_text(stage_perf(original.read_text(encoding="utf-8"), filter_policy, seed), encoding="utf-8")
     shutil.copy2(VALIDATION / "windows_case_runtime.py", output / "windows_case_runtime.py")
+    shutil.copy2(VALIDATION / "step_writer.py", output / "step_writer.py")
     shutil.copy2(PERF_RUNTIME, output / "perf_runtime.py")
     shutil.copytree(original.parent / "data", output / "data")
     if (original.parent / "config.json").exists():
@@ -73,7 +77,7 @@ def stage_inputs(output, source_name, filter_policy, seed):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=run_wall.CASES)
+    parser.add_argument("case", choices=case_definition.CASES)
     parser.add_argument("name")
     parser.add_argument("--policy", default="code_original", choices=["code_original", "paper"])
     parser.add_argument("--order", type=lambda s: tuple(int(c) for c in s.split(",")))
@@ -83,6 +87,7 @@ def parse_args(argv):
     parser.add_argument(
         "--cprofile", action="store_true", help="cProfile every worker (slower; for function-level data)"
     )
+    parser.add_argument("--dump-tasks", type=int, default=0, help="save up to N real tasks to perf/tasks")
     return parser.parse_args(argv)
 
 
@@ -111,7 +116,7 @@ def main(argv=None):
     args = parse_args(argv)
     assert Path(sys.prefix).resolve() == run_wall.ENV_PREFIX, sys.prefix
     output = prepare_output(args.name)
-    source_name, replicates = run_wall.CASES[args.case]
+    source_name, replicates = case_definition.CASES[args.case]
     filter_policy = {"policy": args.policy, "order": args.order, "tol": 1e-9}
     target = stage_inputs(output, source_name, filter_policy, args.seed)
     launched, wall_seconds, returncode = run_case(args, output, target, replicates)
@@ -123,6 +128,7 @@ def main(argv=None):
         "persistent_pool": args.persistent_pool,
         "pool_size": args.pool_size,
         "cprofile": args.cprofile,
+        "dump_tasks": args.dump_tasks,
         "launch_epoch": launched,
         "wall_seconds": wall_seconds,
         "returncode": returncode,

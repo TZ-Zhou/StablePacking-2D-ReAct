@@ -12,7 +12,8 @@ sys.path[:0] = [str(REPO)]
 from research.llm_walls import gpt_counterfactual as cf  # noqa: E402
 from research.paths import LEGACY_RUNS  # noqa: E402
 from research.storage import studies  # noqa: E402
-from research.walls import run_wall  # noqa: E402
+from research.runner import gpt_counterfactual as cf_runner  # noqa: E402
+from research.walls import case_definition  # noqa: E402
 
 PRESENT = (LEGACY_RUNS / cf.SOURCE).exists() and (LEGACY_RUNS / cf.PAPER_WALL).exists()
 GPT_STEPS = [6, 7, 8, 9, 10, 11, 14, 17, 20]
@@ -53,15 +54,15 @@ class Plan(unittest.TestCase):
     def test_run_refusals(self):
         launch = mock.Mock()
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': 'sk-x'}), self.assertRaises(SystemExit) as refused:
-            cf.run_plan(self.plan, launch=launch)
+            cf_runner.run_plan(self.plan, launch=launch)
         self.assertIn('no key', str(refused.exception))
         env = {k: v for k, v in os.environ.items() if k not in cf.KEY_VARS}
         with mock.patch.dict(os.environ, env, clear=True):
             with self.assertRaises(SystemExit):
-                cf.run_plan({**self.plan, 'code_sha256': {}}, launch=launch)
+                cf_runner.run_plan({**self.plan, 'code_sha256': {}}, launch=launch)
             missing = {**self.plan, 'walls': {**self.plan['walls'], 'V': {**self.plan['walls']['V'], 'run': 'branches/never/V'}}}
             with self.assertRaises(SystemExit) as refused:
-                cf.run_plan(missing, only=['G6'], launch=launch)
+                cf_runner.run_plan(missing, only=['G6'], launch=launch)
             self.assertIn('V has not passed', str(refused.exception))
         launch.assert_not_called()
 
@@ -73,7 +74,7 @@ class Build(unittest.TestCase):
     def plan(self):
         wall = {'arm': 'V', 'k': None, 'switch': {6: (0, 1, 3, 4, 2)}, 'run': None}
         return {'id': 'cf-test', 'source': cf.SOURCE, 'seed': 7, 'case': 'thangavelu-noise80', 'timeout_seconds': 60,
-                'code_sha256': run_wall.code_fingerprint(), 'walls': {'V': wall}, 'build_order': ['V']}
+                'code_sha256': case_definition.code_fingerprint(), 'walls': {'V': wall}, 'build_order': ['V']}
 
     def setUp(self):
         env = {k: v for k, v in os.environ.items() if k not in cf.KEY_VARS}
@@ -87,7 +88,7 @@ class Build(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(studies, 'STUDIES_DIR', Path(tmp)):
             studies.create(plan['id'], 'gpt-counterfactual', plan)
             self.assertIsNone(cf.wall_ref(plan, 'V'))
-            cf.run_plan(plan, launch=self.launch)
+            cf_runner.run_plan(plan, launch=self.launch)
             self.assertEqual(cf.wall_ref(plan, 'V'), self.CASE)
             self.assertEqual(studies.find(plan['id'], branch='V')[0]['case_id'], self.CASE)
         argv = self.launch.call_args.args[0]
@@ -97,7 +98,7 @@ class Build(unittest.TestCase):
     def test_a_plan_without_a_study_builds_nothing(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(studies, 'STUDIES_DIR', Path(tmp)):
             with self.assertRaises(RuntimeError):
-                cf.run_plan(self.plan(), launch=self.launch)
+                cf_runner.run_plan(self.plan(), launch=self.launch)
         self.launch.assert_not_called()
 
     def test_a_wall_of_the_archive_keeps_its_path(self):

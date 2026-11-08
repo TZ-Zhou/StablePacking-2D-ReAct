@@ -38,7 +38,8 @@ from research.controller import worker as controller_worker  # noqa: E402
 from research.controller import order_controller  # noqa: E402
 from research.controller import llm_api  # noqa: E402
 from research.paths import LEGACY_RUNS  # noqa: E402
-from research.walls import run_wall  # noqa: E402
+from research.runner import run_wall  # noqa: E402
+from research.walls import case_definition  # noqa: E402
 
 from Stonepacker2D.stack import selection  # noqa: E402
 from Stonepacker2D.stack.selection import controlled_policy  # noqa: E402
@@ -49,6 +50,14 @@ WALL = LEGACY_RUNS / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise8
 RANDOM_WALL = LEGACY_RUNS / 'controllers' / 'p1' / 'random1-seed20-a'
 NULL_WALL = LEGACY_RUNS / 'controllers' / 'p1-r2' / 'null-seed20'
 REACT_WALL = LEGACY_RUNS / 'controllers' / 'p2-mock' / 'react-maxllc-seed20'  # Mock wall 4, live geometry
+
+
+def writable_copy(src, dst):
+    """Copy the file or tree src to dst, contents only: shutil.copy, copy2 and a default copytree keep
+    the read-only attribute of the frozen archive, and a test could not change or delete its copy."""
+    if Path(src).is_dir():
+        return shutil.copytree(src, dst, copy_function=shutil.copyfile)
+    return shutil.copyfile(src, dst)
 
 
 class Brick:
@@ -244,12 +253,12 @@ class ControlledPolicy(unittest.TestCase):
 
 class Staging(unittest.TestCase):
     def test_controller_lines_only_when_given(self):
-        for case, (script, _) in run_wall.CASES.items():
+        for case, (script, _) in case_definition.CASES.items():
             source = (REPO / script).read_text(encoding='utf-8')
             policy = {'filter': PAPER, 'run_id': 'x'}
-            self.assertEqual(run_wall.stage(source, policy), run_wall.stage(source, {**policy, 'controller': None}))
-            staged = run_wall.stage(source, {**policy, 'controller': {'kind': 'null'}})
-            added = set(staged.splitlines()) - set(run_wall.stage(source, policy).splitlines())
+            self.assertEqual(case_definition.stage(source, policy), case_definition.stage(source, {**policy, 'controller': None}))
+            staged = case_definition.stage(source, {**policy, 'controller': {'kind': 'null'}})
+            added = set(staged.splitlines()) - set(case_definition.stage(source, policy).splitlines())
             self.assertEqual(len(added), 4, case)
             self.assertIn("    set_filter_controller(make_controller({'kind': 'null'}))", added)
 
@@ -628,10 +637,10 @@ class StoppedRuns(unittest.TestCase):
         src = check_run.result_dirs(NULL_WALL)[0]
         out = dst / src.relative_to(NULL_WALL)
         (out / 'trace').mkdir(parents=True)
-        shutil.copy2(NULL_WALL / 'receipt.json', dst / 'receipt.json')
+        writable_copy(NULL_WALL / "receipt.json", dst / "receipt.json")
         n = len(list((src / 'trace').glob('e*.npz'))) if events is None else events
         for k in range(n):
-            shutil.copy2(src / 'trace' / f'e{k:05d}.npz', out / 'trace' / f'e{k:05d}.npz')
+            writable_copy(src / "trace" / f"e{k:05d}.npz", out / "trace" / f"e{k:05d}.npz")
         commits = [l for l in (src / 'trace' / 'commits.jsonl').read_text(encoding='utf-8').splitlines()
                    if all(s['event'] < (n if committed is None else committed) for s in json.loads(l)['sides'].values())]
         placed = sum(json.loads(l)['outcome'] == 'placed' for l in commits)
@@ -688,10 +697,10 @@ def copy_wall(run, dst):
     """receipt, decisions.txt and trace of a run's (first) result directory; returns the copy's result directory."""
     src = check_run.result_dirs(run)[0]
     out = dst / src.relative_to(run)
-    shutil.copytree(src / 'trace', out / 'trace')
-    shutil.copy2(src / 'decisions.txt', out / 'decisions.txt')
-    shutil.copy2(src / 'base.pkl', out / 'base.pkl')
-    shutil.copy2(run / 'receipt.json', dst / 'receipt.json')
+    writable_copy(src / "trace", out / "trace")
+    writable_copy(src / "decisions.txt", out / "decisions.txt")
+    writable_copy(src / "base.pkl", out / "base.pkl")
+    writable_copy(run / "receipt.json", dst / "receipt.json")
     return out
 
 
@@ -803,7 +812,7 @@ class TraceChain(unittest.TestCase):
                  'fewer sampled stones than nb_stones': {'sampled_ids': sampled[:-1],
                                                          'stone_id': a['stone_id'][:len(a['stone_id']) // len(sampled) * (len(sampled) - 1)]}}
         for name, arrays in cases.items():
-            shutil.copy2(check_run.result_dirs(NULL_WALL)[0] / 'trace' / 'e00003.npz', result / 'trace' / 'e00003.npz')
+            writable_copy(check_run.result_dirs(NULL_WALL)[0] / "trace" / "e00003.npz", result / "trace" / "e00003.npz")
             edit_event(result, 3, **arrays)
             self.assertNotEqual(self.problems(self.tmp / 'ids'), [], name)
 
@@ -1304,7 +1313,7 @@ class FourthReview(unittest.TestCase):
 
     def test_r4_4_the_fingerprint_covers_every_research_module_a_run_executes(self):
         self.assertLessEqual({'research/controller/worker.py', 'research/controller/llm_api.py', 'research/walls/check_run.py',
-                              'research/controller/order_controller.py'}, set(run_wall.code_fingerprint()))
+                              'research/controller/order_controller.py'}, set(case_definition.code_fingerprint()))
 
     def test_r4_5_placed_means_added_to_the_wall(self):
         def edited(change):
@@ -1378,7 +1387,7 @@ class FourthReview(unittest.TestCase):
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': check_run.manifest(tmp)}), encoding='utf-8')
 
         def check(rs=None):
             with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
@@ -1845,7 +1854,7 @@ class AnthropicProvider(unittest.TestCase):
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': check_run.manifest(tmp)}), encoding='utf-8')
         with mock.patch.object(llm_api.AnthropicSender, '__call__', side_effect=AssertionError('the API was called')):
             report = order_controller.check(result, None, OPUS_SPEC)
             self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])
@@ -2003,7 +2012,7 @@ class OpenAIProvider(unittest.TestCase):
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': check_run.manifest(tmp)}), encoding='utf-8')
         with mock.patch.object(llm_api.OpenAISender, '__call__', side_effect=AssertionError('the API was called')):
             report = order_controller.check(result, None, GPT_SPEC)
             self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])

@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from research.validation import windows_case_runtime as runtime
-from research.walls import run_wall, wall_metrics
+from research.runner import run_wall
+from research.walls import wall_metrics
 from Stonepacker2D.stack.selection import load_trace
 
 REPO = Path(__file__).resolve().parents[2]

@@ -1,10 +1,4 @@
-"""Fixed filter-order campaigns: pre-registered arms x seeds, run one wall at a time.
-
-  python -B -m research.walls.campaign init <id> --case thangavelu-noise80 --arms code_original \
-      paper=3,0,2,1,4 alt=2,4,3,1,0 random --n-seeds 3 [--master-seed 20261106] [--timeout 1200]
-      [--extends <parent id>] [--note TEXT]
-  python -B -m research.walls.campaign run <id> [--dry-run] [--max-runs N]
-  python -B -m research.walls.campaign summarize <id>
+"""Fixed filter-order campaigns: pre-registered arms x seeds; research/runner/campaign.py builds them.
 
 A campaign is a study (research/storage/studies.py, kind 'campaign'). init writes its
 research/studies/<id>/study.json once (never overwritten); the design there holds the seed list (20
@@ -26,7 +20,6 @@ summarize (re)writes the derived manifest.csv and steps.csv beside study.json; t
 case id or a research/runs path, which case_id.wall_dir resolves. Archived campaigns are only read:
 load, planned_runs, run_status and manifest_path serve both kinds.
 """
-import argparse
 import csv
 import json
 import subprocess
@@ -34,10 +27,10 @@ from datetime import datetime
 
 import numpy as np
 
-from research.paths import LEGACY_RUNS
+from research.paths import LEGACY_RUNS, REPO
 from research.storage import case_id as cid
 from research.storage import studies
-from research.walls import run_wall
+from research.walls import case_definition
 
 from Stonepacker2D.stack.selection import ALL_ORDERS, CODE_ORIGINAL_ORDER, PAPER_ORDER  # noqa: E402
 
@@ -91,7 +84,7 @@ def parse_arm(text):
 
 
 def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, extends=None, notes=()):
-    if case not in run_wall.CASES:
+    if case not in case_definition.CASES:
         raise ValueError(f'unknown case {case}')
     rng = np.random.default_rng(master_seed)
     seeds = [20]
@@ -113,7 +106,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
     reused = []
     if extends:
         parent = load(extends)
-        if (parent['case'], parent['timeout_seconds'], parent['code_sha256']) != (case, timeout, run_wall.code_fingerprint()):
+        if (parent['case'], parent['timeout_seconds'], parent['code_sha256']) != (case, timeout, case_definition.code_fingerprint()):
             raise ValueError(f'{extends}: case, timeout or executed code differs; its runs cannot be reused')
         if seeds[:len(parent['seeds'])] != parent['seeds']:
             raise ValueError(f"{extends}: seeds {parent['seeds']} are not a prefix of {seeds}")
@@ -121,7 +114,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
             same = [a for a in arms if (a['name'], a['policy'], a['order']) == (arm['name'], arm['policy'], arm['order'])]
             if same and run_status(wall) is not None:
                 reused.append({'seed': seed, 'arm': arm['name'], 'run': wall})
-    git = lambda *a: subprocess.run(['git', *a], cwd=run_wall.REPO, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
     return {
         'id': campaign_id, 'created': datetime.now().isoformat(timespec='seconds'), 'case': case,
         'arms': arms, 'seeds': seeds, 'master_seed': master_seed, 'timeout_seconds': timeout,
@@ -129,7 +122,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
                      'random arm order drawn afterwards from the same RNG among orders unused by other arms',
         'python_hash_seed': 20, 'paper_order': list(PAPER_ORDER), 'code_original_order': list(CODE_ORIGINAL_ORDER),
         'git_head': git('rev-parse', 'HEAD'), 'git_status': git('status', '--porcelain').splitlines(),
-        'code_sha256': run_wall.code_fingerprint(), 'extends': extends, 'reused_runs': reused, 'notes': list(notes),
+        'code_sha256': case_definition.code_fingerprint(), 'extends': extends, 'reused_runs': reused, 'notes': list(notes),
     }
 
 
@@ -158,59 +151,10 @@ def run_status(wall):
     return json.loads((path / 'receipt.json').read_text(encoding='utf-8'))['status']
 
 
-def launch_case(study_id, argv, keys, launch=run_wall.run):
-    """Build one wall of a study with `launch` (run_wall.run: a new case folder) and list it there as
-    {'case_id', **keys}; returns its receipt. TERMINATION_FAILED lists the wall, then raises and stops the
-    whole batch."""
-    try:
-        receipt = launch(argv)
-    except run_wall.TerminationFailed as error:
-        studies.add_case(study_id, {'case_id': error.receipt['case_id'], **keys})
-        raise
-    studies.add_case(study_id, {'case_id': receipt['case_id'], **keys})
-    return receipt
-
-
-def log_run(study_id, record):
-    """Append one record to runs.jsonl beside the study's study.json."""
-    with (studies.path_of(study_id).parent / 'runs.jsonl').open('a', encoding='utf-8') as f:
-        f.write(json.dumps(record) + '\n')
-
-
 def require_study(study_id):
     """Walls are built, and tables written, only for a study: the research/runs archive is only read."""
     if not is_study(study_id):
         raise RuntimeError(f'{study_id} is not in research/studies: what the research/runs archive holds is only read')
-
-
-def run_campaign(campaign, dry_run=False, max_runs=None, launch=run_wall.run):
-    require_study(campaign['id'])
-    if run_wall.code_fingerprint() != campaign['code_sha256']:
-        raise RuntimeError('executed code differs from the code registered in the study')
-    started = []
-    for seed, arm, wall in planned_runs(campaign):
-        status = run_status(wall)
-        if status is not None:
-            print(f'skip {wall}: already {status}')
-            continue
-        if max_runs is not None and len(started) >= max_runs:
-            break
-        argv = [campaign['case'], '--policy', arm['policy'], '--seed', str(seed),
-                '--timeout', str(campaign['timeout_seconds'])]
-        if arm['order']:
-            argv += ['--order', ','.join(map(str, arm['order']))]
-        if dry_run:
-            print('would run', ' '.join(argv))
-            started.append(f"{arm['name']} seed {seed}")
-            continue
-        receipt = launch_case(campaign['id'], argv, {'arm': arm['name'], 'seed': seed}, launch)
-        started.append(receipt['case_id'])
-        log_run(campaign['id'], {'run': receipt['case_id'], 'seed': seed, 'arm': arm['name'],
-                                 'status': receipt['status'], 'finished': datetime.now().isoformat(timespec='seconds')})
-        if receipt['status'] == 'FAILED':
-            print(f"{receipt['case_id']} FAILED: campaign stopped for inspection")
-            break
-    return started
 
 
 def summarize(campaign):
@@ -264,40 +208,3 @@ def write_rows(path, rows):
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest='command', required=True)
-    init = sub.add_parser('init')
-    init.add_argument('id')
-    init.add_argument('--case', required=True)
-    init.add_argument('--arms', nargs='+', required=True)
-    init.add_argument('--n-seeds', type=int, required=True)
-    init.add_argument('--master-seed', type=int, default=20261106)
-    init.add_argument('--timeout', type=int, default=1200)
-    init.add_argument('--extends', help='reuse runs of this campaign for arms and seeds it shares')
-    init.add_argument('--note', action='append', default=[], help='recorded in the design, e.g. why an arm was chosen')
-    run = sub.add_parser('run')
-    run.add_argument('id')
-    run.add_argument('--dry-run', action='store_true')
-    run.add_argument('--max-runs', type=int)
-    summ = sub.add_parser('summarize')
-    summ.add_argument('id')
-    args = parser.parse_args(argv)
-    if args.command == 'init':
-        campaign = make_campaign(args.id, args.case, args.arms, args.n_seeds, args.master_seed, args.timeout,
-                                 args.extends, args.note)
-        register(campaign)
-        print(json.dumps({k: campaign[k] for k in ('id', 'case', 'arms', 'seeds')}, indent=2))
-    elif args.command == 'run':
-        run_campaign(load(args.id), args.dry_run, args.max_runs)
-    else:
-        for row in summarize(load(args.id)):
-            print({k: row.get(k) for k in ('arm', 'seed', 'status', 'n_placed', 'stone_filling', 'lambda_min',
-                                           'first_divergence_step_vs_code_original')})
-    return 0
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())

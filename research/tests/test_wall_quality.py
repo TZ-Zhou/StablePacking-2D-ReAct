@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
 from research.paths import LEGACY_RUNS  # noqa: E402
 from research.walls import wall_metrics  # noqa: E402
-from test_order_controller import WALL  # noqa: E402
+from test_order_controller import WALL, writable_copy  # noqa: E402
 
 AUTHOR = REPO / 'Tests' / 'Thangavelu'
 BRANCHES = LEGACY_RUNS / 'branches' / 'paper-hardstone-01'
@@ -144,13 +144,13 @@ class Refusals(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.run_dir = Path(self.tmp.name)
-        shutil.copy(WALL / '00_run.py', self.run_dir)
-        shutil.copytree(WALL / 'data', self.run_dir / 'data')
+        writable_copy(WALL / "00_run.py", self.run_dir / "00_run.py")
+        writable_copy(WALL / "data", self.run_dir / "data")
         source = next(WALL.glob('result_*'))
         self.result = self.run_dir / source.name
         self.result.mkdir()
         for name in ('base.pkl', 'transformation.txt'):
-            shutil.copy(source / name, self.result)
+            writable_copy(source / name, self.result / name)
         self.lines = (self.result / 'transformation.txt').read_text().splitlines()
 
     def tearDown(self):

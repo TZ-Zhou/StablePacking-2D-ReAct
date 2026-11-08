@@ -3,7 +3,6 @@ broken runs and failed evaluations, identical bytes on a rerun, the refusals, an
 records are only read."""
 import csv
 import json
-import shutil
 import sys
 import tempfile
 import unittest
@@ -16,7 +15,7 @@ sys.path.insert(0, str(REPO / 'research' / 'tests'))
 from research.storage import case_id  # noqa: E402
 from research.storage import studies  # noqa: E402
 from research.walls import campaign_quality as q  # noqa: E402
-from test_order_controller import WALL  # noqa: E402
+from test_order_controller import WALL, writable_copy  # noqa: E402
 from test_wall_quality import FIVE, digest  # noqa: E402
 
 ARMS = ['a', 'b', 'broken', 'absent']
@@ -37,7 +36,7 @@ class Batch(unittest.TestCase):
             patcher.start()
         camp = cls.runs / 'campaigns' / 't'
         for arm in ARMS[:3]:
-            shutil.copytree(WALL, camp / 'case' / arm / 'seed1')
+            writable_copy(WALL, camp / "case" / arm / "seed1")
         (next((camp / 'case' / 'broken' / 'seed1').glob('result_*')) / 'transformation.txt').unlink()
         (camp / 'campaign.json').write_text(json.dumps({'arms': [{'name': a} for a in ARMS], 'seeds': [1]}))
         with open(camp / 'manifest.csv', 'w', newline='', encoding='utf-8') as f:
@@ -129,7 +128,7 @@ class Batch(unittest.TestCase):
     def test_a_campaign_of_cases(self):
         """A study's manifest names case ids: they resolve to research/cases and stay in the run column."""
         case = '20261108-1254-TH_T80-pc1'
-        shutil.copytree(WALL, self.cases / case)
+        writable_copy(WALL, self.cases / case)
         studies.create('new', 'campaign', {'id': 'new', 'arms': [{'name': 'a'}], 'seeds': [1]})
         with open(q.camp.manifest_path('new'), 'w', newline='', encoding='utf-8') as f:
             w = csv.writer(f)

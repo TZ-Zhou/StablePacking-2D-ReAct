@@ -1,18 +1,17 @@
-"""Stage-level timers and an optional persistent worker pool for a staged case (copied next to the case script).
+"""Stage timers, payload and memory counters and task samples for a staged case (copied next to the case script).
 
 profile_case.py stages this file as perf_runtime.py beside the registered windows_case_runtime.py and points the
 staged case at it. configure() first applies the registered runtime (events.jsonl, Windows-safe pool, RNG and
 constant inheritance), then swaps the pool class used by build_wall and wraps functions with perf_counter timers.
-The wrappers pass arguments and results through unchanged.
+The wrappers pass arguments and results through unchanged, and nothing here draws a random number.
 
 Pool modes (environment PERF_PERSISTENT):
 - 0: TimedPool, a fresh pool per batch exactly as build_wall creates it, with create / starmap / terminate timed.
-- 1: PersistentPool, worker processes created once and reused. Every batch re-sends the constants snapshot, so a worker
-  sees what a fresh pool's initializer would give it; the RNG state is not re-sent because place_one_stone reseeds both
-  global RNGs before it uses them.
+- 1: PersistentPool, the registered SharedPool with the same timers; PERF_POOL_SIZE overrides its size.
 
-Outputs under $PERF_DIR: main_stats.json (timers of the main process, run times) written at exit, and one
-place_<pid>.jsonl line per place_one_stone call in a worker (plus cprof_<pid>.pstats with PERF_CPROFILE=1).
+Outputs under $PERF_DIR: main_stats.json (timers and payload counters of the main process, run times) written at exit,
+one place_<pid>.jsonl line per place_one_stone call in a worker (plus cprof_<pid>.pstats with PERF_CPROFILE=1), and with
+PERF_DUMP_TASKS=N up to N files tasks/task_<i>.pkl, each one real task and the constants it ran under.
 
 This file is imported by the staged case and by spawned workers, whose working directory is the case directory, so it
 cannot import the research package (same constraint as windows_case_runtime).
@@ -21,24 +20,48 @@ cannot import the research package (same constraint as windows_case_runtime).
 import atexit
 import contextlib
 import cProfile
+import ctypes
 import importlib
 import json
 import multiprocessing
 import os
-import random
+import pickle
 import time
 from collections import defaultdict
+from ctypes import wintypes
 from pathlib import Path
 
-import numpy as np
 import windows_case_runtime as registered
 
 PERF_DIR = Path(os.environ["PERF_DIR"])
 USE_CPROFILE = os.environ.get("PERF_CPROFILE") == "1"
+
+
+class MemoryCounters(ctypes.Structure):
+    """PROCESS_MEMORY_COUNTERS of the Windows API."""
+
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("page_fault_count", wintypes.DWORD),
+        ("peak_working_set", ctypes.c_size_t),
+        ("other_sizes", ctypes.c_size_t * 7),
+    ]
+
+
+def peak_working_set():
+    """This process's peak working set in bytes; the registered environment has no psutil."""
+    counters = MemoryCounters(cb=ctypes.sizeof(MemoryCounters))
+    ctypes.windll.kernel32.K32GetProcessMemoryInfo(wintypes.HANDLE(-1), ctypes.byref(counters), counters.cb)
+    return counters.peak_working_set
+
+
 PERSISTENT = os.environ.get("PERF_PERSISTENT") == "1"
 POOL_SIZE = int(os.environ.get("PERF_POOL_SIZE", "0"))  # 0: the case's set_number_cpu value
+DUMP_TASKS = int(os.environ.get("PERF_DUMP_TASKS", "0"))
+DUMP_EVERY = 10  # starmap calls per task sample
+PICKLE_PROTOCOL = 5
 
-STATS = defaultdict(lambda: [0.0, 0])  # label -> [seconds, calls]
+STATS = defaultdict(lambda: [0.0, 0])  # label -> [seconds, or the amount for a counter such as main.pool.tasks; calls]
 SHARED_TARGETS = (  # (module, owner class or None, attributes) timed in the main process and in every worker
     ("Stonepacker2D.entity.base", "Base", ("add_stone", "draw_assembly", "create_mirrored_base")),
     ("Stonepacker2D.entity.base", None, ("rotate_brick", "add_wedges")),
@@ -74,14 +97,18 @@ MAIN_TARGETS = (
 )
 
 
+def tally(label, amount):
+    STATS[label][0] += amount
+    STATS[label][1] += 1
+
+
 @contextlib.contextmanager
 def clock(label):
     start = time.perf_counter()
     try:
         yield
     finally:
-        STATS[label][0] += time.perf_counter() - start
-        STATS[label][1] += 1
+        tally(label, time.perf_counter() - start)
 
 
 def timed(label, function):
@@ -101,12 +128,6 @@ def install_timers(tag, targets):
         scope = owner_name or module_name.rsplit(".", 1)[-1]
         for attribute in attributes:
             setattr(owner, attribute, timed(f"{tag}{scope}.{attribute}", getattr(owner, attribute)))
-
-
-def settings():
-    """Uppercase globals of Stonepacker2D.utils.constant: what a pool initializer hands to its workers."""
-    module = importlib.import_module("Stonepacker2D.utils.constant")
-    return {key: value for key, value in vars(module).items() if key.isupper()}
 
 
 def snapshot_delta(before):
@@ -141,6 +162,7 @@ def wrap_place_one_stone():
                 "total": time.perf_counter() - start,
                 "sections": snapshot_delta(before),
                 "t_end": time.time(),
+                "peak_wset": peak_working_set(),
             }
             with (PERF_DIR / f"place_{pid}.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(record) + "\n")
@@ -154,60 +176,79 @@ def restore_worker(constants, numpy_state, random_state):
     wrap_place_one_stone()
 
 
-def spawn_pool(processes):
-    with clock("main.pool.create"):
-        return multiprocessing.Pool(
-            processes, initializer=restore_worker, initargs=(settings(), np.random.get_state(), random.getstate())
-        )
+class TaskSampler:
+    """Saves real tasks for comparisons without a wall: from every DUMP_EVERY-th starmap call, up to `limit` samples."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.calls = 0
+        self.saved = 0
+
+    def take(self, inputs):
+        self.calls += 1
+        if self.saved >= self.limit or self.calls % DUMP_EVERY:
+            return
+        sample = {"constants": registered._constants(), "arguments": inputs[len(inputs) // 2]}
+        folder = PERF_DIR / "tasks"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"task_{self.saved}.pkl").write_bytes(pickle.dumps(sample, PICKLE_PROTOCOL))
+        self.saved += 1
 
 
-def run_task(constants, function, arguments):
-    importlib.import_module("Stonepacker2D.utils.constant").__dict__.update(constants)
-    return function(*arguments)
+SAMPLER = TaskSampler(DUMP_TASKS)
+
+
+def record_payload(task, sent):
+    """Count `sent` tasks of the size of `task`; one is pickled and scaled because a whole batch would cost a wall."""
+    if not sent:
+        return
+    start = time.perf_counter()
+    size = len(pickle.dumps(task, PICKLE_PROTOCOL))
+    tally("main.payload.pickle", (time.perf_counter() - start) * sent)
+    tally("main.payload.bytes", size * sent)
+
+
+def timed_starmap(starmap, function, inputs, sent):
+    """Run `starmap` under its clock; `sent` is how many tasks this call hands to the workers."""
+    SAMPLER.take(inputs)
+    record_payload(inputs[0], sent)
+    with clock("main.pool.starmap"):
+        result = starmap(function, inputs)
+    tally("main.pool.tasks", len(inputs))
+    return result
 
 
 class TimedPool:
     """build_wall's per-batch pool (context manager, starmap) with its three phases timed."""
 
     def __init__(self, processes):
-        self.pool = spawn_pool(processes)
+        with clock("main.pool.create"):
+            self.pool = multiprocessing.Pool(processes, initializer=restore_worker, initargs=registered._worker_state())
 
     def __enter__(self):
         return self
 
     def starmap(self, function, inputs):
-        with clock("main.pool.starmap"):
-            result = self.pool.starmap(function, inputs)
-        STATS["main.pool.tasks"][0] += len(inputs)
-        STATS["main.pool.tasks"][1] += 1
-        return result
+        return timed_starmap(self.pool.starmap, function, inputs, len(inputs))
 
     def __exit__(self, *exc_info):
         with clock("main.pool.terminate"):
             self.pool.terminate()
 
 
-class PersistentPool(TimedPool):
-    """The same interface over one pool that lives until the process exits; leaving the context stops nothing."""
+class PersistentPool(registered.SharedPool):
+    """The registered SharedPool, whose workers run the timed restore_worker, with its main-process calls timed."""
 
-    shared = None
+    initializer = staticmethod(restore_worker)
+    size = POOL_SIZE
 
     def __init__(self, processes):
-        if PersistentPool.shared is None:
-            PersistentPool.shared = spawn_pool(POOL_SIZE or settings()["NUMBER_CPU"])
-            atexit.register(PersistentPool.shared.terminate)
-        self.pool = PersistentPool.shared
+        with clock("main.pool.create") if self.executor is None else contextlib.nullcontext():
+            super().__init__(processes)
 
     def starmap(self, function, inputs):
-        constants = settings()
-        with clock("main.pool.starmap"):
-            result = self.pool.starmap(run_task, [(constants, function, arguments) for arguments in inputs])
-        STATS["main.pool.tasks"][0] += len(inputs)
-        STATS["main.pool.tasks"][1] += 1
-        return result
-
-    def __exit__(self, *exc_info):
-        return None
+        sent = len(inputs[0][2]) if inputs[0][0] == 0 else 0  # the first batch of a step submits the whole step
+        return timed_starmap(super().starmap, function, inputs, sent)
 
 
 def write_stats(configured_at):

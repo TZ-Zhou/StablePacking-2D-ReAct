@@ -14,6 +14,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
 from research.analysis import lookahead_study as L  # noqa: E402
+from research.runner import lookahead_study as runner  # noqa: E402
 from research.paths import LEGACY_RUNS  # noqa: E402
 from research.storage import case_id  # noqa: E402
 from research.storage import studies  # noqa: E402
@@ -54,7 +55,7 @@ class LookaheadRun(unittest.TestCase):
         return launch
 
     def test_builds_each_alternative_once_with_its_parent(self):
-        self.assertTrue(L.run(launch=self.launcher()))
+        self.assertTrue(runner.run(launch=self.launcher()))
         self.assertEqual(len(self.calls), 2)
         for argv in self.calls:
             self.assertEqual(argv[argv.index('--parent') + 1], 'par')
@@ -65,21 +66,21 @@ class LookaheadRun(unittest.TestCase):
         self.assertEqual([(e['point'], e['alt']) for e in entries], [('par@3', 'recorded'), ('par@3', 'b1')])
         self.assertEqual(studies.load(L.STUDY)['kind'], 'lookahead')
         self.calls.clear()
-        self.assertTrue(L.run(launch=self.launcher()))                 # resume: nothing left to build
+        self.assertTrue(runner.run(launch=self.launcher()))                 # resume: nothing left to build
         self.assertEqual(self.calls, [])
 
     def test_a_wall_of_the_archive_counts_as_built(self):
         (self.root / 'runs' / L.STUDY / 'par-step3-recorded').mkdir(parents=True)
-        self.assertTrue(L.run(launch=self.launcher()))
+        self.assertTrue(runner.run(launch=self.launcher()))
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(L.lookahead_wall('par', 3, self.ALTS[0]), f'{L.STUDY}/par-step3-recorded')
         self.assertTrue(case_id.is_case_id(L.lookahead_wall('par', 3, self.ALTS[1])))
 
     def test_stops_at_a_failed_wall_and_refuses_another_design(self):
-        self.assertFalse(L.run(launch=self.launcher('FAILED')))
+        self.assertFalse(runner.run(launch=self.launcher('FAILED')))
         self.assertEqual(len(self.calls), 1)
         with mock.patch.object(L, 'DESIGN', {**L.DESIGN, 'k': 9}), self.assertRaises(SystemExit):
-            L.run(launch=self.launcher())
+            runner.run(launch=self.launcher())
 
 
 @unittest.skipUnless(WALL.exists() and (LEGACY_RUNS / 'branches' / L.PLANS[0]).exists(), 'records absent')

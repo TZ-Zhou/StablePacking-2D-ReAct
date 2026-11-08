@@ -17,6 +17,8 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
 from research.controller import worker as controller_worker  # noqa: E402
 from research.llm_walls import gpt_wall as g  # noqa: E402
+from research.runner import gpt_wall as runner  # noqa: E402
+from research.walls import case_definition  # noqa: E402
 from research.controller import llm_api  # noqa: E402
 from research.storage import case_id, studies  # noqa: E402
 import test_gpt_smoke  # noqa: E402
@@ -26,7 +28,7 @@ KEY = g.LOOPBACK_KEY + 'k' * 40
 SEED = 66794912  # development seed A
 CLEAN = {k: v for k, v in os.environ.items() if k.upper() not in {'OPENAI_API_KEY', llm_api.PAID_GATE, *llm_api.CONNECTION_ENV}}
 VENV = controller_worker.VENV_MANIFEST.exists() and not controller_worker.venv_problems()
-BASELINE = Path(sys.prefix).resolve() == g.wall_runner.ENV_PREFIX  # run_wall builds walls only there
+BASELINE = Path(sys.prefix).resolve() == runner.wall_runner.ENV_PREFIX  # run_wall builds walls only there
 
 
 def isolate(test):
@@ -160,11 +162,11 @@ class Rules(unittest.TestCase):
 
     def test_paid_needs_confirmation_and_placements_need_loopback(self):
         with self.assertRaises(SystemExit) as refused:
-            g.main(['run', '--name', 'w-1', '--seed', str(SEED)])
+            runner.main(['run', '--name', 'w-1', '--seed', str(SEED)])
         self.assertIn('--confirm-paid', str(refused.exception))
         root = isolate(self)
         with self.assertRaises(SystemExit):
-            g.run_wall('w-1', SEED, placements=3)
+            runner.run_wall('w-1', SEED, placements=3)
         self.assertEqual([p.name for p in root.iterdir()], ['archive'])
 
     def test_admission_is_checked_again_under_the_lock(self):
@@ -175,7 +177,7 @@ class Rules(unittest.TestCase):
             journal('w-0', state='uncertain')
             return []
         with mock.patch.object(g, 'preflight', side_effect=admitted_then_doubtful), self.assertRaises(SystemExit) as refused:
-            g.run_wall('w-1', SEED, loopback=True, launch=launch)
+            runner.run_wall('w-1', SEED, loopback=True, launch=launch)
         self.assertIn('w-0 is uncertain', str(refused.exception))
         launch.assert_not_called()
         self.assertFalse(g.lock_of(True).exists())
@@ -185,7 +187,7 @@ class Rules(unittest.TestCase):
     def test_a_failing_git_is_never_a_clean_tree(self):
         out = Path(tempfile.mkdtemp())  # outside the repository: not a git work tree
         self.addCleanup(shutil.rmtree, out, True)
-        with mock.patch.object(g.wall_runner, 'REPO', out):
+        with mock.patch.object(g, 'REPO', out):
             for check in (g.code_dirty, g.head):
                 with self.assertRaises(g.subprocess.CalledProcessError):
                     check()
@@ -195,7 +197,7 @@ class Rules(unittest.TestCase):
         loop = {**CLEAN, 'OPENAI_API_KEY': KEY, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}
         env = mock.patch.dict(os.environ, loop, clear=True)
         venv = mock.patch.object(controller_worker, 'venv_problems', return_value=[])
-        identity = mock.patch.object(g.wall_runner, 'worker_venv_identity', return_value={})
+        identity = mock.patch.object(case_definition, 'worker_venv_identity', return_value={})
         for patcher in (env, venv, identity):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -214,7 +216,7 @@ class Rules(unittest.TestCase):
         self.live()
         boom = mock.Mock(side_effect=RuntimeError('case process tree not verified stopped'))
         with self.assertRaises(RuntimeError):
-            g.run_wall('w-1', SEED, loopback=True, launch=boom)
+            runner.run_wall('w-1', SEED, loopback=True, launch=boom)
         kept = json.loads(g.lock_of(True).read_text(encoding='utf-8'))
         self.assertEqual((kept['run'], kept['journal']['state']), ('w-1', 'aborted'))
         self.assertTrue(any('not verified stopped' in r for r in kept['journal']['reasons']))
@@ -227,7 +229,7 @@ class Rules(unittest.TestCase):
         launch, _ = launcher()
         failing = mock.patch.object(g, 'accounting', side_effect=RuntimeError('records unreadable'))
         with failing, self.assertRaises(RuntimeError):
-            g.run_wall('w-1', SEED, loopback=True, launch=launch)
+            runner.run_wall('w-1', SEED, loopback=True, launch=launch)
         wall = g.walls(True)['w-1']
         j = json.loads(wall.journal.read_text(encoding='utf-8'))
         self.assertEqual(j['state'], 'aborted')
@@ -242,7 +244,7 @@ class Rules(unittest.TestCase):
         launch, _ = launcher()
         failing = mock.patch.object(g.gpt_smoke.studies, 'add_case', side_effect=RuntimeError('study unwritable'))
         with failing, self.assertRaises(RuntimeError):
-            g.run_wall('w-1', SEED, loopback=True, launch=launch)
+            runner.run_wall('w-1', SEED, loopback=True, launch=launch)
         self.assertEqual(json.loads(g.lock_of(True).read_text(encoding='utf-8'))['journal']['state'], 'aborted')
 
     def test_a_wall_lands_in_its_case_and_the_study(self):
@@ -250,7 +252,7 @@ class Rules(unittest.TestCase):
         self.live()
         launch, calls = launcher()
         with self.checked():
-            report = g.run_wall('w-1', SEED, loopback=True, launch=launch)
+            report = runner.run_wall('w-1', SEED, loopback=True, launch=launch)
         self.assertEqual(calls[0][0], 'thangavelu-noise80')  # no run name: run_wall allocates the case
         self.assertEqual(calls[0][1], '--policy')
         self.assertIn('--worker-venv', calls[0])
@@ -276,7 +278,7 @@ class Rules(unittest.TestCase):
         self.live()
         launch, _ = launcher()
         with self.checked(), mock.patch.object(g.gpt_smoke, 'key_scan', return_value=['receipt.json: the key']):
-            g.run_wall('w-1', SEED, loopback=True, launch=launch)
+            runner.run_wall('w-1', SEED, loopback=True, launch=launch)
         j = json.loads(g.walls(True)['w-1'].journal.read_text(encoding='utf-8'))
         self.assertEqual((j['state'], j['reasons']), ('uncertain', ['the key in an output file']))
         self.assertTrue(any('w-1 is uncertain' in p for p in g.journal_problems('w-2', 'w-1', True)))
@@ -287,7 +289,7 @@ class Launcher(unittest.TestCase):
 
     def test_other_children_get_no_key(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': KEY, 'ANTHROPIC_API_KEY': 'a', 'PATH': 'p'}):
-            env = g.wall_runner.quiet_env()
+            env = case_definition.quiet_env()
         self.assertFalse({'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'} & set(env))
         self.assertEqual(env['PATH'], 'p')
 
@@ -296,11 +298,11 @@ class Launcher(unittest.TestCase):
         self.addCleanup(child.kill)
         listing = g.subprocess.CalledProcessError(1, 'powershell')
         for failing in ([listing], [{}, listing]):  # before the kill, or while verifying it
-            with mock.patch.object(g.wall_runner, 'process_table', side_effect=failing):
+            with mock.patch.object(runner.wall_runner, 'process_table', side_effect=failing):
                 if failing[0] == {}:
                     child = g.subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
                     self.addCleanup(child.kill)
-                record = g.wall_runner.terminate(child.pid, settle_seconds=1)
+                record = runner.wall_runner.terminate(child.pid, settle_seconds=1)
             self.assertIs(record['verified'], False)
             self.assertIn('CalledProcessError', record['listing_error'])
             self.assertIsNotNone(child.wait(timeout=30))  # killed all the same
@@ -308,15 +310,15 @@ class Launcher(unittest.TestCase):
     @unittest.skipUnless(BASELINE, 'run_wall builds walls only in the baseline environment')
     def test_an_exception_after_the_case_started_stops_it(self):
         root = isolate(self)
-        real, calls = g.wall_runner.committed_placements, []
+        real, calls = runner.wall_runner.committed_placements, []
 
         def interrupted(output):  # the launcher's loop fails with the case running
             calls.append(output)
             if len(calls) == 1:
                 raise RuntimeError('launcher interrupted')
             return real(output)
-        with mock.patch.object(g.wall_runner, 'committed_placements', side_effect=interrupted), self.assertRaises(RuntimeError):
-            g.wall_runner.run(['thangavelu-noise80', '--policy', 'paper', '--seed', str(SEED), '--placements', '99'])
+        with mock.patch.object(runner.wall_runner, 'committed_placements', side_effect=interrupted), self.assertRaises(RuntimeError):
+            runner.wall_runner.run(['thangavelu-noise80', '--policy', 'paper', '--seed', str(SEED), '--placements', '99'])
         receipt = json.loads((next((root / 'cases').iterdir()) / 'receipt.json').read_text(encoding='utf-8'))
         self.assertEqual(receipt['status'], 'LAUNCHER_ERROR')
         self.assertIs(receipt['termination']['verified'], True)
@@ -334,7 +336,7 @@ class LoopbackWalls(unittest.TestCase):
         server.script = list(script)
         env = {**CLEAN, 'OPENAI_API_KEY': KEY, 'OPENAI_BASE_URL': server.url}
         with mock.patch.dict(os.environ, env, clear=True):
-            report = g.run_wall('lb-1', SEED, loopback=True, placements=4)
+            report = runner.run_wall('lb-1', SEED, loopback=True, placements=4)
             blocked = g.journal_problems('lb-2', 'lb-1', True)
         wall = g.walls(True)['lb-1']
         j = json.loads(wall.journal.read_text(encoding='utf-8'))

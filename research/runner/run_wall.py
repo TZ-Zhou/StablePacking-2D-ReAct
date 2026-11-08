@@ -1,8 +1,8 @@
 """Run an original test case with a chosen filter policy and candidate tracing.
 
-Usage: python -B -m research.walls.run_wall <case> [--policy code_original|paper] [--order 3,0,2,1,4]
+Usage: python -B -m research.runner.run_wall <case> [--policy code_original|paper] [--order 3,0,2,1,4]
                                       [--tol 1e-9] [--placements N] [--seed S] [--parent WALL]
-                                      [--switch STEP=a,b,c,d,e ...] [--controller JSON]
+                                      [--switch STEP=a,b,c,d,e ...] [--controller JSON] [--workers N] [--sync-output]
 
 Staging follows the frozen baseline run_original_case.py (copied inputs, Windows main guard,
 shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py).
@@ -18,6 +18,7 @@ STEP should repeat the run without it; verify that with check_run.py --compare.
 verify its records with order_controller.py check <run>.
 """
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -32,21 +33,10 @@ from research.paths import REPO, VALIDATION
 from research.storage import case_id as cid
 from research.storage import case_index
 from research.validation import local_setup  # this computer's paths; the registered ones without a local-setup file
+from research.walls import case_definition
 ENV_PREFIX = local_setup.env_prefix(json.loads((VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix'])
-CASES = {  # case -> (entry script, original number of walls in its batch)
-    'bricks': ('Tests/Bricks/run.py', 1),
-    'almeida-r': ('Tests/Almeida/R/run.py', 1),
-    'almeida-pr': ('Tests/Almeida/PR/run.py', 1),
-    'almeida-ir': ('Tests/Almeida/IR/run.py', 1),
-    'fft-d2-0': ('Tests/FFT_stones/01_run.py', 5),
-    'rubble': ('Tests/Rubble_stone_walls/00_run.py', 20),
-    'thangavelu-noise20': ('Tests/Thangavelu/00_run.py', 20),
-    'thangavelu-noise80': ('Tests/Thangavelu/00_run.py', 20),
-}
-SOURCE_EDITS = {  # case -> (old, new) replacements that let one entry script serve several scenes
-    'thangavelu-noise20': (('/data/stones_noise_80_labels.png', '/data/stones_noise_20_labels.png'),),
-}
-SUCCESS = ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS')
+BAR_CELLS = 24
+BAR_LINE_WIDTH = 79
 
 
 class TerminationFailed(RuntimeError):
@@ -58,82 +48,11 @@ class TerminationFailed(RuntimeError):
         self.receipt = receipt
 
 
-def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def prepare_output(case, start, root=None):
     """A new folder named by its case id (case_id.allocate), so neither baseline data nor the research/runs
     archive is ever written. Returns (case id, folder)."""
     case_id, output = cid.allocate(case, start, root=root)
     return case_id, output.resolve()
-
-
-def source_text(case):
-    """The entry script of a case, with its SOURCE_EDITS applied."""
-    text = (REPO / CASES[case][0]).read_text(encoding='utf-8')
-    for old, new in SOURCE_EDITS.get(case, ()):
-        assert text.count(old) == 1, (case, old)
-        text = text.replace(old, new)
-    return text
-
-
-def parent_problem(ref):
-    """Why `ref` names no wall (None when it does): a case id of research/cases or a research/runs path."""
-    folder = cid.wall_dir(ref)
-    return None if (folder / 'receipt.json').exists() else f'no wall at {folder}'
-
-
-def stage(source, policy, seed=None):
-    """seed=None keeps the source's seed_everything() call (default 20); an int replaces only its
-    argument, so every run initialises its own RNG before reading stones and sampling."""
-    lines = source.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        if 'os.system(' in line and 'rm -rf' in line and not line.lstrip().startswith('#'):
-            # 'rm -rf <dir>/*' becomes: proceed only if <dir>/* matches nothing (Bricks cleans the
-            # directory it has just created); never delete anything.
-            indent, stripped = line[:len(line) - len(line.lstrip())], line.strip()
-            assert stripped.startswith("os.system('rm -rf '+") and stripped.endswith(')'), line
-            lines[i] = (indent + "if __import__('glob').glob((" + stripped[len('os.system('):-1] + ")[7:]): "
-                        "raise FileExistsError('Refusing to clean a non-empty result directory')\n")
-    safe = ''.join(lines)
-    boundary = safe.index('seed_everything()\n')
-    header = ("\nfrom windows_case_runtime import configure\n"
-              "if __name__ == '__main__':\n"
-              "    configure(globals())\n"
-              "    from Stonepacker2D.utils.constant import set_filter_policy, set_trace\n"
-              f"    set_filter_policy(**{policy['filter']!r})\n"
-              f"    set_trace({policy['run_id']!r})\n")
-    if policy.get('controller') is not None:
-        header += (f"    __import__('sys').path.insert(0, {str(REPO)!r})\n"
-                   "    from research.controller.order_controller import make_controller\n"
-                   "    from Stonepacker2D.utils.constant import set_filter_controller\n"
-                   f"    set_filter_controller(make_controller({policy['controller']!r}"
-                   f"{', worker_venv=True' if policy.get('worker_venv') else ''}))\n")
-    body = ''.join('    ' + l if l.strip() else l for l in safe[boundary:].splitlines(keepends=True))
-    if seed is not None:
-        call = '    seed_everything()\n'
-        assert body.startswith(call), body[:40]
-        body = f'    seed_everything({int(seed)})\n' + body[len(call):]
-    return safe[:boundary] + header + body
-
-
-def parse_switch(texts):
-    switch = {}
-    for text in texts:
-        step, order = text.split('=')
-        order = tuple(int(c) for c in order.split(','))
-        if sorted(order) != [0, 1, 2, 3, 4] or int(step) in switch:
-            raise ValueError(f'bad --switch {text}')
-        switch[int(step)] = order
-    return switch
-
-
-def worker_venv_identity():
-    from research.controller import worker as controller_worker
-    m = json.loads(controller_worker.VENV_MANIFEST.read_text(encoding='utf-8'))
-    return {'manifest': controller_worker.VENV_MANIFEST.relative_to(REPO).as_posix(), 'manifest_sha256': digest(controller_worker.VENV_MANIFEST),
-            **{k: m[k] for k in ('path', 'version', 'sdks', 'files_sha256')}}
 
 
 def committed_placements(output):
@@ -146,6 +65,7 @@ def keep_data_only(output):
     for name in ('data', 'matplotlib-config'):
         shutil.rmtree(output / name, ignore_errors=True)
     (output / 'windows_case_runtime.py').unlink(missing_ok=True)
+    (output / "step_writer.py").unlink(missing_ok=True)
     for result in output.glob('result*'):
         (result / 'img' / 'selection.txt').unlink(missing_ok=True)  # with the records off, only its header line
         for folder in (result / 'img', result / 'record'):
@@ -153,24 +73,48 @@ def keep_data_only(output):
                 folder.rmdir()
 
 
-def code_fingerprint(root=REPO):
-    """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
-    files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
-        Path(root) / 'research' / name for name in ('paths.py', 'walls/run_wall.py', 'controller/order_controller.py',
-                                                    'controller/worker.py', 'controller/llm_api.py', 'walls/check_run.py',
-                                                    'analysis/unplaced_stones.py', 'walls/campaign.py',
-                                                    'walls/wall_metrics.py', 'storage/case_id.py',
-                                                    'storage/case_index.py')] + [
-        Path(root) / 'research' / 'validation' / 'windows_case_runtime.py']
-    return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
+def stones_given(output):
+    """The number of stones the case was given, None before its building loop has started."""
+    path = output / "events.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
+    enter = next((line for line in lines if '"build_enter"' in line and line.endswith("\n")), None)
+    return None if enter is None else json.loads(enter)["input_stones"]
 
 
-def quiet_env():
-    """This process's environment without the API key variables: for every child but the case itself
-    (the environment guard, git, powershell, taskkill), so the key reaches only the case, which hands
-    it to the controller worker and drops it (order_controller.make_controller worker_venv)."""
-    from research.controller import llm_api
-    return {k: v for k, v in os.environ.items() if k.upper() not in llm_api.KEY_ENV.values()}
+def bar_line(label, placed, total, seconds):
+    """One line of progress. A stopped wall can overrun its limit, so the count shown never passes the total."""
+    if not total:
+        return f"{label}: {placed} stones, {seconds:.0f} s"
+    shown = min(placed, total)
+    cells = BAR_CELLS * shown // total
+    left = f"{seconds * (total - shown) / shown:.0f} s left" if shown else "time left unknown"
+    return f"{label}: {shown}/{total} [{'#' * cells}{'.' * (BAR_CELLS - cells)}] {seconds:.0f} s, {left}"
+
+
+class StoneBar:
+    """Stones committed so far, on a terminal only. Reading the case's files for it can never stop the case."""
+
+    def __init__(self, output, limit, label):
+        self.output, self.limit, self.label = output, limit, label
+        self.start, self.active = time.monotonic(), sys.stderr.isatty()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.refresh()
+        if self.active:
+            sys.stderr.write("\n")
+
+    def refresh(self):
+        if not self.active:
+            return
+        with contextlib.suppress(OSError, ValueError):  # the case is writing these files
+            given = stones_given(self.output)
+            total = min(given, self.limit or given) if given else self.limit
+            line = bar_line(self.label, committed_placements(self.output), total, time.monotonic() - self.start)
+            sys.stderr.write(f"\r{line:<{BAR_LINE_WIDTH}}")
+            sys.stderr.flush()
 
 
 def process_table():
@@ -178,7 +122,7 @@ def process_table():
     out = subprocess.run(['powershell', '-NoProfile', '-Command',
                           'Get-CimInstance Win32_Process | ForEach-Object '
                           '{ "$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.Ticks)" }'],
-                         capture_output=True, text=True, timeout=120, check=True, env=quiet_env()).stdout.split()
+                         capture_output=True, text=True, timeout=120, check=True, env=case_definition.quiet_env()).stdout.split()
     return {int(p): (int(pp), c) for p, pp, c in (line.split(',') for line in out)}
 
 
@@ -200,7 +144,7 @@ def terminate(pid, settle_seconds=30):
         members, listing = None, f"{type(error).__name__}: {error}"
     try:
         kill = subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], capture_output=True,
-                              text=True, errors='replace', timeout=60, env=quiet_env())
+                              text=True, errors='replace', timeout=60, env=case_definition.quiet_env())
         record = {'taskkill_returncode': kill.returncode, 'stdout': kill.stdout, 'stderr': kill.stderr}
     except subprocess.TimeoutExpired:
         record = {'taskkill_returncode': None, 'error': 'taskkill timed out'}
@@ -257,13 +201,6 @@ def check_trace(output, stopped=False):
     if not problems:  # the chain check needs every event loadable
         problems += check_commits(output, stopped)
     return {'files': len(files), 'ok': not problems, 'problems': problems}
-
-
-def manifest(output):
-    """sha256 of every trace and result file of the run, taken when the case process has ended."""
-    from research.walls import check_run
-    return {p.relative_to(output).as_posix(): check_run.sha256_file(p)
-            for r in check_run.result_dirs(output) for p in check_run.artifact_files(r)}
 
 
 def check_controller(output, trace, stopped=False):
@@ -325,10 +262,11 @@ def final_status(process_status, trace, termination):
     return process_status
 
 
-def run(argv=None):
-    """Build one wall in a new case folder; returns its receipt (also written to receipt.json there)."""
+def run(argv=None, root=None, label=None):
+    """Build one wall in a new case folder under `root` (default research/cases); returns its receipt (also written
+    to receipt.json there). `label` titles the wall's progress bar (default the case name)."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('case', choices=CASES)
+    parser.add_argument('case', choices=case_definition.CASES)
     parser.add_argument('--parent', metavar='WALL',
                         help='the wall this one branches from: a case id or a research/runs path')
     parser.add_argument('--policy', default='code_original', choices=['code_original', 'paper'])
@@ -337,6 +275,13 @@ def run(argv=None):
     parser.add_argument('--placements', type=int, default=0, help='stop after N placements (0 = run to the end)')
     parser.add_argument('--timeout', type=int, default=1800)
     parser.add_argument('--no-trace', action='store_true', help='control run: logging off, outputs only')
+    parser.add_argument(
+        "--fresh-pool", action="store_true", help="control run: new workers for every batch, as the original code does"
+    )
+    parser.add_argument("--workers", type=int, help="worker processes instead of the case's own number")
+    parser.add_argument(
+        "--sync-output", action="store_true", help="write step outputs in the building loop, not a thread"
+    )
     parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
     parser.add_argument('--switch', action='append', default=[], metavar='STEP=a,b,c,d,e',
                         help='paper policy only: use this order at construction step STEP (every sampling trial of that step), the --order elsewhere; repeatable')
@@ -345,7 +290,7 @@ def run(argv=None):
     parser.add_argument('--controller', type=json.loads, metavar='JSON',
                         help='paper policy only: research/controller/order_controller.py spec, e.g. {"kind": "random", "seed": 7}')
     args = parser.parse_args(argv)
-    if args.parent is not None and (problem := parent_problem(args.parent)):
+    if args.parent is not None and (problem := case_definition.parent_problem(args.parent)):
         parser.error(f'--parent: {problem}')
     if args.worker_venv and args.controller is None:
         parser.error('--worker-venv needs --controller')
@@ -365,64 +310,93 @@ def run(argv=None):
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
     started = datetime.now().astimezone()
-    case_id, output = prepare_output(args.case, started)
+    case_id, output = prepare_output(args.case, started, root)
     guard = subprocess.run([sys.executable, '-B', str(VALIDATION / 'verify_environment.py')],
-                           cwd=REPO, capture_output=True, text=True, env=quiet_env())
+                           cwd=REPO, capture_output=True, text=True, env=case_definition.quiet_env())
     if guard.returncode:
         (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
     assert guard.returncode == 0, guard.stderr
 
-    source_name, replicates = CASES[args.case]
+    source_name, replicates = case_definition.CASES[args.case]
     original = REPO / source_name
-    source = source_text(args.case)
+    source = case_definition.with_workers(case_definition.source_text(args.case), args.workers)
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
     if args.switch:
-        filter_policy['switch'] = parse_switch(args.switch)
+        filter_policy['switch'] = case_definition.parse_switch(args.switch)
         if args.policy != 'paper':
             parser.error('--switch needs --policy paper')
-    staged = stage(source, {'filter': filter_policy, 'run_id': None if args.no_trace else case_id,
+    staged = case_definition.stage(source, {'filter': filter_policy, 'run_id': None if args.no_trace else case_id,
                             'controller': args.controller, 'worker_venv': args.worker_venv}, seed=args.seed)
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
+    shutil.copy2(VALIDATION / "step_writer.py", output / "step_writer.py")
     shutil.copytree(original.parent / 'data', output / 'data')
     if (original.parent / 'config.json').exists():
         shutil.copy2(original.parent / 'config.json', output / 'config.json')
 
+    sync_output = args.sync_output or args.controller is not None  # a controller's records are written synchronously
     git = lambda *a: subprocess.run(
-        ["git", *a], cwd=REPO, capture_output=True, encoding="utf-8", errors="replace", env=quiet_env()
+        ["git", *a], cwd=REPO, capture_output=True, encoding="utf-8", errors="replace", env=case_definition.quiet_env()
     ).stdout.strip()
     receipt = {
-        'schema_version': 2, 'case_id': case_id, 'scene': cid.scene_code(args.case), 'parent': args.parent,
-        'started': started.isoformat(timespec='seconds'),
-        'case': args.case, 'run_id': case_id, 'source': source_name, 'source_sha256': digest(original),
-        **({'source_edits': [list(e) for e in SOURCE_EDITS[args.case]]} if args.case in SOURCE_EDITS else {}),
-        'staged_sha256': digest(target), 'filter_policy': filter_policy, 'controller': args.controller,
-        **({'worker_venv': worker_venv_identity()} if args.worker_venv else {}),
-        'trace': not args.no_trace,
-        'seed': 'seed_everything() default in source (20)' if args.seed is None else args.seed,
-        'python_hash_seed_launcher': 20, 'placements_limit': args.placements,
-        'git_head': git('rev-parse', 'HEAD'), 'git_branch': git('branch', '--show-current'),
-        'git_status': git('status', '--porcelain').splitlines(),
-        'git_tracked_diff_sha256': hashlib.sha256(git('diff', 'HEAD').encode()).hexdigest(),
-        'code_sha256': code_fingerprint(),
-        'timeout_seconds': args.timeout, 'status': 'RUNNING',
-        'command': [sys.executable, '-B', '-u', str(target)],
+        "schema_version": 2,
+        "case_id": case_id,
+        "scene": cid.scene_code(args.case),
+        "parent": args.parent,
+        "started": started.isoformat(timespec="seconds"),
+        "case": args.case,
+        "run_id": case_id,
+        "source": source_name,
+        "source_sha256": case_definition.digest(original),
+        **(
+            {"source_edits": [list(e) for e in case_definition.SOURCE_EDITS[args.case]]}
+            if args.case in case_definition.SOURCE_EDITS
+            else {}
+        ),
+        "staged_sha256": case_definition.digest(target),
+        "filter_policy": filter_policy,
+        "controller": args.controller,
+        **({"worker_venv": case_definition.worker_venv_identity()} if args.worker_venv else {}),
+        "trace": not args.no_trace,
+        "worker_pool": "per_batch" if args.fresh_pool else "persistent",
+        "step_writer": not sync_output,
+        **({"workers": args.workers} if args.workers else {}),
+        "seed": "seed_everything() default in source (20)" if args.seed is None else args.seed,
+        "python_hash_seed_launcher": 20,
+        "placements_limit": args.placements,
+        "git_head": git("rev-parse", "HEAD"),
+        "git_branch": git("branch", "--show-current"),
+        "git_status": git("status", "--porcelain").splitlines(),
+        "git_tracked_diff_sha256": hashlib.sha256(git("diff", "HEAD").encode()).hexdigest(),
+        "code_sha256": case_definition.code_fingerprint(),
+        "timeout_seconds": args.timeout,
+        "status": "RUNNING",
+        "command": [sys.executable, "-B", "-u", str(target)],
     }
     receipt['spec_sha256'] = cid.spec_sha256(receipt)
-    env = {**os.environ, 'MPLBACKEND': 'Agg', 'MPLCONFIGDIR': str(output / 'matplotlib-config'),
-           'PYTHONHASHSEED': '20', 'PYTHONDONTWRITEBYTECODE': '1',
-           'BASELINE_CASE_EVENTS': str(output / 'events.jsonl'),
-           'BASELINE_SELECT_FIRST_WALL': '1' if replicates > 1 else '0',
-           'BASELINE_BASE_EACH_PLACEMENT': '1' if args.placements else '0'}
+    env = {
+        **os.environ,
+        "MPLBACKEND": "Agg",
+        "MPLCONFIGDIR": str(output / "matplotlib-config"),
+        "PYTHONHASHSEED": "20",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BASELINE_CASE_EVENTS": str(output / "events.jsonl"),
+        "BASELINE_SELECT_FIRST_WALL": "1" if replicates > 1 else "0",
+        "BASELINE_BASE_EACH_PLACEMENT": "1" if args.placements else "0",
+        "BASELINE_PERSISTENT_POOL": "0" if args.fresh_pool else "1",
+        "BASELINE_SYNC_OUTPUT": "1" if sync_output else "0",
+    }
     start = time.monotonic()
     termination, process_status = None, 'LAUNCHER_ERROR'
     try:
-        with (output / 'execution.log').open('w', encoding='utf-8') as log:
+        bar = StoneBar(output, args.placements, label or args.case)
+        with (output / "execution.log").open("w", encoding="utf-8") as log, bar:
             process = subprocess.Popen(receipt['command'], cwd=output, env=env, stdout=log, stderr=subprocess.STDOUT)
             receipt['pid'] = process.pid
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
             while process.poll() is None:
+                bar.refresh()
                 limit_hit = args.placements and committed_placements(output) >= args.placements
                 if limit_hit or time.monotonic() - start > args.timeout:
                     termination = terminate(process.pid)
@@ -436,7 +410,8 @@ def run(argv=None):
         if 'pid' in receipt and process.poll() is None:  # an exception left the case running (with its paid requests): stop it first
             termination = terminate(process.pid)
         if 'pid' in receipt and not args.no_trace:  # the outputs as the case left them, before any check reads them
-            receipt['manifest'] = manifest(output)
+            from research.walls import check_run
+            receipt['manifest'] = check_run.manifest(output)
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
         trace = verified_trace(output, args, process_status, termination)
         receipt.update(status=final_status(process_status, trace, termination), process_status=process_status,
@@ -460,7 +435,7 @@ def run(argv=None):
 
 
 def main(argv=None):
-    return 0 if run(argv)['status'] in SUCCESS else 1
+    return 0 if run(argv)['status'] in case_definition.SUCCESS else 1
 
 
 if __name__ == '__main__':

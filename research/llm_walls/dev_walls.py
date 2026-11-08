@@ -1,10 +1,8 @@
 """Development walls before any GPT wall: on 2 development seeds (not the formal campaign's), the
 Paper wall and the same wall under the non-LLM controllers and the fake-provider ReAct controller,
 each through the registered venv worker (run_wall --controller --worker-venv), one wall at a time.
+research/runner/dev_walls.py builds them (usage there); then
 
-  python -B -m research.llm_walls.dev_walls init <id>       # research/studies/<id>/study.json, once
-  python -B -m research.llm_walls.dev_walls run <id>        # builds the walls not built yet, then check
-  python -B -m research.llm_walls.dev_walls check [<id>]    # check every wall, Null == Paper, writes manifest.csv
   python -B -m research.walls.campaign_quality <id> --out research/quality/<id>   # Wang's metrics
 
 The dev walls are a study (research/storage/studies.py, kind 'dev') whose design has a campaign's
@@ -19,18 +17,15 @@ commits, base.pkl matrices, every trace event); it writes manifest.csv beside st
 Pre-registered for the GPT walls that follow: a GPT wall with any decision point not decided by
 the LLM (a skip or a fallback) is 'GPT incomplete' and stays out of any quality comparison.
 """
-import argparse
 import json
-import sys
-from datetime import datetime
 
 import numpy as np
 
 from research.storage import case_id as cid
 from research.walls import campaign as camp
+from research.walls import case_definition
 from research.walls import check_run
 from research.controller import order_controller
-from research.walls import run_wall
 
 ID = 'dev-2seeds'  # the dev walls of the research/runs archive
 MASTER_SEED = 20261108
@@ -62,7 +57,7 @@ def init(study_id):
         if arm['controller']:
             order_controller.validate_spec(arm['controller'])
     data = {**camp.make_campaign(study_id, 'thangavelu-noise80', ['paper=3,0,2,1,4'], 1, MASTER_SEED, TIMEOUT),
-            'arms': ARMS, 'seeds': seeds(), 'seed_rule': SEED_RULE, 'worker_venv': run_wall.worker_venv_identity(),
+            'arms': ARMS, 'seeds': seeds(), 'seed_rule': SEED_RULE, 'worker_venv': case_definition.worker_venv_identity(),
             'notes': ['development walls; not the formal campaign; no metric of them chooses anything of the GPT walls',
                       'GPT walls: a wall with a skip or a fallback at any decision point is GPT incomplete, kept but not compared']}
     camp.register(data, kind='dev')
@@ -73,24 +68,6 @@ def argv_of(c, seed, arm):
     argv = [c['case'], '--policy', arm['policy'], '--order', ','.join(map(str, arm['order'])),
             '--seed', str(seed), '--timeout', str(c['timeout_seconds'])]
     return argv + (['--controller', json.dumps(arm['controller']), '--worker-venv'] if arm['controller'] else [])
-
-
-def run(study_id, launch=run_wall.run):
-    camp.require_study(study_id)
-    c = camp.load(study_id)
-    if run_wall.code_fingerprint() != c['code_sha256']:
-        raise SystemExit('executed code differs from the code registered in the study')
-    for seed, arm, wall in camp.planned_runs(c):
-        status = camp.run_status(wall)
-        if status is not None:
-            print(f'skip {wall}: already {status}')
-            continue
-        receipt = camp.launch_case(study_id, argv_of(c, seed, arm), {'arm': arm['name'], 'seed': seed}, launch)
-        camp.log_run(study_id, {'run': receipt['case_id'], 'seed': seed, 'arm': arm['name'],
-                                'status': receipt['status'], 'finished': datetime.now().isoformat(timespec='seconds')})
-        if receipt['status'] != 'PROCESS_PASS':
-            raise SystemExit(f"{receipt['case_id']} {receipt['status']}: stopped for inspection")
-    return check(study_id)
 
 
 def check(study_id=ID):
@@ -128,18 +105,3 @@ def check(study_id=ID):
         print(f'{study_id} is in the research/runs archive: its manifest.csv there is kept')
     print(json.dumps({'walls': len(rows), 'problems': problems}, indent=1))
     return problems
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('command', choices=['init', 'run', 'check'])
-    ap.add_argument('id', nargs='?', default=ID, help=f'study of the dev walls (default {ID}: archived, check only)')
-    a = ap.parse_args(argv)
-    if a.command == 'init':
-        print(json.dumps(init(a.id), indent=1))
-        return 0
-    return 1 if (run(a.id) if a.command == 'run' else check(a.id)) else 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())

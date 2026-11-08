@@ -11,7 +11,7 @@
 這個 repo 有兩層：
 
 - **Wang 的原始方法**：`Stonepacker2D/`（石材堆疊、濾波選石、運動學穩定度評估），入口是 `Tests/*/00_run.py`、`Tests/Bricks/run.py`、`Tests/Almeida/*/run.py` 等。
-- **本專案（使用者的研究）**：`research/`（以追蹤式濾波順序政策跑 Wang 的案例、離線分析濾波順序、ReAct／LLM 控制器挑選順序）。入口是 `python -B -m research.walls.run_wall ...`，說明見 `research/README.md`。
+- **本專案（使用者的研究）**：`research/`（以追蹤式濾波順序政策跑 Wang 的案例、離線分析濾波順序、ReAct／LLM 控制器挑選順序）。入口是 `python -B -m research.runner.run_wall ...`，說明見 `research/README.md`。
 
 使用者發現「all runs 結果都不一樣」，懷疑是 random seed 沒控制好（LLM agent 本身不可控，這部分不用管）。上一輪只靠讀碼整理出下列**假說**，**全部尚未實跑驗證**，請你驗證或推翻，不要照單全收。
 
@@ -25,7 +25,7 @@
 - `vendor.py:412 / 431 / 447` `get_same_stones` 的 `randint` 與補石 `choice`。
 - `vendor.py:46` `reorder_dict` 的 `shuffle`（`Tests` 腳本似乎沒呼叫）。
 - `Stonepacker2D/utils/kine_2d.py:10` import 時用 Python `random.choice` 產生顏色。
-- 種子來源：各 `Tests/*/run.py` 開頭的 `seed_everything()`（預設 20）；`research/walls/run_wall.py:53` 的 `stage()` 用 `--seed` 改掉參數；`research/walls/campaign.py:54` 用 `default_rng(master_seed)` 產生各 seed，第一個固定 20。
+- 種子來源：各 `Tests/*/run.py` 開頭的 `seed_everything()`（預設 20）；`research/walls/case_definition.py` 的 `stage()` 用 `--seed` 改掉參數；`research/walls/campaign.py:54` 用 `default_rng(master_seed)` 產生各 seed，第一個固定 20。
 
 **B. 自帶獨立 RNG 的部分**
 
@@ -37,7 +37,7 @@
 
 1. **sampling 隨決策分岔**：不同 arm 第一個不同決策之後，剩餘庫存與 `return_stones` 的 dict 順序改變，同 seed 後面抽到的石頭也不同。
 2. **同程序連跑 20 面牆共用一個全域 RNG**：`Tests/Thangavelu/00_run.py:131` 的 `for wall_i in range(20)` 只在最上面 seed 一次；`run_wall` 靠 `BASELINE_SELECT_FIRST_WALL` 只取第 1 面牆。
-3. **牆鐘時間截斷 run**：`research/walls/run_wall.py:345` 每 2 秒輪詢 `committed_placements >= placements` 再 `taskkill`，停在第 N 顆或之後取決於時機；`--timeout` 也是牆鐘時間。
+3. **牆鐘時間截斷 run**：`research/runner/run_wall.py` 每 2 秒輪詢 `committed_placements >= placements` 再 `taskkill`，停在第 N 顆或之後取決於時機；`--timeout` 也是牆鐘時間。
 4. **MOSEK 求解器**（`Stonepacker2D/utils/kine_2d.py:290` `solve_force_rigid`）：LLC 值進入濾波的 `kinematic>0` 判斷，執行緒數或 CPU 不同時浮點尾數可能不同。
 5. **`PYTHONHASHSEED`**：`seed_everything` 在程序內設 `os.environ` 無效，`run_wall` 靠啟動時設 `20`；直接跑腳本沒設。
 6. **`place_one_stone` 內的 `seed_everything()`**（`Stonepacker2D/stack/place_stone.py:60`）在 worker 內重設；`build_wall.py:180` 的 `defined_sequence` 路徑會在主程序呼叫它而重設主程序 RNG。
@@ -74,11 +74,11 @@
 
 **1.1 重現性實驗（同 arm、同 seed 跑兩次）**
 
-選最小、最快的案例（先看 `research/runs/` 既有 run 的耗時，優先 `bricks`；`CASES` 見 `research/walls/run_wall.py:29`）。名稱用 `det-<case>-a1`、`det-<case>-a2`（先確認不存在）。
+選最小、最快的案例（先看 `research/runs/` 既有 run 的耗時，優先 `bricks`；`CASES` 見 `research/walls/case_definition.py`）。名稱用 `det-<case>-a1`、`det-<case>-a2`（先確認不存在）。
 
 ```powershell
-python -B -m research.walls.run_wall bricks det-bricks-a1 --policy paper --order 3,0,2,1,4 --seed 20
-python -B -m research.walls.run_wall bricks det-bricks-a2 --policy paper --order 3,0,2,1,4 --seed 20
+python -B -m research.runner.run_wall bricks det-bricks-a1 --policy paper --order 3,0,2,1,4 --seed 20
+python -B -m research.runner.run_wall bricks det-bricks-a2 --policy paper --order 3,0,2,1,4 --seed 20
 python -B -m research.walls.check_run research/runs/det-bricks-a1 --compare research/runs/det-bricks-a2
 ```
 

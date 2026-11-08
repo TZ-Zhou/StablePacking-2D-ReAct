@@ -1,7 +1,6 @@
 """P1 (exploratory): limited lookahead at the 6 counterfactual branch points with known final walls.
 
-  python -B -m research.analysis.lookahead_study run [--max-runs N]   builds the lookahead walls
-  python -B -m research.analysis.lookahead_study evaluate --out DIR    compares them with the final walls
+research/runner/lookahead_study.py builds and evaluates the walls (usage there).
 
 A branch point is a step of a recorded paper-order wall (3-0-2-1-4) where branches of the plans
 paper-hardstone-01 and smoke-001-cf (neutral ones left out: they rebuild the recorded wall) took
@@ -38,11 +37,9 @@ Comparison rules, fixed before any lookahead was run; no weights, no total score
   Spearman of lookahead and final values over all alternatives, and within points (both minus
   the point's mean). k = 0 is the single-step reference. 6 points: exploratory only.
 """
-import argparse
 import csv
 import json
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,7 +51,6 @@ from research.analysis import placement_preview
 from research.storage import case_id as cid
 from research.storage import studies
 from research.walls import campaign
-from research.walls import run_wall
 
 STUDY = 'lookahead-p1'  # the study id, and the folder of the archived lookahead walls in research/runs
 PLANS = ['paper-hardstone-01', 'smoke-001-cf']
@@ -133,31 +129,6 @@ def same_events(look, wall):
                 bad.append((f.name, key))
                 break
     return bad
-
-
-def run(max_runs=None, launch=run_wall.run):
-    """Build the lookahead walls not built yet; False at the first one that fails or differs from its wall."""
-    open_study()
-    started = 0
-    for (parent, step), alts in points().items():
-        n = placed_before(cid.wall_dir(parent), step) + 1 + K + 1
-        for alt in alts:
-            if lookahead_wall(parent, step, alt) is not None:
-                continue
-            if max_runs is not None and started >= max_runs:
-                return True
-            args = [CASE, '--parent', parent, '--policy', 'paper', '--order', ORDER, '--seed', str(alt['seed']),
-                    '--timeout', str(TIMEOUT), '--placements', str(n)]
-            args += ['--switch', alt['switch']] if alt['switch'] else []
-            receipt = campaign.launch_case(STUDY, args, {'point': point_name(parent, step), 'alt': alt['name']}, launch)
-            started += 1
-            built = receipt['status'] in run_wall.SUCCESS
-            bad = same_events(cid.wall_dir(receipt['case_id']), cid.wall_dir(alt['wall'])) if built else []
-            print(json.dumps({'run': receipt['case_id'], 'status': receipt['status'], 'differs': bad[:3]}), flush=True)
-            if not built or bad:
-                print('stopped for inspection')
-                return False
-    return True
 
 
 def kine_lr(world):
@@ -289,19 +260,3 @@ def evaluate(out):
     (out / 'lookahead.json').write_text(json.dumps({'rows': rows, 'table': table}, indent=1, default=float), encoding='utf-8')
     for key, t in table.items():
         print(key.ljust(28), t)
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = ap.add_subparsers(dest='cmd', required=True)
-    sub.add_parser('run').add_argument('--max-runs', type=int)
-    sub.add_parser('evaluate').add_argument('--out', required=True)
-    a = ap.parse_args(argv)
-    if a.cmd == 'run':
-        return 0 if run(a.max_runs) else 1
-    evaluate(a.out)
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())

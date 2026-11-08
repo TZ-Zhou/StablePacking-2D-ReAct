@@ -11,7 +11,7 @@
 
 ## 1. Pythonic
 
-- `research/` 是套件：模組之間一律絕對匯入（`from research.walls import run_wall`），不改 `sys.path`；路徑常數只從 `research/paths.py` 取。例外只有兩處：`controller/worker.py`（在 venv 以 `python -I` 直接執行）與 staged case 的開頭（`run_wall.stage`）。
+- `research/` 是套件：模組之間一律絕對匯入（`from research.runner import run_wall`），不改 `sys.path`；路徑常數只從 `research/paths.py` 取。例外只有兩處：`controller/worker.py`（在 venv 以 `python -I` 直接執行）與 staged case 的開頭（`case_definition.stage`）。
 - 用語言既有機制：`with` 管資源、`enumerate`／`zip` 取代索引算術、comprehension 取代累加迴圈、`pathlib` 取代字串拼路徑。
 - numpy 能向量化就不寫 Python 迴圈。
 - 標準庫先於第三方，第三方先於自己重寫。
@@ -36,7 +36,8 @@
 ## 4. 職責分離
 
 - 控制器只拿唯讀副本、只回 JSON（`research/controller/worker.py`），不碰 Wang 的物件與 RNG。
-- 離線分析只讀追蹤與記錄，不重建牆；要建牆就經 `research/walls/run_wall.py`。
+- 所有建牆的啟動點與執行邏輯都在 `research/runner/`；一面牆或一批牆「是什麼」的定義放在各研究資料夾，定義檔不 import `research.runner`，也沒有命令列。
+- 離線分析只讀追蹤與記錄，不重建牆；要建牆就經 `research/runner/run_wall.py`。
 - 新牆只由 `run_wall.run` 寫到 `research/cases/<case_id>/`；一組牆用 `research/storage/studies.py` 記錄。讀牆一律用 `case_id.wall_dir(ref)`（case_id 或封存路徑皆可）或 `paths.LEGACY_RUNS`；`research/runs/` 只讀不寫。一面牆的衍生分析寫到該 case 的 `derived/<方法版本>/`。
 - 有狀態的才用 class；無狀態計算寫成函式。繼承深度以一層為度，其餘用組合。
 
