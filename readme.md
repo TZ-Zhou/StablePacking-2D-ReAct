@@ -323,6 +323,7 @@ $env:PYTHONUTF8 = '1'
 | `Stonepacker2D/` | 堆石演算法函式庫；見該處 README |
 | `Tests/` | 論文範例案例與資料；見該處 README |
 | `research/` | 本 fork 的研究層：追蹤濾器順序建牆、離線分析、ReAct 控制器；見該處 README |
+| `docs/` | 計畫、規格、決策、觀念與查證文件；分類與存放規則見該處 README |
 | `figs/` | 本 readme 用的動畫 |
 | `pyproject.toml`、`setup.py` | 套件與相依設定、ruff／black／pytest 設定 |
 | `LICENSE` | MIT 授權 |

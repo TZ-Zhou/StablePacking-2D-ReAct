@@ -21,6 +21,11 @@
 
 **唯一例外**　使用者明確要求保留歷史紀錄時才寫。
 
+## 文件放哪
+
+- 計畫、規格、決策、觀念與查證文件一律放 `docs/`，分類與命名見 `docs/README.md`。
+- 資料夾說明寫在該資料夾的 `README.md`；agent 工作規則寫在 `.claude/`。
+
 ## 數字只有一個家
 
 - 研究結論只寫在 `research/findings.md`；牆品質數值只在 `research/quality/<方法>/`；實驗設定（種子、arm、timeout）只在 campaign 的 `campaign.json`。其他文件只引用，不重列。
