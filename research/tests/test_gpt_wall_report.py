@@ -1,4 +1,4 @@
-"""research/gpt_wall_report.py: the committed gpt-001 report is what its records give (decisions,
+"""research/llm_walls/gpt_wall_report.py: the committed gpt-001 report is what its records give (decisions,
 switches, trajectory), and its information check finds no final-wall term in any request."""
 import json
 import shutil
@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO / 'research')]
-import gpt_wall_report as rep  # noqa: E402
-import llm_adapter  # noqa: E402
+sys.path[:0] = [str(REPO)]
+from research.controller import llm_api as llm_adapter  # noqa: E402
+from research.llm_walls import gpt_wall_report as rep  # noqa: E402
 
 RUN = rep.quality_batch.RUNS / 'gpt-walls' / 'gpt-001'
 REPORT = REPO / 'research' / 'reports' / 'gpt-001'

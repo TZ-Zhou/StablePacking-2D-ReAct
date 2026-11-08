@@ -1,6 +1,6 @@
 """Offline report of a live GPT wall beside the development walls of its seed.
 
-  python -B research/gpt_wall_report.py gpt-001
+  python -B -m research.llm_walls.gpt_wall_report gpt-001
 
 Writes research/reports/<name>/ once (refuses an existing one): decisions.csv, switches.json,
 trajectory.csv, quality.csv, summary.json. Reads the run records only: never writes them, builds
@@ -30,13 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import controllers  # noqa: E402
-import llm_adapter  # noqa: E402
-import metrics  # noqa: E402
-import quality_batch  # noqa: E402
-from Stonepacker2D.stack.selection import PAPER_ORDER, load_trace, select  # noqa: E402
+from research.controller import llm_api as llm_adapter
+from research.controller import order_controller as controllers
+from research.paths import REPO
+from research.walls import campaign_quality as quality_batch
+from research.walls import wall_metrics as metrics
+from Stonepacker2D.stack.selection import PAPER_ORDER, load_trace, select
 
 FILTERS = {0: 'NHR', 1: 'GDS', 2: 'IWR', 3: 'LLC', 4: 'LFR'}  # selection.PAPER_ORDER: LLC, NHR, IWR, GDS, LFR
 # the final-wall metrics; not 'tilting': the fixed system prompt defines the LLC filter as the tilting-table
