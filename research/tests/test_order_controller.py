@@ -802,6 +802,17 @@ class TraceChain(unittest.TestCase):
             self.assertEqual(self.problems(self.tmp / name, stopped=True) == [], ok is True, name)
             self.assertNotEqual(self.problems(self.tmp / name), [], name)  # never for a finished run
 
+    def test_a_run_stopped_after_any_write_of_a_placement_passes(self):
+        # build_wall writes the event, the decisions.txt row, then the commit; the step writer keeps that order
+        commits = jsonl(check_run.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
+        placed = [i for i, c in enumerate(commits) if c['outcome'] == 'placed']
+        for k in (0, len(placed) // 2, len(placed) - 1):
+            j = placed[k]
+            for writes in ((j + 1, j, k), (j + 1, j, k + 1), (j + 1, j + 1, k + 1)):
+                name = '-'.join(map(str, writes))
+                cut(self.wall(name), *writes)
+                self.assertEqual(self.problems(self.tmp / name, stopped=True), [], name)
+
     def test_t3_stone_ids_must_be_distinct_ints_and_nb_stones(self):
         result = self.wall('ids')
         a = selection.load_trace(result / 'trace' / 'e00003.npz')[1]

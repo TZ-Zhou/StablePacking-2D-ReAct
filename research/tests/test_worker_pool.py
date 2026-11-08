@@ -16,8 +16,10 @@ from unittest import mock
 
 import numpy as np
 
-from research.paths import REPO
+from research.paths import LEGACY_RUNS, REPO
 from research.validation import windows_case_runtime as runtime
+
+ARCHIVED_BASES = sorted((LEGACY_RUNS / "controllers" / "p1-r2" / "null-seed20").glob("result_*/base.pkl"))
 
 
 def process_exists(pid):
@@ -183,6 +185,67 @@ class SharedPool(unittest.TestCase):
         while process_exists(worker) and time.monotonic() < deadline:
             time.sleep(0.2)
         self.assertFalse(process_exists(worker))
+
+
+def children_of(value):
+    """What a container or object holds; None for an array of numbers and a plain value."""
+    if isinstance(value, np.ndarray):
+        return value.ravel().tolist() if value.dtype == object else None
+    if isinstance(value, (list, tuple)):
+        return value
+    if isinstance(value, dict):
+        return list(value.items())
+    return list(vars(value).items()) if hasattr(value, "__dict__") else None
+
+
+def leaves(value, seen=None):
+    """Every array and plain value reachable from value, in a fixed order; shared objects are visited once."""
+    seen = set() if seen is None else seen
+    children = children_of(value)
+    if children is None:
+        yield value
+    elif id(value) not in seen:
+        seen.add(id(value))
+        for child in children:
+            yield from leaves(child, seen)
+
+
+def same_leaf(got, want):
+    if isinstance(want, np.ndarray):
+        return (got.shape, got.dtype, got.tobytes()) == (want.shape, want.dtype, want.tobytes())
+    plain = want is None or isinstance(want, (bool, int, float, str, bytes, np.generic))
+    return type(got) is type(want) and (not plain or repr(got) == repr(want))
+
+
+def all_arguments(pose, *shared):
+    return shared
+
+
+@unittest.skipUnless(ARCHIVED_BASES, "the archived wall is not present")
+class RealStepPayload(unittest.TestCase):
+    """A step's arguments rebuilt from an archived wall arrive through the shared block as through a per-task pickle."""
+
+    def setUp(self):
+        with ARCHIVED_BASES[0].open("rb") as stream:
+            base = pickle.load(stream)
+        rocks = list(base.placed_rocks)
+        self.shared = (rocks, rocks, base, np.arange(12.0).reshape(6, 2), False, True, (0, 10, 0, 10))
+        payload = pickle.dumps(self.shared, 5)
+        block = SharedMemory(create=True, size=len(payload))
+        self.addCleanup(block.unlink)
+        self.addCleanup(block.close)
+        block.buf[: len(payload)] = payload
+        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, block.name, len(payload), 0)))
+
+    def test_it_equals_what_a_per_task_pickle_delivers(self):
+        expected = list(leaves(pickle.loads(pickle.dumps(self.shared, 4))))
+        self.assertEqual(len(self.received), len(expected))
+        self.assertTrue(all(same_leaf(got, want) for got, want in zip(self.received, expected)))
+
+    def test_no_array_arrives_read_only(self):
+        arrays = [leaf for leaf in self.received if isinstance(leaf, np.ndarray)]
+        self.assertTrue(arrays)
+        self.assertTrue(all(array.flags.writeable for array in arrays))
 
 
 if __name__ == "__main__":
