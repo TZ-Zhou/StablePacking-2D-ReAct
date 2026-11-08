@@ -1,25 +1,29 @@
 """Counterfactual branches of a live GPT wall, rebuilt without any API.
 
-  python -B research/gpt_counterfactual.py init                  # research/runs/branches/gpt-001-cf/plan.json, once
-  python -B research/gpt_counterfactual.py run [--only V]        # build the walls not built yet, check each, stop at a failure
-  python -B research/gpt_counterfactual.py check                 # check every built wall (and the reused P6)
-  python -B research/gpt_counterfactual.py summarize             # wang-quality-v1 of every wall, G - P per step
+  python -B -m research.llm_walls.gpt_counterfactual init            # the study gpt-001-cf, once
+  python -B -m research.llm_walls.gpt_counterfactual run [--only V]  # build the walls not built yet, check each, stop at a failure
+  python -B -m research.llm_walls.gpt_counterfactual check           # check every built wall (and the reused P6)
+  python -B -m research.llm_walls.gpt_counterfactual summarize       # wang-quality-v1 of every wall, G - P per step
 
-A branch is run_case --policy paper --order 3,0,2,1,4 with GPT's recorded orders as --switch
+A branch is run_wall --policy paper --order 3,0,2,1,4 with GPT's recorded orders as --switch
 STEP=order (the order traced at each step of the GPT wall). gpt-001 made one selection per step,
 so a step switch replays it. Walls (C_j: GPT's orders at steps <= j, Paper after):
-- V: every GPT order. It must rebuild the GPT wall exactly (check_case.compare_runs: decisions,
+- V: every GPT order. It must rebuild the GPT wall exactly (check_run.compare_runs: decisions,
   filter, transformation, commits, base.pkl matrices, every trace event's meta and arrays), and
   every branch waits for it;
 - for k in STEPS: G_k = GPT's orders at steps <= k; P_k = at steps < k, so the Paper order at k.
   Both continue with the Paper order and start from GPT's state before k. P6 has no switch: it is
   the dev Paper wall of the seed, reused only if it passes the P check.
-check of a branch against the GPT wall: PROCESS_PASS, check_case.check_run ok, every attempt
+check of a branch against the GPT wall: PROCESS_PASS, check_run.check_run ok, every attempt
 before k (G: through k) byte-identical (commit line, trace meta but run_id, trace arrays); for P at
 k, the same candidates (all arrays but 'selected'), the selection is Wang's select with the Paper
 order on them, and it is not GPT's; the traced order of every step is the planned one.
 Controller-only files of the GPT wall (controller.jsonl, transport.jsonl, its receipt) are format,
 not construction, and are not compared. No controller and no API key reach a branch.
+
+Each new wall is a case (research/cases/<case id>/) that the study lists as {case_id, branch}, with the GPT wall as
+its parent. A plan already in the research/runs archive (branches/gpt-001-cf, where its walls were first built) is
+only read: check and summarize work on it, run refuses it.
 """
 import argparse
 import json
@@ -30,23 +34,23 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import check_case  # noqa: E402
-import run_case  # noqa: E402
-
-from Stonepacker2D.stack.selection import PAPER_ORDER, load_trace, select  # noqa: E402
+from research.paths import LEGACY_RUNS
+from research.storage import case_id as cid
+from research.storage import studies
+from research.walls import campaign, campaign_quality, check_run, run_wall, wall_metrics
+from Stonepacker2D.stack.selection import PAPER_ORDER, load_trace, select
 
 PLAN_ID = 'gpt-001-cf'
 SOURCE = 'gpt-walls/gpt-001'
 PAPER_WALL = 'campaigns/dev-2seeds/thangavelu-noise80/paper/seed66794912'
 STEPS = (6, 8, 17)
 TIMEOUT = 2400
-PLANS = run_case.RUNS / 'branches'
+LEGACY_PLAN = LEGACY_RUNS / 'branches' / PLAN_ID / 'plan.json'
 KEY_VARS = ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'STONEPACKING_ALLOW_PAID_API')
 
 
-def result_of(run):
-    return next((run_case.RUNS / run).glob('result_*'))
+def result_of(wall):
+    return next(cid.wall_dir(wall).glob('result_*'))
 
 
 def commits(result):
@@ -84,27 +88,42 @@ def branches(orders):
 def make_plan():
     orders = recorded_orders(result_of(SOURCE))
     walls = branches(orders)
-    seed = json.loads((run_case.RUNS / SOURCE / 'receipt.json').read_text(encoding='utf-8'))['seed']
+    seed = json.loads((cid.wall_dir(SOURCE) / 'receipt.json').read_text(encoding='utf-8'))['seed']
     plan = {'id': PLAN_ID, 'created': datetime.now().isoformat(timespec='seconds'), 'source': SOURCE, 'seed': seed,
-            'case': 'thangavelu-noise80', 'timeout_seconds': TIMEOUT, 'steps': list(STEPS), 'code_sha256': run_case.code_fingerprint(),
+            'case': 'thangavelu-noise80', 'timeout_seconds': TIMEOUT, 'steps': list(STEPS), 'code_sha256': run_wall.code_fingerprint(),
             'recorded_orders': {str(s): list(o) for s, o in orders.items()},
             'walls': {name: {'arm': w['arm'], 'k': w['k'], 'switch': {str(s): list(o) for s, o in w['switch'].items()},
-                             'run': PAPER_WALL if name == 'P6' and not w['switch'] else f'branches/{PLAN_ID}/{name}'}
+                             'run': PAPER_WALL if name == 'P6' and not w['switch'] else None}
                       for name, w in walls.items()},
             'build_order': ['V'] + [n for k in STEPS for n in (f'G{k}', f'P{k}') if not (n == 'P6' and not walls[n]['switch'])],
             'continuation': 'paper order after k for both arms', 'api': 'none'}
     return plan
 
 
-def plan_path():
-    return PLANS / PLAN_ID / 'plan.json'
-
-
 def load_plan():
-    plan = json.loads(plan_path().read_text(encoding='utf-8'))
+    """The plan: the design of its study, or plan.json of the plan in the research/runs archive."""
+    if campaign.is_study(PLAN_ID):
+        plan = studies.load(PLAN_ID)['design']
+    else:
+        plan = json.loads(LEGACY_PLAN.read_text(encoding='utf-8'))
     for w in plan['walls'].values():
         w['switch'] = {int(s): tuple(o) for s, o in w['switch'].items()}
     return plan
+
+
+def wall_ref(plan, name):
+    """A wall of the plan, for case_id.wall_dir: its 'run' (the reused Paper wall, or a wall of a plan in the
+    research/runs archive), else the case its study lists (None while there is none)."""
+    wall = plan['walls'][name]
+    if wall['run'] is not None:
+        return wall['run']
+    found = studies.find(plan['id'], branch=name) if campaign.is_study(plan['id']) else []
+    return found[-1]['case_id'] if found else None
+
+
+def built(plan, name):
+    ref = wall_ref(plan, name)
+    return ref is not None and (cid.wall_dir(ref) / 'receipt.json').exists()
 
 
 def same_attempt(a, b, ra, rb, select_too=True):
@@ -128,7 +147,7 @@ def check_branch(source, branch, wall):
     cs, cb = commits(source), commits(branch)
     problems = []
     if arm == 'V':
-        problems += check_case.compare_runs(Path(source).parent, Path(branch).parent)
+        problems += check_run.compare_runs(Path(source).parent, Path(branch).parent)
     else:
         last = k if arm == 'G' else k - 1
         prefix = [(a, b) for a, b in zip(cs, cb) if a['step'] <= last]
@@ -159,61 +178,62 @@ def check_branch(source, branch, wall):
 
 
 def check_wall(plan, name):
-    wall = plan['walls'][name]
-    run = run_case.RUNS / wall['run']
+    wall, ref = plan['walls'][name], wall_ref(plan, name)
+    run = cid.wall_dir(ref)
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
     problems = [] if receipt['status'] == 'PROCESS_PASS' else [f"status {receipt['status']}"]
     if receipt.get('controller') is not None:
         problems.append('the branch ran a controller')
-    problems += check_case.check_run(run)['problems']
-    problems += check_branch(result_of(plan['source']), result_of(wall['run']), wall)
+    problems += check_run.check_run(run)['problems']
+    problems += check_branch(result_of(plan['source']), result_of(ref), wall)
     return problems
 
 
-def run_plan(plan, only=None, launch=run_case.main):
-    if run_case.code_fingerprint() != plan['code_sha256']:
-        raise SystemExit('executed code differs from the code registered in plan.json')
+def branch_argv(plan, wall):
+    """The run_wall arguments of one wall: the Paper order with GPT's recorded orders switched in."""
+    switches = [a for s, o in sorted(wall['switch'].items()) for a in ('--switch', f"{s}={','.join(map(str, o))}")]
+    return [plan['case'], '--parent', plan['source'], '--policy', 'paper', '--order', '3,0,2,1,4',
+            '--seed', str(plan['seed']), '--timeout', str(plan['timeout_seconds'])] + switches
+
+
+def run_plan(plan, only=None, launch=run_wall.run):
+    if run_wall.code_fingerprint() != plan['code_sha256']:
+        raise SystemExit('executed code differs from the code registered in the plan')
     if any(os.environ.get(k) for k in KEY_VARS):
         raise SystemExit(f'unset {", ".join(KEY_VARS)}: a branch needs no key and no gate')
-    log = PLANS / PLAN_ID / 'runs.jsonl'
     for name in plan['build_order']:
         if only and name not in only:
             continue
         if name != 'V':
-            v = check_wall(plan, 'V') if (run_case.RUNS / plan['walls']['V']['run'] / 'receipt.json').exists() else ['V not built']
+            v = check_wall(plan, 'V') if built(plan, 'V') else ['V not built']
             if v:
                 raise SystemExit(f'V has not passed: {v[:5]}; no branch is built')
             if 'P6' in plan['walls'] and plan['walls']['P6']['run'] == PAPER_WALL and (p6 := check_wall(plan, 'P6')):
                 raise SystemExit(f'the reused P6 fails its check: {p6[:5]}')
-        wall = plan['walls'][name]
-        run = run_case.RUNS / wall['run']
-        if run.exists():
+        if built(plan, name):
             print(f'skip {name}: already built')
             continue
-        argv = [plan['case'], wall['run'], '--policy', 'paper', '--order', '3,0,2,1,4', '--seed', str(plan['seed']),
-                '--timeout', str(plan['timeout_seconds'])] + [a for s, o in sorted(wall['switch'].items())
-                                                              for a in ('--switch', f"{s}={','.join(map(str, o))}")]
+        campaign.require_study(plan['id'])
         started = datetime.now()
-        launch(argv)
+        campaign.launch_case(plan['id'], branch_argv(plan, plan['walls'][name]), {'branch': name}, launch)
         problems = check_wall(plan, name)
-        with log.open('a', encoding='utf-8') as f:
-            f.write(json.dumps({'wall': name, 'run': wall['run'], 'started': started.isoformat(timespec='seconds'),
-                                'finished': datetime.now().isoformat(timespec='seconds'), 'problems': problems}) + '\n')
+        campaign.log_run(plan['id'], {'wall': name, 'case_id': wall_ref(plan, name),
+                                      'started': started.isoformat(timespec='seconds'),
+                                      'finished': datetime.now().isoformat(timespec='seconds'), 'problems': problems})
         print(f'{name}:', 'OK' if not problems else problems[:10])
         if problems:
             raise SystemExit(f'{name} failed its check: stopped, nothing else is built')
 
 
 def summarize(plan):
-    import metrics
-    import quality_batch
     rows = []
     for name, wall in plan['walls'].items():
-        run = run_case.RUNS / wall['run']
-        if not (run / 'receipt.json').exists():
+        if not built(plan, name):
             continue
-        row, _ = quality_batch.evaluate(run)
-        lam = metrics.mechanism_lambdas(result_of(wall['run']))
+        ref = wall_ref(plan, name)
+        run = cid.wall_dir(ref)
+        row, _ = campaign_quality.evaluate(run)
+        lam = wall_metrics.mechanism_lambdas(result_of(ref))
         receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
         rows.append({'wall': name, 'arm': wall['arm'], 'k': wall['k'], 'status': row['status'],
                      **{m: row.get(m) for m in ('F_SF', 'F_AH', 'F_AV', 'F_LR', 'placed_ratio', 'n_placed', 'n_input')},
@@ -224,7 +244,8 @@ def summarize(plan):
               for k in plan['steps'] if f'G{k}' in by and f'P{k}' in by and None not in
               [by[w][m] for w in (f'G{k}', f'P{k}') for m in ('F_SF', 'F_AH', 'F_AV', 'F_LR')]}
     out = {'rows': rows, 'g_minus_p': deltas}
-    (PLANS / PLAN_ID / 'summary.json').write_text(json.dumps(out, indent=1) + '\n', encoding='utf-8')
+    if campaign.is_study(plan['id']):  # a plan of the research/runs archive is only read
+        (studies.path_of(plan['id']).parent / 'summary.json').write_text(json.dumps(out, indent=1) + '\n', encoding='utf-8')
     return out
 
 
@@ -234,11 +255,10 @@ def main(argv=None):
     ap.add_argument('--only', nargs='*')
     a = ap.parse_args(argv)
     if a.command == 'init':
-        if plan_path().exists():
-            raise SystemExit(f'{plan_path()} exists: a plan is registered once')
+        if LEGACY_PLAN.exists():
+            raise SystemExit(f'{LEGACY_PLAN} exists: a plan is registered once')
         plan = make_plan()
-        plan_path().parent.mkdir(parents=True)
-        plan_path().write_text(json.dumps(plan, indent=1) + '\n', encoding='utf-8')
+        studies.create(PLAN_ID, 'gpt-counterfactual', plan)
         print(json.dumps({k: plan[k] for k in ('recorded_orders', 'walls', 'build_order')}, indent=1))
         return 0
     plan = load_plan()
@@ -247,8 +267,8 @@ def main(argv=None):
         return 0
     if a.command == 'check':
         bad = {}
-        for name, wall in plan['walls'].items():
-            if (run_case.RUNS / wall['run'] / 'receipt.json').exists():
+        for name in plan['walls']:
+            if built(plan, name):
                 bad[name] = check_wall(plan, name)
                 print(name, 'OK' if not bad[name] else bad[name][:10])
         return 1 if any(bad.values()) else 0

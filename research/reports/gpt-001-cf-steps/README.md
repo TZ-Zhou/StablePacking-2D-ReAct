@@ -1,7 +1,7 @@
 # Step-wise quality of the gpt-001 counterfactual walls
 
 Offline, from the records of eight walls (seed 66794912, thangavelu-noise80); no wall was built, no
-API was called. Generator: `research/step_quality.py` (definitions in its docstring and in
+API was called. Generator: `research/llm_walls/step_quality.py` (definitions in its docstring and in
 `summary.json`). n = 1 seed, one realisation per arm; everything here is exploratory.
 
 | wall | role |

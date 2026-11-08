@@ -1,4 +1,4 @@
-"""research/step_quality.py: the pair split on known series, and on gpt-001's records the step series
+"""research/llm_walls/step_quality.py: the pair split on known series, and on gpt-001's records the step series
 ends at wang-quality-v1 with the chosen LLC at every placement."""
 import json
 import sys
@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO / 'research')]
-import step_quality as sq  # noqa: E402
+sys.path[:0] = [str(REPO)]
+from research.llm_walls import step_quality as sq  # noqa: E402
 
 
 def rows(values, stones):
@@ -30,11 +30,11 @@ class Split(unittest.TestCase):
         self.assertEqual((s['at_decision'], s['onset_n'], s['onset_phase'], s['after_decision']), (0, 4, 'after', 2))
 
 
-@unittest.skipUnless((sq.RUNS / sq.WALLS['GPT']).exists() and (sq.RUNS / sq.CF / 'summary.json').exists(), 'records not present')
+@unittest.skipUnless((sq.LEGACY_RUNS / sq.WALLS['GPT']).exists() and (sq.LEGACY_RUNS / sq.CF / 'summary.json').exists(), 'records not present')
 class Gpt001(unittest.TestCase):
     def test_the_series_ends_at_wang_quality_v1(self):
         steps = sq.wall_steps('GPT')
-        final = {r['wall']: r for r in json.loads((sq.RUNS / sq.CF / 'summary.json').read_text(encoding='utf-8'))['rows']}['V']
+        final = {r['wall']: r for r in json.loads((sq.LEGACY_RUNS / sq.CF / 'summary.json').read_text(encoding='utf-8'))['rows']}['V']
         self.assertEqual(sq.wall_problems(steps, {**final, **sq.metrics.mechanism_lambdas(sq.result_of(sq.WALLS['GPT']))}), [])
         self.assertEqual(len(steps), 18)
         broken = [dict(steps[-1], F_AH_partial=steps[-1]['F_AH_partial'] + 1e-9)]

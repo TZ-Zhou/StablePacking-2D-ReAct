@@ -1,16 +1,20 @@
-"""research/gpt_counterfactual.py on the recorded walls (no wall is built): the plan's switches,
+"""research/llm_walls/gpt_counterfactual.py on the recorded walls (no wall is built): the plan's switches,
 the branch check on identities and on walls that must fail it, and the run refusals."""
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO / 'research')]
-import gpt_counterfactual as cf  # noqa: E402
+sys.path[:0] = [str(REPO)]
+from research.llm_walls import gpt_counterfactual as cf  # noqa: E402
+from research.paths import LEGACY_RUNS  # noqa: E402
+from research.storage import studies  # noqa: E402
+from research.walls import run_wall  # noqa: E402
 
-PRESENT = (cf.run_case.RUNS / cf.SOURCE).exists() and (cf.run_case.RUNS / cf.PAPER_WALL).exists()
+PRESENT = (LEGACY_RUNS / cf.SOURCE).exists() and (LEGACY_RUNS / cf.PAPER_WALL).exists()
 GPT_STEPS = [6, 7, 8, 9, 10, 11, 14, 17, 20]
 
 
@@ -60,6 +64,46 @@ class Plan(unittest.TestCase):
                 cf.run_plan(missing, only=['G6'], launch=launch)
             self.assertIn('V has not passed', str(refused.exception))
         launch.assert_not_called()
+
+
+class Build(unittest.TestCase):
+    """How run builds a wall (launch and the wall check are mocked; no wall is built)."""
+    CASE = '20261108-1254-TH_T80-pc1'
+
+    def plan(self):
+        wall = {'arm': 'V', 'k': None, 'switch': {6: (0, 1, 3, 4, 2)}, 'run': None}
+        return {'id': 'cf-test', 'source': cf.SOURCE, 'seed': 7, 'case': 'thangavelu-noise80', 'timeout_seconds': 60,
+                'code_sha256': run_wall.code_fingerprint(), 'walls': {'V': wall}, 'build_order': ['V']}
+
+    def setUp(self):
+        env = {k: v for k, v in os.environ.items() if k not in cf.KEY_VARS}
+        for patcher in (mock.patch.dict(os.environ, env, clear=True), mock.patch.object(cf, 'check_wall', return_value=[])):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.launch = mock.Mock(return_value={'case_id': self.CASE, 'status': 'PROCESS_PASS'})
+
+    def test_a_wall_is_a_case_of_the_study_with_the_gpt_wall_as_parent(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(studies, 'STUDIES_DIR', Path(tmp)):
+            studies.create(plan['id'], 'gpt-counterfactual', plan)
+            self.assertIsNone(cf.wall_ref(plan, 'V'))
+            cf.run_plan(plan, launch=self.launch)
+            self.assertEqual(cf.wall_ref(plan, 'V'), self.CASE)
+            self.assertEqual(studies.find(plan['id'], branch='V')[0]['case_id'], self.CASE)
+        argv = self.launch.call_args.args[0]
+        self.assertEqual(argv[:3], ['thangavelu-noise80', '--parent', cf.SOURCE])
+        self.assertEqual(argv[-2:], ['--switch', '6=0,1,3,4,2'])
+
+    def test_a_plan_without_a_study_builds_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(studies, 'STUDIES_DIR', Path(tmp)):
+            with self.assertRaises(RuntimeError):
+                cf.run_plan(self.plan(), launch=self.launch)
+        self.launch.assert_not_called()
+
+    def test_a_wall_of_the_archive_keeps_its_path(self):
+        plan = self.plan()
+        plan['walls']['V']['run'] = 'branches/gpt-001-cf/V'
+        self.assertEqual(cf.wall_ref(plan, 'V'), 'branches/gpt-001-cf/V')
 
 
 if __name__ == '__main__':

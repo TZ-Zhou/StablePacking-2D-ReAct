@@ -1,7 +1,8 @@
 """Step-wise quality of the gpt-001 counterfactual walls, offline from their records (no wall is built).
 
-  python -B research/step_quality.py        # research/reports/gpt-001-cf-steps/, written once
+  python -B -m research.llm_walls.step_quality        # research/reports/gpt-001-cf-steps/, written once
 
+Reads the walls of the research/runs archive: branches/gpt-001-cf and its two source walls.
 After each placement n of a recorded wall:
 - F_SF (author: 03's right-cropped area), F_SF_progress (stone px / (H*W - 2H - 3W) of the whole 02
   wall: one denominator for every wall and step), F_AH_partial, F_AV_partial: 02 (corrected canvas,
@@ -25,13 +26,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import metrics  # noqa: E402
+from research.paths import LEGACY_RUNS, REPO
+from research.walls import wall_metrics as metrics
+from Stonepacker2D.stack.selection import load_trace
 
-from Stonepacker2D.stack.selection import load_trace  # noqa: E402
-
-RUNS = REPO / 'research' / 'runs'
 OUT = REPO / 'research' / 'reports' / 'gpt-001-cf-steps'
 CF = 'branches/gpt-001-cf'
 WALLS = {'GPT': 'gpt-walls/gpt-001', 'Paper': 'campaigns/dev-2seeds/thangavelu-noise80/paper/seed66794912',
@@ -42,7 +40,7 @@ LLC_DECIMALS = 1  # Stonepacker2D.utils.constant.KINEMATIC_RESULT_DECIMAL
 
 
 def result_of(run):
-    return next((RUNS / run).glob('result_*'))
+    return next((LEGACY_RUNS / run).glob('result_*'))
 
 
 def commits(result):
@@ -52,7 +50,7 @@ def commits(result):
 def lambdas(world):
     """evaluate_kine(load='tilting_table') of a wall matrix with both directions kept unrounded: its two
     solve_force_rigid calls, 'right' (load +mass) and 'left' (-mass) as its mechanism files name them.
-    Bricks from the matrix as research/lookahead_study.kine_lr builds them."""
+    Bricks from the matrix as research/analysis/lookahead_study.kine_lr builds them."""
     from Stonepacker2D.evaluate.tilting_angle import (base_to_elements, cal_Aglobal, clear_contps, pixel_to_mesh,
                                                       solve_force_rigid)
     from Stonepacker2D.utils.constant import get_ignore_pixel_value, set_head_joint_state, set_world_size
@@ -81,7 +79,7 @@ def lambdas(world):
 
 def wall_steps(name):
     """One row per placement of a recorded wall."""
-    run, result = RUNS / WALLS[name], result_of(WALLS[name])
+    run, result = LEGACY_RUNS / WALLS[name], result_of(WALLS[name])
     cs = commits(result)
     lines = (result / 'transformation.txt').read_text().splitlines()
     if len(lines) - 1 != len(cs) or any(c['outcome'] != 'placed' or c['chosen_side'] != 'left' for c in cs):
@@ -229,7 +227,7 @@ def plot_lr(path, steps, pairs):
 def main():
     if OUT.exists():
         raise SystemExit(f'{OUT} exists: the analysis is written once')
-    summary = {r['wall']: r for r in json.loads((RUNS / CF / 'summary.json').read_text(encoding='utf-8'))['rows']}
+    summary = {r['wall']: r for r in json.loads((LEGACY_RUNS / CF / 'summary.json').read_text(encoding='utf-8'))['rows']}
     summary['GPT'], summary['Paper'] = summary['V'], summary['P6']  # V == gpt-001 is checked below
     steps, problems = {}, {}
     for name in WALLS:

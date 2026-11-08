@@ -42,6 +42,8 @@
 | `gpt_wall.py` | 以 OpenAI 模型選濾波順序跑完整面牆的安全執行器與花費帳本 |
 | `dev_walls.py` | 在 GPT 牆之前，以開發種子建 Paper 牆與各控制器牆並檢查 |
 | `gpt_wall_report.py` | 唯讀產生一面 GPT 實牆的離線報告（決策、切換、軌跡、品質），寫到 `reports/<名稱>/` |
+| `gpt_counterfactual.py` | gpt-001 的反事實分支：以記錄的順序重建，不呼叫 API；新牆是 study `gpt-001-cf` 的 case |
+| `step_quality.py` | 由封存紀錄離線算反事實牆的逐步品質，寫到 `reports/gpt-001-cf-steps/` |
 
 ### storage/
 | 檔案 | 說明 |
