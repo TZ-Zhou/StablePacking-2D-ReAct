@@ -11,6 +11,7 @@ import textwrap
 import time
 import unittest
 import warnings
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -301,6 +302,58 @@ class InfeasibleEvents(unittest.TestCase):
                 self.assertEqual(int(e['n_distinct_pose']), len({o['pose_id'] for o in mine} - {''}))
 
 
+class SensitivityOutputPlace(unittest.TestCase):
+    """Where order_sensitivity writes: next to a case's trace by default, never into the runs archive."""
+    CASE = '20261108-1254-TH_T80-pc1'
+
+    def places(self, tmp):
+        """Patch the case and archive roots to folders of `tmp`, so that no test touches the repository's."""
+        return mock.patch.multiple(order_sensitivity.case_id, CASES_DIR=Path(tmp) / 'cases',
+                                   LEGACY_RUNS=Path(tmp) / 'runs')
+
+    def trace(self, parent):
+        trace = Path(parent) / 'result' / 'trace'
+        synthetic_trace(trace, 0, np.random.default_rng(3))
+        return trace
+
+    def test_default_output_is_the_cases_derived_folder(self):
+        with tempfile.TemporaryDirectory() as tmp, self.places(tmp):
+            case = Path(tmp) / 'cases' / self.CASE
+            summary = order_sensitivity.main([str(self.trace(case))])
+            out = case / 'derived' / order_sensitivity.METHOD
+            self.assertEqual(summary['events'], 1)
+            self.assertEqual(sorted(f.name for f in out.iterdir()),
+                             ['candidates.csv', 'events.csv', 'orders.csv', 'summary.json'])
+            with self.assertRaises(FileExistsError):  # the default location is not overwritten either
+                order_sensitivity.main([str(case / 'result' / 'trace')])
+
+    def test_explicit_output_dir_still_works_in_a_case(self):
+        with tempfile.TemporaryDirectory() as tmp, self.places(tmp):
+            trace = self.trace(Path(tmp) / 'cases' / self.CASE)
+            order_sensitivity.main([str(trace), str(Path(tmp) / 'out')])
+            self.assertTrue((Path(tmp) / 'out' / 'summary.json').exists())
+            self.assertFalse((Path(tmp) / 'cases' / self.CASE / 'derived').exists())
+
+    def test_no_default_outside_a_case(self):
+        with tempfile.TemporaryDirectory() as tmp, self.places(tmp):
+            for parent in (Path(tmp) / 'elsewhere', Path(tmp) / 'cases' / 'not-a-case-id'):
+                trace = self.trace(parent)
+                with self.assertRaises(SystemExit):
+                    order_sensitivity.main([str(trace)])
+                self.assertFalse((trace.parent / 'derived').exists())
+
+    def test_the_runs_archive_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp, self.places(tmp):
+            trace = self.trace(Path(tmp) / 'runs' / 'old-wall')
+            for out in (Path(tmp) / 'runs' / 'old-wall-sensitivity', Path(tmp) / 'runs' / 'x' / '..' / 'y'):
+                with self.assertRaises(SystemExit):
+                    order_sensitivity.main([str(trace), str(out)])
+                self.assertFalse(out.exists())
+            with self.assertRaises(SystemExit):  # a trace in the archive has no default location
+                order_sensitivity.main([str(trace)])
+            self.assertEqual(sorted(f.name for f in (Path(tmp) / 'runs').iterdir()), ['old-wall'])
+
+
 class LauncherSafety(unittest.TestCase):
     def test_real_process_tree_is_verified_stopped(self):
         # Codex F1: a parent with a grandchild, killed and verified by PID + creation time.
@@ -542,14 +595,22 @@ class Geometry(unittest.TestCase):
 
 
 class OutputProtection(unittest.TestCase):
-    def test_launcher_refuses_baseline_and_existing_directories(self):
-        for name in ['../../baseline/cross-case/runs/almeida-pr-20261106-01', '..', '../../baseline']:
-            with self.assertRaises((ValueError, FileExistsError)):
-                run_wall.prepare_output(name)
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_wall, 'RUNS', Path(tmp)):
-            run_wall.prepare_output('x')
-            with self.assertRaises(FileExistsError):
-                run_wall.prepare_output('x')
+    def test_launcher_writes_new_case_folders_only(self):
+        start = datetime(2026, 11, 8, 12, 54)
+        with self.assertRaises(ValueError):  # the research/runs archive is never written
+            run_wall.prepare_output('bricks', start, root=run_wall.cid.LEGACY_RUNS)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_wall.cid, 'pc_code', return_value='pc1'):
+            first, folder = run_wall.prepare_output('bricks', start, root=tmp)
+            second, _ = run_wall.prepare_output('bricks', start, root=tmp)
+            self.assertEqual((first, second), ('20261108-1254-BR-pc1', '20261108-1254b-BR-pc1'))
+            self.assertEqual(folder, (Path(tmp) / first).resolve())
+
+    def test_noise20_reads_its_own_stones(self):
+        text = run_wall.source_text('thangavelu-noise20')
+        self.assertIn('/data/stones_noise_20_labels.png', text)
+        self.assertNotIn('noise_80', text)
+        self.assertEqual(run_wall.source_text('thangavelu-noise80'),
+                         (REPO / run_wall.CASES['thangavelu-noise80'][0]).read_text(encoding='utf-8'))
 
     def test_staged_cleanup_never_deletes(self):
         # Every original rm -rf line is staged as a guard: empty target passes, files raise.

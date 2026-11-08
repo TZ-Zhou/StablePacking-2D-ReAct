@@ -19,12 +19,12 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
+from research.paths import LEGACY_RUNS  # noqa: E402
 from research.walls import wall_metrics  # noqa: E402
 from test_order_controller import WALL  # noqa: E402
 
 AUTHOR = REPO / 'Tests' / 'Thangavelu'
-RUNS = REPO / 'research' / 'runs'
-BRANCHES = RUNS / 'branches' / 'paper-hardstone-01'
+BRANCHES = LEGACY_RUNS / 'branches' / 'paper-hardstone-01'
 
 # wall: F_SF, F_AH, F_AV, lambda_min of the author's 02 -> 03 run on it (p22), the sha256 of its
 # rendered label image, the stones 02's canvas crop cut (id: pixels lost)
@@ -277,10 +277,10 @@ class CorrectedCanvas(unittest.TestCase):
 class RecordsUnchanged(unittest.TestCase):
     def test_record_trees(self):
         for rel, pinned in RECORDS.items():
-            if (RUNS / rel).exists():
+            if (LEGACY_RUNS / rel).exists():
                 with self.subTest(rel):
-                    self.assertEqual(digest(RUNS / rel, NEW.get(rel, ())), pinned)
-        self.assertTrue((RUNS / 'never-created').exists())
+                    self.assertEqual(digest(LEGACY_RUNS / rel, NEW.get(rel, ())), pinned)
+        self.assertTrue((LEGACY_RUNS / 'never-created').exists())
 
     def test_v2_prompt_is_smoke_002s(self):
         from research.controller import order_controller

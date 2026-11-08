@@ -29,7 +29,8 @@ from pathlib import Path
 
 import numpy as np
 
-from research.paths import QUALITY_DIR, RUNS
+from research.paths import LEGACY_RUNS, QUALITY_DIR
+from research.storage.case_id import wall_dir
 from research.analysis import lookahead_study
 from research.walls import wall_metrics
 from Stonepacker2D.stack.selection import ALL_ORDERS, select  # noqa: E402
@@ -108,7 +109,7 @@ def remaining(a):
 def walls(final):
     rows, timing = [], {'pareto': [], 'classes': [], 'hardness': []}
     for run_name, q in final.items():
-        run = RUNS / run_name
+        run = wall_dir(run_name)
         placed = {r.id for r in __import__('pickle').load(open(result_of(run) / 'base.pkl', 'rb')).placed_rocks}
         hard, checkpoint = Hardness(run), None
         n_ev = n_feas = n_front = n_cls = n_cls_on = 0
@@ -145,7 +146,7 @@ def walls(final):
 def branch_points():
     out = []
     for (parent, step), alts in lookahead_study.points().items():
-        run = RUNS / parent
+        run = wall_dir(parent)
         commit = next(c for c in lookahead_study.commits(run) if c['step'] == step and c.get('stone_id') is not None)
         event = commit['sides'][commit['chosen_side']]['event']
         hard = Hardness(run)
@@ -157,7 +158,7 @@ def branch_points():
         f = set(front(raw, w).tolist())
         order = hard.rank(remaining(a))
         plan = {b['name']: b for pid in lookahead_study.PLANS
-                for b in json.loads((RUNS / 'branches' / pid / 'plan.json').read_text(encoding='utf-8'))['branches']}
+                for b in json.loads((LEGACY_RUNS / 'branches' / pid / 'plan.json').read_text(encoding='utf-8'))['branches']}
         rows = []
         for alt in alts:
             if alt['switch'] is None:

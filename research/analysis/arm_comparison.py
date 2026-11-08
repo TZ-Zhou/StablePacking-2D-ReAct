@@ -2,8 +2,9 @@
 
 Usage: python -B -m research.analysis.arm_comparison <campaign id> [--reference code_original]
 
-Reads research/runs/campaigns/<id>/manifest.csv (campaign.py summarize). One wall per
-(arm, seed) cell. Per metric, each reported separately (never merged into one score):
+Reads the campaign's manifest.csv (campaign.manifest_path: beside its study.json, or in the
+research/runs archive). One wall per (arm, seed) cell. Per metric, each reported separately (never
+merged into one score):
 mean/SD/min/max per arm; the share of the total sum of squares explained by arm and by seed
 (two-way, no interaction, so the residual also holds the arm x seed interaction); Friedman
 test across arms with seeds as blocks; paired differences arm - reference on the same seed
@@ -82,7 +83,7 @@ def main(argv=None):
     parser.add_argument('id')
     parser.add_argument('--reference', default='code_original')
     args = parser.parse_args(argv)
-    manifest = pd.read_csv(campaign.CAMPAIGNS / args.id / 'manifest.csv')
+    manifest = pd.read_csv(campaign.manifest_path(args.id))
     pd.set_option('display.width', 250)
     print('walls', len(manifest), '| status', manifest.status.value_counts().to_dict(),
           '| checks_ok', manifest.checks_ok.value_counts().to_dict())

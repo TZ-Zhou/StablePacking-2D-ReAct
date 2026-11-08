@@ -4,7 +4,7 @@
   python -B -m research.analysis.counterfactual_branches init <plan id> --wall <run>:<seed>:<target> [...] [--timeout 2400]
   python -B -m research.analysis.counterfactual_branches run <plan id> [--max-runs N]
   python -B -m research.analysis.counterfactual_branches summarize <plan id>
-(<run> is a run directory under research/runs.)
+(<run> is a recorded wall: a case id of research/cases or a path in the research/runs archive.)
 
 options (offline): for every construction step of the recorded wall that was decided in a
 single sampling attempt, replays all 120 paper-cascade orders (selection.select, Algorithm 2
@@ -19,14 +19,18 @@ the recorded one and the branch's choice there is the offline one; later steps u
 recorded order again but see a different wall and inventory (and the sampling draws that
 follow from them). Nothing forces a stone or relaxes the LLC gate; a target is reachable only
 if some order selects it.
-init registers research/runs/branches/<plan id>/plan.json once (never overwritten): at every
-step where some order picks a target, one 'target' branch per distinct target pose and one
-'control' branch per distinct non-target pose other than the recorded one, each with the
-lexicographically first order reaching that pose (orders reaching the same pose build the same
-wall). run builds them one at a time; after each wall it requires PROCESS_PASS, check_run
-check_run ok and check_branch ok (identical prefix, same candidates at the switched step, the
-planned pose chosen, recorded order everywhere else) and stops at the first failure.
-summarize writes branches.csv: each branch next to its original wall.
+init registers the plan once (never overwritten) as a study (research/storage/studies.py, kind
+'branches') whose design is the plan: at every step where some order picks a target, one 'target'
+branch per distinct target pose and one 'control' branch per distinct non-target pose other than the
+recorded one, each with the lexicographically first order reaching that pose (orders reaching the
+same pose build the same wall). run builds them one at a time, each a new case (run_wall.run
+--parent <recorded wall>) that the study lists as {case_id, branch}; a branch the study already
+lists is never rebuilt. After each wall it requires PROCESS_PASS, check_run ok and check_branch ok
+(identical prefix, same candidates at the switched step, the planned pose chosen, recorded order
+everywhere else), logs the result to runs.jsonl beside study.json and stops at the first failure.
+summarize writes branches.csv beside study.json: each branch next to its original wall.
+Plans of the research/runs archive (branches/<plan id>/plan.json, their walls beside it) are read
+by load_plan and branch_wall like the studies, never built into or written.
 """
 import argparse
 import json
@@ -35,6 +39,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from research.paths import LEGACY_RUNS
+from research.storage import case_id as cid
+from research.storage import studies
+from research.walls import campaign
 from research.walls import run_wall
 
 from Stonepacker2D.stack.selection import ALL_ORDERS, load_trace, select  # noqa: E402
@@ -130,14 +138,39 @@ def check_branch(original, branch, switch):
     return {'ok': not problems, 'problems': problems, 'identical_prefix_attempts': n_prefix, 'switched_choices': choices}
 
 
-PLANS = run_wall.RUNS / 'branches'
+def legacy_plan_dir(plan_id):
+    """The folder of a plan built in the research/runs archive (read only)."""
+    return LEGACY_RUNS / 'branches' / plan_id
+
+
+def load_plan(plan_id):
+    """A plan: the design of its study, or plan.json of a plan in the research/runs archive."""
+    if campaign.is_study(plan_id):
+        return studies.load(plan_id)['design']
+    return json.loads((legacy_plan_dir(plan_id) / 'plan.json').read_text(encoding='utf-8'))
+
+
+def register(plan):
+    """Create the study of a new plan; an id the research/runs archive already holds is refused."""
+    if legacy_plan_dir(plan['id']).exists():
+        raise FileExistsError(f"{plan['id']} is a plan of the research/runs archive: choose another id")
+    return studies.create(plan['id'], 'branches', plan)
+
+
+def branch_wall(plan, b):
+    """The wall of branch b, for case_id.wall_dir: the case its study lists (None while there is none), or
+    for a plan of the research/runs archive its folder beside plan.json."""
+    if campaign.is_study(plan['id']):
+        found = studies.find(plan['id'], branch=b['name'])
+        return found[-1]['case_id'] if found else None
+    return f"branches/{plan['id']}/{b['name']}"
 
 
 def make_plan(plan_id, walls, timeout):
-    """walls: [(run, seed, target stone)]."""
+    """walls: [(run, seed, target stone)], run a case id or a research/runs path."""
     branches = []
     for run, seed, target in walls:
-        result = next((run_wall.RUNS / run).rglob('trace/commits.jsonl')).parent.parent
+        result = next(cid.wall_dir(run).rglob('trace/commits.jsonl')).parent.parent
         options = step_options(result, {target})
         for step in sorted(options[options.target].step.unique()):
             g = options[(options.step == step) & (options.order != options.recorded_order)]
@@ -155,32 +188,28 @@ def make_plan(plan_id, walls, timeout):
             'code_sha256': run_wall.code_fingerprint()}
 
 
-def branch_dir(plan, b):
-    return f"branches/{plan['id']}/{b['name']}"
-
-
-def run_plan(plan, max_runs=None, launch=run_wall.main):
+def run_plan(plan, max_runs=None, launch=run_wall.run):
     """True when every branch built so far passed; stops at the first failure."""
     from research.walls import check_run
+    campaign.require_study(plan['id'])
     if run_wall.code_fingerprint() != plan['code_sha256']:
-        raise RuntimeError('executed code differs from the code registered in plan.json')
-    log = PLANS / plan['id'] / 'runs.jsonl'
+        raise RuntimeError('executed code differs from the code registered in the plan')
     started = 0
     for b in plan['branches']:
-        name = branch_dir(plan, b)
-        if (run_wall.RUNS / name).exists():
+        if campaign.run_status(branch_wall(plan, b)) is not None:
             continue
         if max_runs is not None and started >= max_runs:
             break
-        launch([plan['case'], name, '--policy', 'paper', '--order', b['recorded_order'].replace('-', ','),
-                '--seed', str(b['seed']), '--timeout', str(plan['timeout_seconds']),
-                '--switch', f"{b['step']}={b['order'].replace('-', ',')}"])  # TERMINATION_FAILED raises
+        argv = [plan['case'], '--parent', b['run'], '--policy', 'paper',
+                '--order', b['recorded_order'].replace('-', ','), '--seed', str(b['seed']),
+                '--timeout', str(plan['timeout_seconds']), '--switch', f"{b['step']}={b['order'].replace('-', ',')}"]
+        receipt = campaign.launch_case(plan['id'], argv, {'branch': b['name']}, launch)
         started += 1
-        status = json.loads((run_wall.RUNS / name / 'receipt.json').read_text(encoding='utf-8'))['status']
-        record = {'branch': b['name'], 'status': status, 'check_run_ok': False, 'check_branch_ok': False}
-        if status == 'PROCESS_PASS':
-            original, branch = (check_run.result_dirs(run_wall.RUNS / r)[0] for r in (b['run'], name))
-            run_check = check_run.check_run(run_wall.RUNS / name)
+        record = {'branch': b['name'], 'case_id': receipt['case_id'], 'status': receipt['status'],
+                  'check_run_ok': False, 'check_branch_ok': False}
+        if receipt['status'] == 'PROCESS_PASS':
+            original, branch = (check_run.result_dirs(cid.wall_dir(r))[0] for r in (b['run'], receipt['case_id']))
+            run_check = check_run.check_run(cid.wall_dir(receipt['case_id']))
             bc = check_branch(original, branch, {b['step']: tuple(int(c) for c in b['order'].split('-'))})
             chosen = bc['switched_choices'].get(b['step'])
             if chosen is None or list(chosen) != b['pose']:
@@ -189,8 +218,7 @@ def run_plan(plan, max_runs=None, launch=run_wall.main):
             record.update(check_run_ok=run_check['ok'], check_branch_ok=bc['ok'],
                           problems=run_check['problems'][:5] + bc['problems'][:5],
                           identical_prefix_attempts=bc['identical_prefix_attempts'])
-        with log.open('a', encoding='utf-8') as f:
-            f.write(json.dumps(record) + '\n')
+        campaign.log_run(plan['id'], record)
         if not (record['check_run_ok'] and record['check_branch_ok']):
             print(f"{b['name']}: {record}; plan stopped for inspection")
             return False
@@ -198,19 +226,21 @@ def run_plan(plan, max_runs=None, launch=run_wall.main):
 
 
 def summarize_plan(plan):
+    """Write branches.csv beside the plan's study.json; returns its rows."""
     from research.walls import check_run
     from research.walls import wall_metrics
+    campaign.require_study(plan['id'])
     rows = []
     for b in plan['branches']:
-        name = branch_dir(plan, b)
-        if not (run_wall.RUNS / name / 'receipt.json').exists():
+        wall = branch_wall(plan, b)
+        if campaign.run_status(wall) in (None, 'NO_RECEIPT'):
             continue
         row = {k: b[k] for k in ('name', 'run', 'seed', 'target', 'step', 'n_remaining', 'kind', 'order')}
-        row['pose'] = ' '.join(map(str, b['pose']))
+        row.update(wall=wall, pose=' '.join(map(str, b['pose'])))
         after = {}
-        for tag, run in (('orig', b['run']), ('branch', name)):
-            result = check_run.result_dirs(run_wall.RUNS / run)[0]
-            m = wall_metrics.wall_metrics(run_wall.RUNS / run, result)
+        for tag, run in (('orig', b['run']), ('branch', wall)):
+            result = check_run.result_dirs(cid.wall_dir(run))[0]
+            m = wall_metrics.wall_metrics(cid.wall_dir(run), result)
             for k in ('status', 'n_placed', 'wall_density', 'wall_height', 'lambda_min', 'stone_filling', 'termination'):
                 row[f'{k}_{tag}'] = m[k]
             commits = [json.loads(l) for l in (result / 'trace' / 'commits.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -225,7 +255,7 @@ def summarize_plan(plan):
             row[f'diff_{k}'] = row[f'{k}_branch'] - row[f'{k}_orig']
         rows.append(row)
     df = pd.DataFrame(rows)
-    df.to_csv(PLANS / plan['id'] / 'branches.csv', index=False)
+    df.to_csv(studies.path_of(plan['id']).parent / 'branches.csv', index=False)
     return df
 
 
@@ -248,17 +278,16 @@ def main(argv=None):
     pd.set_option('display.width', 250)
     pd.set_option('display.max_colwidth', 80)
     if args.command == 'options':
-        result = next((run_wall.RUNS / args.run).rglob('trace/commits.jsonl')).parent.parent
+        result = next(cid.wall_dir(args.run).rglob('trace/commits.jsonl')).parent.parent
         print(summarize(step_options(result, set(args.targets))).to_string(index=False))
         return 0
     if args.command == 'init':
         walls = [(run, int(seed), int(target)) for run, seed, target in (w.rsplit(':', 2) for w in args.wall)]
         plan = make_plan(args.id, walls, args.timeout)
-        (PLANS / args.id).mkdir(parents=True, exist_ok=False)
-        (PLANS / args.id / 'plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
+        register(plan)
         print(pd.DataFrame(plan['branches']).drop(columns=['name', 'run']).to_string(index=False))
         return 0
-    plan = json.loads((PLANS / args.id / 'plan.json').read_text(encoding='utf-8'))
+    plan = load_plan(args.id)
     if args.command == 'run':
         return 0 if run_plan(plan, args.max_runs) else 1
     print(summarize_plan(plan).to_string(index=False))

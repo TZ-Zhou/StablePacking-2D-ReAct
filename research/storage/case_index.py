@@ -62,10 +62,11 @@ def write_csv(path, columns, rows):
         writer.writerows(rows)
 
 
-def rebuild(root=CASES_DIR):
+def rebuild(root=None):
     """Rewrite root/index.csv from root/*/receipt.json, sorted by case id; returns the number of rows."""
-    receipts = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(Path(root).glob('*/receipt.json'))]
-    write_csv(Path(root) / INDEX, COLUMNS, [row(r) for r in receipts])
+    root = Path(CASES_DIR if root is None else root)
+    receipts = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(root.glob('*/receipt.json'))]
+    write_csv(root / INDEX, COLUMNS, [row(r) for r in receipts])
     return len(receipts)
 
 

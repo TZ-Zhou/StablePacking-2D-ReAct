@@ -18,11 +18,11 @@ stays untouched). What a run guarantees:
   the outputs for it); every setting of llm_api.CONNECTION_ENV (endpoint, headers, SDK log,
   organization/project, proxies, CA files, TLS key log) must be unset; the SDK client follows no
   redirect and reads no proxy or CA from the environment, so one attempt is one POST;
-- one run at a time: OUT/.lock is created exclusively before anything else and removed only after
-  the run's final journal state is written (a killed run leaves it: no run starts until a person
-  has looked); journal.json is created exclusively before the first request; a run name is used
-  once; a run ends 'finished' only if its billing is certain (no unknown usage, no worker failure,
-  every worker reaped) and no key was found, otherwise 'uncertain' (or 'aborted' on an exception),
+- one run at a time: the study's lock (research/studies/api-smoke/.lock) is created exclusively
+  before anything else and removed only after the run's final journal state is written (a killed
+  run leaves it: no run starts until a person has looked); llm/journal.json is created exclusively
+  before the first request; a run name is used once (the archive's runs included); a run ends
+  'finished' only if its billing is certain (no unknown usage, no worker failure, every worker reaped) and no key was found, otherwise 'uncertain' (or 'aborted' on an exception),
   and any run not finished blocks every later run until a person has looked; after a finished
   run the next one must name it (--after), so a request is never resent unknowingly;
 - the first attempt of unknown usage stops every later request (APILLM, ControllerClient), and
@@ -46,6 +46,14 @@ copied wall's seed, the event and the request's decision key again (guard: else 
 and the run ends 'aborted'); after the run, a ledger request anywhere else ends it 'uncertain'.
 --observation-version 2 gives the controller Observation and prompt version 2 (default 1).
 --loopback is for tests only: it requires OPENAI_BASE_URL on 127.0.0.1/localhost (a mock server).
+
+Each run is a new case, research/cases/<case id>/ (case_id.allocate with the copied wall's case):
+receipt.json (the copied wall's, with schema_version 2, case_id, scene, started, parent: the copied
+wall, the smoke's controller and spec_sha256; the run manifest once the replay has ended), the copied
+result directory with the replay's controller.jsonl and transport.jsonl, and the LLM records
+llm/journal.json and llm/report.json. The study research/studies/api-smoke names every run
+({'case_id', 'name'}). The runs before research/cases (smoke-001, smoke-002) stay in
+research/runs/api-smoke, read only: they are earlier runs of the same chain (names, --after, states).
 """
 import argparse
 import collections
@@ -66,10 +74,15 @@ from research.walls import check_run
 from research.controller import worker as controller_worker
 from research.controller import order_controller
 from research.controller import llm_api
+from research.paths import LEGACY_RUNS, REPO
+from research.storage import case_id as cid
+from research.storage import studies
 from research.walls import run_wall
 
-WALL = run_wall.RUNS / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
-OUT = run_wall.RUNS / 'api-smoke'
+WALL = LEGACY_RUNS / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
+STUDY = 'api-smoke'  # research/studies/api-smoke: one entry {'case_id', 'name'} per run
+LEGACY = LEGACY_RUNS / 'api-smoke'  # the runs before research/cases, one folder per name; read only
+LLM = 'llm'  # the folder of a case's LLM records: journal.json, report.json
 MODEL = 'gpt-6.1-terra'
 # USD per million tokens: input, output, cache write (the 12 h rate, the dearer), cached input:
 # developers.openai.com pricing, checked 2026-11-07; check again before a paid run
@@ -81,6 +94,7 @@ GEOMETRY = 'PARTIAL: an offline smoke on the copied Paper trajectory: no live ou
            'it validates the API flow, not the geometry, stability or quality of a wall built with the chosen orders'
 REPO_FILES = ('research/llm_walls/gpt_smoke.py', 'research/controller/order_controller.py',
               'research/controller/worker.py', 'research/controller/llm_api.py')
+Records = collections.namedtuple('Records', 'folder journal report')  # a run's folder, journal file and report file
 
 
 def spec_of(decisions=1, observation_version=1, first_step=None):
@@ -200,26 +214,64 @@ def env_problems(loopback, paid):
     return problems
 
 
-def journal_problems(out, name, after, decisions, holding=False):
+def case_records(folder):
+    """The records of a run that is a case: its LLM records are in <case>/llm/."""
+    return Records(folder, folder / LLM / 'journal.json', folder / LLM / 'report.json')
+
+
+def lock_of(study):
+    """The lock of a study's runs (one run at a time), in the study's folder."""
+    return studies.path_of(study).parent / LOCK
+
+
+def study_runs(study):
+    """{name: Records} of a study's runs in the order they were added; {} before its first run."""
+    if not studies.path_of(study).exists():
+        return {}
+    return {e['name']: case_records(cid.wall_dir(e['case_id'])) for e in studies.load(study)['cases']}
+
+
+def join_study(study, kind, design, entry):
+    """Add a run's entry to its study, which the first run creates with `design`; only under the study's lock."""
+    if not studies.path_of(study).exists():
+        studies.create(study, kind, design)
+    studies.add_case(study, entry)
+
+
+def read_journal(path):
+    """The JSON file at path; None when there is none, {'state': 'unreadable'} when it does not parse."""
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except ValueError:
+        return {'state': 'unreadable'}
+
+
+def all_runs():
+    """{name: Records} of every smoke run: the archive's (LEGACY/<name>/journal.json), then the study's cases."""
+    old = {d.name: Records(d, d / 'journal.json', d / 'report.json') for d in sorted(LEGACY.iterdir()) if d.is_dir()} \
+        if LEGACY.is_dir() else {}
+    return {**old, **study_runs(STUDY)}
+
+
+def journal_problems(name, after, decisions, holding=False):
     """Why run `name` may not start: another run's lock, a used name, an earlier run not finished
-    (started, aborted, uncertain), a missing --after. holding: this process holds the lock."""
+    (started, aborted, uncertain) or without a journal, a missing --after. holding: this process holds the lock."""
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,40}', name):
         return [f'run: the name {name!r} is not [a-z0-9-]']
-    if not holding and (out / LOCK).exists():
-        return [f'run: {out / LOCK} exists: another run is starting or running, or one ended without releasing it; '
+    lock = lock_of(STUDY)
+    if not holding and lock.exists():
+        return [f'run: {lock} exists: another run is starting or running, or one ended without releasing it; '
                 'inspect it (it is never removed automatically)']
-    if (out / name).exists():
-        return [f'run: {out / name} exists: a run name is used once, its requests are never resent']
-    runs = {}
-    for path in sorted(out.glob('*/journal.json')) if out.is_dir() else []:
-        try:
-            runs[path.parent.name] = json.loads(path.read_text(encoding='utf-8'))
-        except ValueError:
-            runs[path.parent.name] = {'state': 'unreadable'}
+    found = all_runs()
+    if name in found:
+        return [f'run: {name} was used ({found[name].folder}): a run name is used once, its requests are never resent']
+    journals = {n: read_journal(r.journal) for n, r in found.items()}
+    runs = {n: j for n, j in journals.items() if j is not None}
     problems = [f'run: {n} is {j.get("state")}{" (" + "; ".join(j["reasons"]) + ")" if j.get("reasons") else ""}: '
                 'inspect it (its billing may be unknown) before any new run' for n, j in runs.items() if j.get('state') != 'finished']
-    problems += [f'run: {d.name} has no journal: inspect it before any new run' for d in (out.iterdir() if out.is_dir() else [])
-                 if d.is_dir() and d.name not in runs]
+    problems += [f'run: {n} has no journal: inspect it before any new run' for n, j in journals.items() if j is None]
     latest = max(runs, key=lambda n: runs[n].get('started_at', ''), default=None)
     if latest is not None and after != latest:
         problems.append(f'run: an earlier run ({latest}) sent requests on this trajectory: name it with --after {latest}')
@@ -238,11 +290,11 @@ def wall_problems():
     return problems
 
 
-def preflight(name, spec, out=OUT, after=None, loopback=False, paid=False, holding=False, target=None):
+def preflight(name, spec, after=None, loopback=False, paid=False, holding=False, target=None):
     """Every problem that forbids the run; empty: it may send at most max_requests(spec) requests,
     all at the target decision point if one is given."""
     problems = spec_problems(spec) + env_problems(loopback, paid) + wall_problems() + \
-        journal_problems(out, name, after, spec.get('max_decisions', 0) if isinstance(spec, dict) else 0, holding)
+        journal_problems(name, after, spec.get('max_decisions', 0) if isinstance(spec, dict) else 0, holding)
     return problems + (target_problems(spec, target) if not spec_problems(spec) and not wall_problems() else [])
 
 
@@ -260,26 +312,34 @@ def write_jsonl(path, items):
 
 
 def provenance():
-    head = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, cwd=run_wall.REPO).stdout.strip()
-    dirty = subprocess.run(['git', 'status', '--porcelain', '--', *REPO_FILES], capture_output=True, text=True, cwd=run_wall.REPO).stdout.strip()
+    head = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, cwd=REPO).stdout.strip()
+    dirty = subprocess.run(['git', 'status', '--porcelain', '--', *REPO_FILES], capture_output=True, text=True, cwd=REPO).stdout.strip()
     spec_ = importlib.util.find_spec('openai')
     version = None
     if spec_ is not None:
         import openai
         version = openai.__version__
     return {'git_head': head, 'code_dirty': bool(dirty), 'python': sys.executable, 'openai_sdk': version,
-            'code_sha256': {f: hashlib.sha256((run_wall.REPO / f).read_bytes()).hexdigest() for f in REPO_FILES}}
+            'code_sha256': {f: hashlib.sha256((REPO / f).read_bytes()).hexdigest() for f in REPO_FILES}}
 
 
 def copy_wall(dst):
-    """The wall's receipt and first result directory (trace, decisions.txt, base.pkl) under dst."""
+    """The wall's first result directory (trace, decisions.txt, base.pkl) under dst."""
     src = check_run.result_dirs(WALL)[0]
     result = dst / src.relative_to(WALL)
     shutil.copytree(src / 'trace', result / 'trace')
     for f in ('decisions.txt', 'base.pkl'):
         shutil.copy2(src / f, result / f)
-    shutil.copy2(WALL / 'receipt.json', dst / 'receipt.json')
     return result
+
+
+def case_receipt(source, case_id, started, spec):
+    """The receipt of a smoke case: the copied wall's (source), with the case's own fields, the copied
+    wall as its parent and the smoke's controller; the run manifest is added once the replay has ended."""
+    receipt = {**source, 'schema_version': 2, 'case_id': case_id, 'scene': cid.scene_code(source['case']),
+               'parent': WALL.relative_to(LEGACY_RUNS).as_posix(), 'started': started.isoformat(timespec='seconds'),
+               'controller': spec, 'smoke_of': source.get('status')}
+    return {**receipt, 'spec_sha256': cid.spec_sha256(receipt)}
 
 
 def requests_of(records, prices):
@@ -374,23 +434,24 @@ def refuse(problems):
     raise SystemExit('refused, nothing sent:\n  ' + '\n  '.join(problems))
 
 
-def run_smoke(name, spec, out=OUT, after=None, loopback=False, target=None):
-    """One smoke run (see the module docstring) under the lock; returns its report (report.json)."""
-    problems = preflight(name, spec, out, after, loopback, paid=True, target=target)
+def run_smoke(name, spec, after=None, loopback=False, target=None):
+    """One smoke run (see the module docstring) under the study's lock; returns its report (llm/report.json)."""
+    problems = preflight(name, spec, after, loopback, paid=True, target=target)
     if problems:
         refuse(problems)
-    out.mkdir(parents=True, exist_ok=True)
+    lock = lock_of(STUDY)
+    lock.parent.mkdir(parents=True, exist_ok=True)
     try:
-        write_json(out / LOCK, {'name': name, 'pid': os.getpid(), 'at': datetime.datetime.now().isoformat(timespec='seconds')}, exclusive=True)
+        write_json(lock, {'name': name, 'pid': os.getpid(), 'at': datetime.datetime.now().isoformat(timespec='seconds')}, exclusive=True)
     except FileExistsError:
-        refuse(journal_problems(out, name, after, 0))
+        refuse(journal_problems(name, after, 0))
     try:
-        problems = preflight(name, spec, out, after, loopback, paid=True, holding=True, target=target)  # again, under the lock
+        problems = preflight(name, spec, after, loopback, paid=True, holding=True, target=target)  # again, under the lock
         if problems:
             refuse(problems)
-        return locked_run(name, spec, out, after, loopback, target)
+        return locked_run(name, spec, after, loopback, target)
     finally:  # only after the run's final journal state is written (a killed run leaves the lock)
-        (out / LOCK).unlink()
+        lock.unlink()
 
 
 def guard(transport, client, target, run):
@@ -410,17 +471,25 @@ def guard(transport, client, target, run):
     transport.decide = decide
 
 
-def locked_run(name, spec, out, after, loopback, target=None):
-    run = out / name
-    run.mkdir()
+def locked_run(name, spec, after, loopback, target=None):
+    """The run in a new case: allocated and named in the study first, its journal before the first request."""
+    source = json.loads((WALL / 'receipt.json').read_text(encoding='utf-8'))
+    started = datetime.datetime.now().astimezone()
+    case_id, run = cid.allocate(source['case'], started)
+    design = {'runner': 'research/llm_walls/gpt_smoke.py', 'wall': WALL.relative_to(LEGACY_RUNS).as_posix(), 'limits': LIMITS}
+    join_study(STUDY, STUDY, design, {'case_id': case_id, 'name': name})
+    files = case_records(run)
+    files.journal.parent.mkdir()
     full = order_controller.full_spec(spec)
     journal = {'state': 'started', 'started_at': datetime.datetime.now().isoformat(timespec='seconds'), 'after': after,
-               'wall': WALL.relative_to(run_wall.REPO).as_posix(), 'spec': full, 'max_http_requests': max_requests(full),
+               'case_id': case_id, 'wall': WALL.relative_to(REPO).as_posix(), 'spec': full,
+               'max_http_requests': max_requests(full),
                'mode': 'loopback mock' if loopback else 'paid', **({'target': target} if target else {}), **provenance()}
-    write_json(run / 'journal.json', journal, exclusive=True)  # before the first request
+    write_json(files.journal, journal, exclusive=True)  # before the first request
     report, transport, reasons = {}, None, []
     try:
         result = copy_wall(run)
+        write_json(run / 'receipt.json', case_receipt(source, case_id, started, full))
         base, ledger, records = order_controller.base_policy(run), [], []
         transport = controller_worker.ProcessTransport(full)
         # order_controller.rerun's loop, with the client kept: its own unknown_usage counts a worker
@@ -437,7 +506,7 @@ def locked_run(name, spec, out, after, loopback, target=None):
         write_jsonl(result / 'trace' / 'controller.jsonl', records)
         write_jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
-        write_json(run / 'receipt.json', {**receipt, 'controller': full, 'smoke_of': receipt.get('status'), 'manifest': run_wall.manifest(run)})
+        write_json(run / 'receipt.json', {**receipt, 'manifest': run_wall.manifest(run)})
         reaped = transport.process is None and transport.unreaped is None and not multiprocessing.active_children()
         worker = order_controller.worker_problems(ledger, False)[0]
         decisions = [r for r in records if r.get('decision_point') and not r['source'].startswith('skip')]
@@ -456,8 +525,8 @@ def locked_run(name, spec, out, after, loopback, target=None):
                   'worker_failures': [{k: x.get(k) for k in ('event', 'status', 'error', 'worker_pid')} for x in failures],
                   'workers': {'reaped': reaped, 'ledger_problems': worker}, 'geometry_validation': GEOMETRY}
         report['check'] = offline_check(run, full)
-        write_json(run / 'report.json', report)
-        report['key_scan'] = key_scan(run)  # report.json included
+        write_json(files.report, report)
+        report['key_scan'] = key_scan(run)  # llm/report.json included
         elsewhere = []
         if target is not None:  # every request of the ledger at the target decision point, nothing else
             at = (target['event'], *(target[k] for k in DECISION_KEYS))
@@ -469,7 +538,7 @@ def locked_run(name, spec, out, after, loopback, target=None):
         report['clean'] = bool(report['check']['ok'] and not reasons)
         report['api_success'] = bool(report['clean'] and any(x.get('outcome') == 'reply' and x.get('billed') == 'reported' for x in rows)
                                      and any(r['source'] == 'llm' for r in decisions))
-        write_json(run / 'report.json', report)
+        write_json(files.report, report)
         state = 'uncertain' if reasons else 'finished'
     except BaseException as error:  # the journal keeps the run blocked for inspection
         state, report, reasons = 'aborted', {'error': order_controller.error_text(error)}, ['an exception: ' + order_controller.error_text(error)]
@@ -477,7 +546,7 @@ def locked_run(name, spec, out, after, loopback, target=None):
     finally:
         if transport is not None:
             transport.close('smoke_end')
-        write_json(run / 'journal.json', {**journal, 'state': state, 'reasons': reasons, 'ended_at': datetime.datetime.now().isoformat(timespec='seconds'),
+        write_json(files.journal, {**journal, 'state': state, 'reasons': reasons, 'ended_at': datetime.datetime.now().isoformat(timespec='seconds'),
                                           'clean': report.get('clean'), 'api_success': report.get('api_success'), 'error': report.get('error')})
     return report
 
@@ -497,12 +566,16 @@ def main(argv=None):
     target = args.target
     spec = spec_of(args.decisions, args.observation_version, None if target is None else target['step'])
     if args.action == 'check':
-        report = offline_check(OUT / args.name, order_controller.full_spec(json.loads((OUT / args.name / 'journal.json').read_text(encoding='utf-8'))['spec']))
-        report['key_scan'] = key_scan(OUT / args.name)
+        run = all_runs().get(args.name)
+        if run is None:
+            raise SystemExit(f'check: no smoke run is named {args.name}')
+        journal = json.loads(run.journal.read_text(encoding='utf-8'))
+        report = offline_check(run.folder, order_controller.full_spec(journal['spec']))
+        report['key_scan'] = key_scan(run.folder)
         print(json.dumps(report, indent=1))
         return 0 if report['ok'] and not report['key_scan'] else 1
     if args.action == 'preflight':
-        problems = preflight(args.name, spec, OUT, after=args.after, loopback=args.loopback, paid=False, target=target)
+        problems = preflight(args.name, spec, after=args.after, loopback=args.loopback, paid=False, target=target)
         full = order_controller.full_spec(spec)
         print(json.dumps({'spec': full, 'observation_version': order_controller.observation_version(full), 'target': target,
                           'plan': plan_of(spec) if not spec_problems(spec) and not wall_problems() else None,
@@ -514,7 +587,7 @@ def main(argv=None):
         return 1 if problems else 0
     if not (args.confirm_paid or args.loopback):
         raise SystemExit('run needs --confirm-paid (real, paid requests)')
-    report = run_smoke(args.name, spec, OUT, after=args.after, loopback=args.loopback, target=target)
+    report = run_smoke(args.name, spec, after=args.after, loopback=args.loopback, target=target)
     summary = {'api_success': report['api_success'], 'clean': report['clean'], 'check_verdict': report['check']['verdict'],
                'geometry_validation': report['geometry_validation']}
     print(json.dumps({**summary, **{k: v for k, v in report.items() if k not in summary and k != 'requests'}}, indent=1))

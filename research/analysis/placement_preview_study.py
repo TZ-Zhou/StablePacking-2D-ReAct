@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import spearmanr
 
-from research.paths import QUALITY_DIR, RUNS
+from research.paths import LEGACY_RUNS, QUALITY_DIR
 from research.controller import order_controller
 from research.walls import wall_metrics
 from research.analysis import placement_preview
@@ -95,7 +95,7 @@ def decisions(run, lib, wedges):
                              'n_supports': None if p is None else p['n_supports']})
         paper = classes.index(info['paper']) if info['paper'] in classes else None
         selected = int(a['selected'])
-        row = {'run': str(Path(run).relative_to(RUNS).as_posix()), 'event': int(meta['event']), 'step': int(meta['step']),
+        row = {'run': str(Path(run).relative_to(LEGACY_RUNS).as_posix()), 'event': int(meta['event']), 'step': int(meta['step']),
                'side': meta['side'], 'n_rocks': int(np.count_nonzero(np.unique(placement_preview.rock_labels(world, wedges)))),
                'now': now, 'n_outcomes': len(classes), 'outcomes': outcomes, 'paper': paper,
                'recorded': classes.index(selected) if selected in classes else None}
@@ -124,10 +124,10 @@ def main(argv=None):
     if out.exists():
         raise SystemExit(f'{out} exists')
     final = {r['run']: r for r in csv.DictReader(open(QUALITY, encoding='utf-8'))}
-    walls = [RUNS / run for run in final]
-    plans = [json.loads((RUNS / 'branches' / p / 'plan.json').read_text(encoding='utf-8')) for p in BRANCH_PLANS]
+    walls = [LEGACY_RUNS / run for run in final]
+    plans = [json.loads((LEGACY_RUNS / 'branches' / p / 'plan.json').read_text(encoding='utf-8')) for p in BRANCH_PLANS]
     branches = [(p['id'], b) for p in plans for b in p['branches'] if b['kind'] != 'neutral']
-    lib = shape_library(walls + [RUNS / 'branches' / pid / b['name'] for pid, b in branches])
+    lib = shape_library(walls + [LEGACY_RUNS / 'branches' / pid / b['name'] for pid, b in branches])
 
     rows = []
     for run in walls:
@@ -143,7 +143,7 @@ def main(argv=None):
         at = {run: next((r['now'] for r in rs if r['n_rocks'] == k), None) for run, rs in by_run.items()}
         checkpoints[k] = {f: {m: spearman([None if at[run] is None else at[run][f] for run in final],
                                           [float(final[run][m]) for run in final]) for m in FINAL} for f in CHANGE}
-    end = {run: placement_preview.quality(pickle.load(open(result_of(RUNS / run) / 'base.pkl', 'rb')).matrix, wedge_values(RUNS / run))
+    end = {run: placement_preview.quality(pickle.load(open(result_of(LEGACY_RUNS / run) / 'base.pkl', 'rb')).matrix, wedge_values(LEGACY_RUNS / run))
            for run in final}
     at_end = {f: {m: spearman([end[run][f] for run in final], [float(final[run][m]) for run in final]) for m in FINAL}
               for f in CHANGE}
@@ -153,7 +153,7 @@ def main(argv=None):
     # B: branch points: preview at the decision against the alternatives' final values
     points = {}
     for pid, b in branches:
-        run = RUNS / b['run']
+        run = LEGACY_RUNS / b['run']
         parent = by_run[b['run']]
         commit = next(c for c in map(json.loads, open(result_of(run) / 'trace' / 'commits.jsonl', encoding='utf-8'))
                       if c['step'] == b['step'] and c.get('stone_id') is not None)
@@ -162,7 +162,7 @@ def main(argv=None):
         a = dict(np.load(result_of(run) / 'trace' / f'e{event:05d}.npz'))
         stone, rot, x, y = b['pose']
         hit = np.flatnonzero((a['stone_id'] == stone) & (a['rotation_world'] == rot) & (a['x_world'] == x) & (a['y'] == y))
-        branch_run = RUNS / 'branches' / pid / b['name']
+        branch_run = LEGACY_RUNS / 'branches' / pid / b['name']
         q = wall_metrics.wall_quality(branch_run, result_of(branch_run), 'corrected')
         wm = wall_metrics.wall_metrics(branch_run, result_of(branch_run))
         point = points.setdefault(f"{b['run']}@{b['step']}", {'row': row, 'alternatives': {}})

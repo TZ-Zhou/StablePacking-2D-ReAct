@@ -13,6 +13,10 @@ experiment's code, RNG, stones and settings. Its inputs are the seed, the order 
 it reads no final wall and no quality. run then requires every trace event of the lookahead to be
 the existing wall's (parent or branch) event of the same number: same candidates, choice and
 wall; it stops at the first difference.
+The lookahead walls form the study lookahead-p1 (research/storage/studies.py, kind 'lookahead', design
+DESIGN): each new one is a case built by run_wall.run --parent <the point's recorded wall>, listed as
+{case_id, point, alt}. The walls built before research/cases stay in the research/runs archive at
+lookahead-p1/<name> and count as built; the branch plans are read by counterfactual_branches.load_plan.
 
 State after k = 0, 2, 4 placements past the alternative: the wall of the first selection event
 of placement P + k + 1 (k = 0: the alternative placed and stabilized, the single-step state);
@@ -45,15 +49,21 @@ from types import SimpleNamespace
 import numpy as np
 
 from research.paths import QUALITY_DIR
+from research.analysis import counterfactual_branches
 from research.analysis import placement_preview
+from research.storage import case_id as cid
+from research.storage import studies
+from research.walls import campaign
 from research.walls import run_wall
 
-RUNS = run_wall.RUNS
-OUT = 'lookahead-p1'
+STUDY = 'lookahead-p1'  # the study id, and the folder of the archived lookahead walls in research/runs
 PLANS = ['paper-hardstone-01', 'smoke-001-cf']
+CASE = 'thangavelu-noise80'
+TIMEOUT = 2400
 K = 4
 DEPTHS = (0, 2, 4)
 ORDER = '3,0,2,1,4'
+DESIGN = {'case': CASE, 'plans': PLANS, 'k': K, 'depths': list(DEPTHS), 'order': ORDER, 'timeout_seconds': TIMEOUT}
 # lookahead value: (final value, +1 higher is better / -1 lower, for the lookahead value, for the final)
 VALUES = {'lost': ('placed_ratio', -1, 1), 'sf': ('F_SF', 1, 1), 'ah': ('F_AH', -1, -1), 'av': ('F_AV', 1, 1), 'lr': ('F_LR', 1, 1)}
 
@@ -67,17 +77,22 @@ def commits(run):
 
 
 def points():
-    """{(parent run, step): [alternative]}; an alternative: name, its existing wall, switch."""
+    """{(parent run, step): [alternative]}; an alternative: name, its existing wall (case_id.wall_dir), switch, seed."""
     out = {}
     for pid in PLANS:
-        plan = json.loads((RUNS / 'branches' / pid / 'plan.json').read_text(encoding='utf-8'))
+        plan = counterfactual_branches.load_plan(pid)
         for b in plan['branches']:
-            if b['kind'] == 'neutral':
+            wall = counterfactual_branches.branch_wall(plan, b)
+            if b['kind'] == 'neutral' or wall is None:
                 continue
             alts = out.setdefault((b['run'], b['step']), [{'name': 'recorded', 'wall': b['run'], 'switch': None, 'seed': b['seed']}])
-            alts.append({'name': b['name'], 'wall': f"branches/{pid}/{b['name']}", 'switch': f"{b['step']}={b['order'].replace('-', ',')}",
+            alts.append({'name': b['name'], 'wall': wall, 'switch': f"{b['step']}={b['order'].replace('-', ',')}",
                          'seed': b['seed']})
     return out
+
+
+def point_name(parent, step):
+    return f'{Path(parent).name}@{step}'
 
 
 def placed_before(run, step):
@@ -85,7 +100,27 @@ def placed_before(run, step):
 
 
 def lookahead_name(parent, step, alt):
-    return f"{OUT}/{Path(parent).name}-step{step}-{alt['name'] if alt['switch'] else 'recorded'}"
+    """The name of a lookahead wall in the research/runs archive, below STUDY."""
+    return f"{Path(parent).name}-step{step}-{alt['name'] if alt['switch'] else 'recorded'}"
+
+
+def lookahead_wall(parent, step, alt):
+    """The lookahead wall of an alternative, for case_id.wall_dir: the case the study lists, else the wall
+    of the same name in the research/runs archive; None when neither exists."""
+    if campaign.is_study(STUDY):
+        found = studies.find(STUDY, point=point_name(parent, step), alt=alt['name'])
+        if found:
+            return found[-1]['case_id']
+    archived = f'{STUDY}/{lookahead_name(parent, step, alt)}'
+    return archived if cid.wall_dir(archived).exists() else None
+
+
+def open_study():
+    """The study, created with DESIGN on first use; one registered with another design is refused."""
+    if not campaign.is_study(STUDY):
+        studies.create(STUDY, 'lookahead', DESIGN)
+    elif studies.load(STUDY)['design'] != DESIGN:
+        raise SystemExit(f'study {STUDY} was registered with another design than DESIGN')
 
 
 def same_events(look, wall):
@@ -100,24 +135,26 @@ def same_events(look, wall):
     return bad
 
 
-def run(max_runs=None):
+def run(max_runs=None, launch=run_wall.run):
+    """Build the lookahead walls not built yet; False at the first one that fails or differs from its wall."""
+    open_study()
     started = 0
     for (parent, step), alts in points().items():
-        n = placed_before(RUNS / parent, step) + 1 + K + 1
+        n = placed_before(cid.wall_dir(parent), step) + 1 + K + 1
         for alt in alts:
-            name = lookahead_name(parent, step, alt)
-            if (RUNS / name).exists():
+            if lookahead_wall(parent, step, alt) is not None:
                 continue
             if max_runs is not None and started >= max_runs:
                 return True
-            args = ['thangavelu-noise80', name, '--policy', 'paper', '--order', ORDER, '--seed', str(alt['seed']),
-                    '--timeout', '2400', '--placements', str(n)] + (['--switch', alt['switch']] if alt['switch'] else [])
-            run_wall.main(args)
+            args = [CASE, '--parent', parent, '--policy', 'paper', '--order', ORDER, '--seed', str(alt['seed']),
+                    '--timeout', str(TIMEOUT), '--placements', str(n)]
+            args += ['--switch', alt['switch']] if alt['switch'] else []
+            receipt = campaign.launch_case(STUDY, args, {'point': point_name(parent, step), 'alt': alt['name']}, launch)
             started += 1
-            status = json.loads((RUNS / name / 'receipt.json').read_text(encoding='utf-8'))['status']
-            bad = same_events(RUNS / name, RUNS / alt['wall'])
-            print(json.dumps({'run': name, 'status': status, 'differs': bad[:3]}), flush=True)
-            if status not in ('STOPPED_AFTER_PLACEMENTS', 'PROCESS_PASS') or bad:
+            built = receipt['status'] in run_wall.SUCCESS
+            bad = same_events(cid.wall_dir(receipt['case_id']), cid.wall_dir(alt['wall'])) if built else []
+            print(json.dumps({'run': receipt['case_id'], 'status': receipt['status'], 'differs': bad[:3]}), flush=True)
+            if not built or bad:
                 print('stopped for inspection')
                 return False
     return True
@@ -182,7 +219,7 @@ def finals(alt):
     q = {r['run']: r for r in csv.DictReader(open(QUALITY_DIR / 'wang-quality-v1' / 'quality.csv', encoding='utf-8'))}
     if alt['wall'] in q:
         return {v[0]: float(q[alt['wall']][v[0]]) for v in VALUES.values()}
-    wall = RUNS / alt['wall']
+    wall = cid.wall_dir(alt['wall'])
     v = wall_metrics.wall_quality(wall, result_of(wall), 'corrected')
     return {**{m: v[m] for m in ('F_SF', 'F_AH', 'F_AV', 'F_LR')}, 'placed_ratio': wall_metrics.wall_metrics(wall, result_of(wall))['placed_ratio']}
 
@@ -202,11 +239,14 @@ def evaluate(out):
         raise SystemExit(f'{out} exists')
     rows = []
     for (parent, step), alts in points().items():
-        p = placed_before(RUNS / parent, step) + 1  # with the alternative's own placement
+        p = placed_before(cid.wall_dir(parent), step) + 1  # with the alternative's own placement
         for alt in alts:
-            look = RUNS / lookahead_name(parent, step, alt)
+            wall = lookahead_wall(parent, step, alt)
+            if wall is None:
+                raise SystemExit(f"no lookahead wall of {alt['name']} at {point_name(parent, step)}: build it with run")
+            look = cid.wall_dir(wall)
             receipt = json.loads((look / 'receipt.json').read_text(encoding='utf-8'))
-            rows.append({'point': f'{Path(parent).name}@{step}', 'alt': alt['name'], 'states': states(look, p), 'final': finals(alt),
+            rows.append({'point': point_name(parent, step), 'alt': alt['name'], 'states': states(look, p), 'final': finals(alt),
                          'elapsed_seconds': receipt['elapsed_seconds']})
     table = {}
     for k in DEPTHS:

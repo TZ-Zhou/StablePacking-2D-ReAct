@@ -332,7 +332,8 @@ def wall_quality(run, result, canvas='author', leave_out=True, overlap='later'):
 
 
 def step_rows(result):
-    """One row per sampling attempt: the action taken and the candidate set it was taken from."""
+    """One row per sampling attempt: the action taken, the candidate set it was taken from and the policy
+    and order that selection used (a --switch or a controller changes them from step to step)."""
     result = Path(result)
     rows = []
     for c in read_jsonl(result / 'trace' / 'commits.jsonl'):
@@ -344,7 +345,8 @@ def step_rows(result):
             meta, a = load_trace(result / 'trace' / f"e{side['event']:05d}.npz")
             p = meta['policy']
             sel = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'])
-            row.update(event=side['event'], n_candidates=len(a['stone_id']),
+            order = '' if p['order'] is None else '-'.join(map(str, p['order']))
+            row.update(event=side['event'], policy=p['policy'], order=order, n_candidates=len(a['stone_id']),
                        n_stones=len(set(a['stone_id'].tolist())), n_feasible=int((a['features_raw'][:, 3] > 0).sum()),
                        branch=meta['branch'], final_ties=tie_count(a['features_raw'], a['weights'], sel, p['policy'],
                                                                   p['order'], p['tol']))

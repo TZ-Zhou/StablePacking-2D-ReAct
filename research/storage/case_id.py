@@ -103,10 +103,11 @@ def spec_sha256(receipt):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def allocate(case, start=None, hostname=None, root=CASES_DIR):
+def allocate(case, start=None, hostname=None, root=None):
     """Reserve the folder of a new wall: its id from the start time, the case's scene and this computer,
-    claimed by an exclusive mkdir so that two launches never share one. Returns (case_id, folder)."""
-    root = Path(root)
+    claimed by an exclusive mkdir so that two launches never share one. Returns (case_id, folder) under
+    `root` (default research/cases)."""
+    root = Path(CASES_DIR if root is None else root)
     if root.resolve().is_relative_to(LEGACY_RUNS.resolve()):
         raise ValueError(f'{LEGACY_RUNS} is an archive: new walls go to {CASES_DIR}')
     start = start or datetime.now().astimezone()

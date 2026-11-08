@@ -1,6 +1,10 @@
 """Offline 120-order sensitivity test on traced candidate score matrices.
 
-Usage: python -B -m research.analysis.order_sensitivity <trace dir> <new output dir> [--tol 1e-9]
+Usage: python -B -m research.analysis.order_sensitivity <trace dir> [<new output dir>] [--tol 1e-9]
+
+Without an output dir, a trace dir inside a case folder of research/cases writes to
+<case>/derived/order-sensitivity-v2/ (METHOD). An output dir must not exist yet and must not lie
+in the research/runs archive.
 
 Reads only trace/*.npz written during construction (no convolution, placement or kinematics
 is re-run) and replays every permutation of the five filters with the paper-style cascade on
@@ -20,7 +24,10 @@ from pathlib import Path
 
 import numpy as np
 
+from research.storage import case_id
 from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, load_trace, select, tie_count, tied_candidates
+
+METHOD = 'order-sensitivity-v2'  # the folder name under <case>/derived/ for this module's outputs
 
 
 def order_name(order):
@@ -239,12 +246,30 @@ def write_csv(path, rows, fields=None):
         writer.writerows(rows)
 
 
+def default_output_dir(trace_dir):
+    """<case>/derived/METHOD for a trace dir inside a case folder of research/cases; SystemExit otherwise."""
+    cases = case_id.CASES_DIR.resolve()
+    trace = Path(trace_dir).resolve()
+    parts = trace.relative_to(cases).parts if trace.is_relative_to(cases) else ()
+    if not parts or not case_id.is_case_id(parts[0]):
+        raise SystemExit(f'{trace_dir} is not inside a case folder of {case_id.CASES_DIR}: give an output dir')
+    return cases / parts[0] / 'derived' / METHOD
+
+
+def check_output_dir(output_dir):
+    """Refuse an output dir inside the research/runs archive, which is never written."""
+    if Path(output_dir).resolve().is_relative_to(case_id.LEGACY_RUNS.resolve()):
+        raise SystemExit(f'{output_dir} is in the archive {case_id.LEGACY_RUNS}: give an output dir elsewhere')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('trace_dir', type=Path)
-    parser.add_argument('output_dir', type=Path)
+    parser.add_argument('output_dir', type=Path, nargs='?', help='default: <case>/derived/' + METHOD)
     parser.add_argument('--tol', type=float, default=1e-9)
     args = parser.parse_args(argv)
+    args.output_dir = args.output_dir or default_output_dir(args.trace_dir)
+    check_output_dir(args.output_dir)
     files = sorted(args.trace_dir.glob('e*.npz'))
     files = [f for f in files if not f.name.endswith('.tmp.npz')]
     if not files:

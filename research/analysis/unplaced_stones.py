@@ -26,8 +26,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from research.storage.case_id import wall_dir
 from research.walls import campaign
-from research.walls import run_wall
 
 from Stonepacker2D.stack.selection import load_trace  # noqa: E402
 
@@ -107,7 +107,7 @@ def wall_summary(attempts, stones, hard=()):
 def analyze(manifest, hard=()):
     attempts, stones, walls = [], [], []
     for w in manifest.itertuples():
-        result = next((run_wall.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
+        result = next(wall_dir(w.run).rglob('trace/commits.jsonl')).parent.parent
         a, s = attempt_rows(result)
         tag = {'arm': w.arm, 'seed': w.seed, 'complete': w.n_placed == w.n_input}
         a, s = pd.DataFrame(a).assign(**tag), pd.DataFrame(s).assign(**tag)
@@ -125,7 +125,7 @@ def main(argv=None):
                         help='stone ids counted in hard_left_at_4')
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=False)
-    manifest = pd.read_csv(campaign.CAMPAIGNS / args.id / 'manifest.csv')
+    manifest = pd.read_csv(campaign.manifest_path(args.id))
     attempts, stones, walls = analyze(manifest[manifest.status == 'PROCESS_PASS'], args.hard)
     attempts.to_csv(args.out / 'attempts.csv', index=False)
     stones.to_csv(args.out / 'stones.csv', index=False)

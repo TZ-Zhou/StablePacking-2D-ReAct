@@ -5,10 +5,12 @@ Tests marked 'existing run' use traced runs under research/runs (git-ignored) an
 when those directories are absent.
 """
 import difflib
+import itertools
 import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +18,9 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+from research.paths import LEGACY_RUNS  # noqa: E402
+from research.storage import case_id  # noqa: E402
+from research.storage import studies  # noqa: E402
 from research.walls import campaign  # noqa: E402
 from research.walls import check_run  # noqa: E402
 from research.walls import wall_metrics  # noqa: E402
@@ -23,6 +28,33 @@ from research.walls import run_wall  # noqa: E402
 
 THANGAVELU = REPO / 'research' / 'runs' / 'thangavelu-noise80-code-original-full-01'
 PR_RIGHT = REPO / 'research' / 'runs' / 'validation-pr-paper-right-01'
+MINUTES = itertools.count()
+
+
+def sandbox(test, *more):
+    """Point research/runs, research/cases and research/studies at a temporary folder for `test` and return
+    it; each of `more` is a further module whose LEGACY_RUNS is patched."""
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    root = Path(tmp.name)
+    targets = [(case_id, 'CASES_DIR', root / 'cases'), (studies, 'STUDIES_DIR', root / 'studies')]
+    targets += [(module, 'LEGACY_RUNS', root / 'runs') for module in (case_id, campaign, *more)]
+    for module, name, path in targets:
+        patcher = mock.patch.object(module, name, path)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+    return root
+
+
+def fake_wall(argv, status):
+    """What run_wall.run leaves: a new case folder in the patched research/cases with its receipt, which it
+    returns. One minute per wall, so that a test never runs out of same-minute suffixes."""
+    start = datetime(2026, 11, 8, 12, 0) + timedelta(minutes=next(MINUTES))
+    wall, out = case_id.allocate(argv[0], start=start, hostname='GIAAIL-STRIX')
+    receipt = {'case_id': wall, 'case': argv[0], 'status': status,
+               'parent': argv[argv.index('--parent') + 1] if '--parent' in argv else None}
+    (out / 'receipt.json').write_text(json.dumps(receipt), encoding='utf-8')
+    return receipt
 
 
 class SeedStaging(unittest.TestCase):
@@ -49,31 +81,50 @@ class DifferingFiles(unittest.TestCase):
 
 
 class BranchRunner(unittest.TestCase):
+    BRANCH = {'name': 'b1', 'run': 'orig', 'seed': 7, 'target': 13, 'step': 10, 'kind': 'target',
+              'pose': [13, 0, 1, 2], 'order': '0-1-2-3-4', 'recorded_order': '3-0-2-1-4'}
+
     def test_stops_at_first_failure_and_refuses_changed_code(self):
         from research.analysis import counterfactual_branches
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_wall, 'RUNS', Path(tmp)), \
-                mock.patch.object(counterfactual_branches, 'PLANS', Path(tmp) / 'branches'):
-            branch = {'name': 'b1', 'run': 'orig', 'seed': 7, 'target': 13, 'step': 10, 'kind': 'target',
-                      'pose': [13, 0, 1, 2], 'order': '0-1-2-3-4', 'recorded_order': '3-0-2-1-4'}
-            plan = {'id': 'p', 'case': 'thangavelu-noise80', 'timeout_seconds': 2400, 'code_sha256': run_wall.code_fingerprint(),
-                    'branches': [branch, {**branch, 'name': 'b2'}]}
-            (Path(tmp) / 'branches' / 'p').mkdir(parents=True)
-            calls = []
+        sandbox(self, counterfactual_branches)
+        plan = {'id': 'p', 'case': 'thangavelu-noise80', 'timeout_seconds': 2400,
+                'code_sha256': run_wall.code_fingerprint(), 'branches': [self.BRANCH, {**self.BRANCH, 'name': 'b2'}]}
+        counterfactual_branches.register(plan)
+        calls = []
 
-            def launch(argv):
-                calls.append(argv)
-                out = run_wall.RUNS / argv[1]
-                out.mkdir(parents=True)
-                (out / 'receipt.json').write_text(json.dumps({'status': 'TIMEOUT'}))
-            self.assertFalse(counterfactual_branches.run_plan(plan, launch=launch))
-            self.assertEqual(len(calls), 1)                              # stopped after the failed wall
-            self.assertEqual(calls[0][calls[0].index('--switch') + 1], '10=0,1,2,3,4')
-            self.assertEqual(calls[0][calls[0].index('--order') + 1], '3,0,2,1,4')
-            calls.clear()
-            self.assertFalse(counterfactual_branches.run_plan(plan, launch=launch))  # b1 kept, b2 runs (and fails) next
-            self.assertEqual([c[1] for c in calls], ['branches/p/b2'])
-            with self.assertRaises(RuntimeError):
-                counterfactual_branches.run_plan({**plan, 'code_sha256': {}}, launch=launch)
+        def launch(argv):
+            calls.append(argv)
+            return fake_wall(argv, 'TIMEOUT')
+        self.assertFalse(counterfactual_branches.run_plan(plan, launch=launch))
+        self.assertEqual(len(calls), 1)                              # stopped after the failed wall
+        self.assertEqual(calls[0][calls[0].index('--parent') + 1], 'orig')
+        self.assertEqual(calls[0][calls[0].index('--switch') + 1], '10=0,1,2,3,4')
+        self.assertEqual(calls[0][calls[0].index('--order') + 1], '3,0,2,1,4')
+        calls.clear()
+        self.assertFalse(counterfactual_branches.run_plan(plan, launch=launch))  # b1 kept, b2 runs (and fails) next
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([e['branch'] for e in studies.load('p')['cases']], ['b1', 'b2'])
+        second = studies.find('p', branch='b2')[0]['case_id']
+        self.assertEqual(counterfactual_branches.branch_wall(plan, plan['branches'][1]), second)
+        self.assertEqual(len((studies.path_of('p').parent / 'runs.jsonl').read_text(encoding='utf-8').splitlines()), 2)
+        with self.assertRaises(RuntimeError):
+            counterfactual_branches.run_plan({**plan, 'code_sha256': {}}, launch=launch)
+
+    def test_a_plan_of_the_archive_is_read_and_never_built_into(self):
+        from research.analysis import counterfactual_branches as branches
+        root = sandbox(self, branches)
+        plan = {'id': 'old', 'case': 'thangavelu-noise80', 'timeout_seconds': 2400,
+                'code_sha256': run_wall.code_fingerprint(), 'branches': [self.BRANCH]}
+        (root / 'runs' / 'branches' / 'old').mkdir(parents=True)
+        (root / 'runs' / 'branches' / 'old' / 'plan.json').write_text(json.dumps(plan), encoding='utf-8')
+        self.assertEqual(branches.load_plan('old'), plan)
+        self.assertEqual(branches.branch_wall(plan, self.BRANCH), 'branches/old/b1')
+        with self.assertRaises(FileExistsError):
+            branches.register(plan)
+        with self.assertRaises(RuntimeError):
+            branches.run_plan(plan, launch=lambda argv: self.fail('a wall was launched'))
+        with self.assertRaises(RuntimeError):
+            branches.summarize_plan(plan)
 
 
 class OrderSwitch(unittest.TestCase):
@@ -135,42 +186,54 @@ class CampaignDesign(unittest.TestCase):
 
 class CampaignRunner(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        runs = Path(self.tmp.name)
-        self.patches = [mock.patch.object(run_wall, 'RUNS', runs), mock.patch.object(campaign, 'CAMPAIGNS', runs / 'campaigns')]
-        for p in self.patches:
-            p.start()
+        self.root = sandbox(self)
         self.c = registered()
-        (runs / 'campaigns' / 'c').mkdir(parents=True)
+        campaign.register(self.c)
         self.calls = []
-
-    def tearDown(self):
-        for p in self.patches:
-            p.stop()
-        self.tmp.cleanup()
 
     def launcher(self, statuses):
         def launch(argv):
             self.calls.append(argv)
-            out = run_wall.RUNS / argv[1]
-            out.mkdir(parents=True)
             status = statuses.get(len(self.calls), 'PROCESS_PASS')
             if status == 'TERMINATION_FAILED':
-                raise RuntimeError('not verified stopped')
-            (out / 'receipt.json').write_text(json.dumps({'status': status}))
+                raise run_wall.TerminationFailed(fake_wall(argv, status))
+            return fake_wall(argv, status)
         return launch
+
+    def extended_arms(self):
+        random = next(a['order'] for a in self.c['arms'] if a['name'].startswith('random'))
+        return ['code_original', 'paper=3,0,2,1,4', 'alt=2,4,3,1,0', 'random=' + ','.join(map(str, random)),
+                'mainstream=4,1,0,3,2']
+
+    def archived_campaign(self, name='old'):
+        """A campaign in the temporary archive: campaign.json, manifest.csv, a passed wall per cell at its legacy path."""
+        design = registered(campaign_id=name)
+        folder = campaign.legacy_dir(name)
+        folder.mkdir(parents=True)
+        (folder / 'campaign.json').write_text(json.dumps(design), encoding='utf-8')
+        (folder / 'manifest.csv').write_text('arm,seed,run\n', encoding='utf-8')
+        for _, _, wall in campaign.planned_runs(design):
+            case_id.wall_dir(wall).mkdir(parents=True)
+            receipt = json.dumps({'status': 'PROCESS_PASS'})
+            (case_id.wall_dir(wall) / 'receipt.json').write_text(receipt, encoding='utf-8')
+        return design
+
+    def archive_listing(self):
+        return sorted(p.relative_to(self.root).as_posix() for p in (self.root / 'runs').rglob('*'))
 
     def test_runs_seed_major_with_the_registered_settings(self):
         campaign.run_campaign(self.c, launch=self.launcher({}))
         self.assertEqual(len(self.calls), 12)
         first = self.calls[:4]
         self.assertTrue(all(a[a.index('--seed') + 1] == '20' for a in first))
-        self.assertEqual(first[0][:4], ['thangavelu-noise80', 'campaigns/c/thangavelu-noise80/code_original/seed20',
-                                        '--policy', 'code_original'])
+        self.assertEqual(first[0][:3], ['thangavelu-noise80', '--policy', 'code_original'])
         self.assertNotIn('--order', first[0])
         self.assertEqual(first[1][first[1].index('--order') + 1], '3,0,2,1,4')
         self.assertEqual(first[1][first[1].index('--timeout') + 1], '1200')
-        log = (campaign.CAMPAIGNS / 'c' / 'runs.jsonl').read_text().splitlines()
+        entries = studies.load('c')['cases']
+        self.assertEqual([(e['arm'], e['seed']) for e in entries[:2]], [('code_original', 20), ('paper_3-0-2-1-4', 20)])
+        self.assertTrue(all(case_id.is_case_id(wall) for _, _, wall in campaign.planned_runs(self.c)))
+        log = (studies.path_of('c').parent / 'runs.jsonl').read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(log), 12)
 
     def test_resume_skips_existing_runs_and_never_overwrites(self):
@@ -178,14 +241,21 @@ class CampaignRunner(unittest.TestCase):
         self.calls.clear()
         campaign.run_campaign(self.c, launch=self.launcher({}))
         self.assertEqual(len(self.calls), 10)          # the TIMEOUT run is kept, not rerun
-        self.assertNotIn('campaigns/c/thangavelu-noise80/code_original/seed20', [a[1] for a in self.calls])
+        self.assertEqual(sum(a[a.index('--seed') + 1] == '20' for a in self.calls), 2)  # of 4 arms, 2 were built
+        entries = studies.load('c')['cases']
+        self.assertEqual(len(entries), 12)
+        self.assertEqual(len({(e['arm'], e['seed']) for e in entries}), 12)
+        kept = studies.find('c', arm='paper_3-0-2-1-4', seed=20)[0]['case_id']
+        self.assertEqual(campaign.run_status(kept), 'TIMEOUT')
 
     def test_failed_stops_and_termination_failure_raises(self):
         campaign.run_campaign(self.c, launch=self.launcher({3: 'FAILED'}))
         self.assertEqual(len(self.calls), 3)
         self.calls.clear()                              # resume: next new run fails to stop
-        with self.assertRaises(RuntimeError):
+        listed = len(studies.load(self.c['id'])['cases'])
+        with self.assertRaises(run_wall.TerminationFailed):
             campaign.run_campaign(self.c, launch=self.launcher({1: 'TERMINATION_FAILED'}))
+        self.assertEqual(len(studies.load(self.c['id'])['cases']), listed + 1)  # a resume sees that wall's status
 
     def test_refuses_changed_code(self):
         changed = dict(self.c, code_sha256={'Stonepacker2D/stack/selection.py': 'old'})
@@ -194,28 +264,69 @@ class CampaignRunner(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_extension_reuses_parent_runs(self):
-        (campaign.CAMPAIGNS / 'c' / 'campaign.json').write_text(json.dumps(self.c))
         campaign.run_campaign(self.c, launch=self.launcher({}))
-        random = next(a['order'] for a in self.c['arms'] if a['name'].startswith('random'))
-        arms = ['code_original', 'paper=3,0,2,1,4', 'alt=2,4,3,1,0', 'random=' + ','.join(map(str, random)),
-                'mainstream=4,1,0,3,2']
+        arms = self.extended_arms()
         child = registered(campaign_id='d', arm_texts=arms, n_seeds=5, extends='c')
         self.assertEqual(child['seeds'][:3], self.c['seeds'])
         self.assertEqual(len(child['reused_runs']), 12)
-        (campaign.CAMPAIGNS / 'd').mkdir()
+        campaign.register(child)
         self.calls.clear()
         campaign.run_campaign(child, launch=self.launcher({}))
         self.assertEqual(len(self.calls), 25 - 12)
-        self.assertTrue(all(a[1].startswith('campaigns/d/') for a in self.calls))
-        self.assertEqual(sum(n.startswith('campaigns/c/') for _, _, n in campaign.planned_runs(child)), 12)
+        self.assertEqual(len(studies.load('d')['cases']), 13)          # only its own new walls are listed
+        parents = {e['case_id'] for e in studies.load('c')['cases']}
+        walls = [wall for _, _, wall in campaign.planned_runs(child)]
+        self.assertEqual(sum(wall in parents for wall in walls), 12)
+        self.assertEqual(len(set(walls)), 25)
         with self.assertRaises(ValueError):
             registered(campaign_id='e', arm_texts=arms, n_seeds=5, extends='c', timeout=2400)
         with self.assertRaises(ValueError):
             registered(campaign_id='e', arm_texts=arms, n_seeds=5, extends='c', master_seed=1)
 
+    def test_extension_of_a_campaign_of_the_archive(self):
+        self.archived_campaign()
+        before = self.archive_listing()
+        child = registered(campaign_id='d', arm_texts=self.extended_arms(), n_seeds=5, extends='old')
+        self.assertEqual(len(child['reused_runs']), 12)
+        campaign.register(child)
+        campaign.run_campaign(child, launch=self.launcher({}))
+        self.assertEqual(len(self.calls), 25 - 12)
+        walls = [wall for _, _, wall in campaign.planned_runs(child)]
+        self.assertEqual(sum(wall.startswith('campaigns/old/thangavelu-noise80/') for wall in walls), 12)
+        self.assertEqual(sum(case_id.is_case_id(wall) for wall in walls), 13)
+        archived = next(wall for wall in walls if wall.startswith('campaigns/'))
+        self.assertEqual(campaign.run_status(archived), 'PROCESS_PASS')
+        self.assertEqual(self.archive_listing(), before)               # read where they are, nothing copied or added
+
+    def test_a_campaign_of_the_archive_is_only_read(self):
+        old = self.archived_campaign()
+        self.assertEqual(campaign.load('old'), old)
+        with self.assertRaises(RuntimeError):
+            campaign.run_campaign(old, launch=self.launcher({}))
+        with self.assertRaises(RuntimeError):
+            campaign.summarize(old)
+        with self.assertRaises(FileExistsError):
+            campaign.register(registered(campaign_id='old'))
+        self.assertEqual(self.calls, [])
+
+    def test_manifest_path_of_a_study_and_of_the_archive(self):
+        self.assertEqual(campaign.manifest_path('c'), self.root / 'studies' / 'c' / 'manifest.csv')
+        self.assertEqual(campaign.manifest_path('old'), self.root / 'runs' / 'campaigns' / 'old' / 'manifest.csv')
+
+    def test_summarize_writes_beside_the_study_with_case_ids(self):
+        campaign.run_campaign(self.c, max_runs=1, launch=self.launcher({}))
+        rows = campaign.summarize(self.c)
+        self.assertEqual(len(rows), 12)
+        self.assertTrue(case_id.is_case_id(rows[0]['run']))
+        self.assertEqual(rows[0]['status'], 'PROCESS_PASS')
+        self.assertEqual((rows[1]['run'], rows[1]['status']), ('', 'NOT_RUN'))
+        self.assertTrue(campaign.manifest_path('c').exists())
+        self.assertTrue((studies.path_of('c').parent / 'steps.csv').exists())
+
     def test_dry_run_launches_nothing(self):
         planned = campaign.run_campaign(self.c, dry_run=True, launch=self.launcher({}))
         self.assertEqual((len(planned), self.calls), (12, []))
+        self.assertEqual(studies.load('c')['cases'], [])
 
 
 class MetricHelpers(unittest.TestCase):
@@ -331,7 +442,7 @@ class CounterfactualPlanning(unittest.TestCase):
         s = counterfactual_branches.summarize(options).set_index('step')
         self.assertEqual(s.n_picks_target[s.n_picks_target > 0].to_dict(), {10: 5})
         self.assertEqual((s.n_picks_target + s.n_neutral + s.n_control == 119).all(), True)
-        plan = counterfactual_branches.make_plan('p', [(str(FAILED_PAPER_2.relative_to(run_wall.RUNS)), 184947496, 13)], 2400)
+        plan = counterfactual_branches.make_plan('p', [(str(FAILED_PAPER_2.relative_to(LEGACY_RUNS)), 184947496, 13)], 2400)
         got = [(b['kind'], b['step'], b['pose'], b['order']) for b in plan['branches']]
         self.assertEqual(got, [('target', 10, [13, 180, 204, 58], '3-2-0-1-4'), ('control', 10, [19, 0, 207, 57], '0-3-1-4-2'),
                                ('control', 10, [19, 90, 26, 43], '3-2-0-4-1'), ('control', 10, [19, 180, 204, 58], '3-4-0-1-2')])

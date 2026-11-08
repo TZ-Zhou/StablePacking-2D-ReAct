@@ -13,6 +13,8 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
+from research.storage import case_id  # noqa: E402
+from research.storage import studies  # noqa: E402
 from research.walls import campaign_quality as q  # noqa: E402
 from test_order_controller import WALL  # noqa: E402
 from test_wall_quality import FIVE, digest  # noqa: E402
@@ -27,6 +29,12 @@ class Batch(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
         cls.runs = cls.root / 'runs'
+        cls.cases = cls.root / 'cases'
+        cls.patches = [mock.patch.object(module, 'LEGACY_RUNS', cls.runs) for module in (case_id, q, q.camp)]
+        cls.patches += [mock.patch.object(module, 'CASES_DIR', cls.cases) for module in (case_id, q)]
+        cls.patches += [mock.patch.object(studies, 'STUDIES_DIR', cls.root / 'studies')]
+        for patcher in cls.patches:
+            patcher.start()
         camp = cls.runs / 'campaigns' / 't'
         for arm in ARMS[:3]:
             shutil.copytree(WALL, camp / 'case' / arm / 'seed1')
@@ -38,12 +46,14 @@ class Batch(unittest.TestCase):
             for a in ARMS:
                 w.writerow([a, 'paper', '3-0-2-1-4', 1, f'campaigns/t/case/{a}/seed1'])
         cls.before = digest(cls.runs)
-        cls.failed = q.batch('t', cls.root / 'out', runs=cls.runs, check_sources=False)
+        cls.failed = q.batch('t', cls.root / 'out', check_sources=False)
         cls.rows = list(csv.DictReader(open(cls.root / 'out' / 'quality.csv', encoding='utf-8')))
         cls.info = json.loads((cls.root / 'out' / 'batch.json').read_text(encoding='utf-8'))
 
     @classmethod
     def tearDownClass(cls):
+        for patcher in cls.patches:
+            patcher.stop()
         cls.tmp.cleanup()
 
     def test_rows(self):
@@ -75,35 +85,37 @@ class Batch(unittest.TestCase):
         self.assertNotIn(str(self.root), (self.root / 'out' / 'batch.json').read_text(encoding='utf-8'))
 
     def test_rerun_writes_the_same_bytes_and_records_stay(self):
-        q.batch('t', self.root / 'again', runs=self.runs, check_sources=False)
+        q.batch('t', self.root / 'again', check_sources=False)
         for name in ('batch.json', 'quality.csv', 'quality.jsonl'):
             self.assertEqual((self.root / 'again' / name).read_bytes(), (self.root / 'out' / name).read_bytes(), name)
         self.assertEqual(digest(self.runs), self.before)
 
     def test_refusals(self):
         with self.assertRaises(SystemExit):  # written once
-            q.batch('t', self.root / 'out', runs=self.runs, check_sources=False)
+            q.batch('t', self.root / 'out', check_sources=False)
         with self.assertRaises(SystemExit):  # never inside the records
-            q.batch('t', self.runs / 'campaigns' / 't' / 'quality', runs=self.runs, check_sources=False)
+            q.batch('t', self.runs / 'campaigns' / 't' / 'quality', check_sources=False)
+        with self.assertRaises(SystemExit):
+            q.batch('t', self.cases / 'some-case' / 'quality', check_sources=False)
         hashes = q.sources()[0]
         with mock.patch.object(q, 'sources', return_value=(hashes, ['research/walls/wall_metrics.py'])), self.assertRaises(SystemExit):
-            q.batch('t', self.root / 'dirty', runs=self.runs)
+            q.batch('t', self.root / 'dirty')
         changed = [(hashes, []), ({**hashes, 'research/walls/wall_metrics.py': '0'}, [])]
         with mock.patch.object(q, 'sources', side_effect=changed), self.assertRaises(SystemExit):
-            q.batch('t', self.root / 'changed', runs=self.runs)
+            q.batch('t', self.root / 'changed')
         self.assertFalse((self.root / 'dirty').exists() or (self.root / 'changed').exists())
         manifest = self.runs / 'campaigns' / 't' / 'manifest.csv'
         text = manifest.read_text(encoding='utf-8')
         try:
             manifest.write_text('\n'.join(text.splitlines()[:-1]) + '\n', encoding='utf-8')  # an arm x seed missing
             with self.assertRaises(SystemExit):
-                q.batch('t', self.root / 'short', runs=self.runs, check_sources=False)
+                q.batch('t', self.root / 'short', check_sources=False)
         finally:
             manifest.write_text(text, encoding='utf-8')
 
     def test_sensitivity_method(self):
         """s1 on a wall 02 leaves nothing out: the same values, its own method name and options."""
-        q.batch('t', self.root / 's1', runs=self.runs, check_sources=False, method='wang-quality-s1-keep-all')
+        q.batch('t', self.root / 's1', check_sources=False, method='wang-quality-s1-keep-all')
         rows = list(csv.DictReader(open(self.root / 's1' / 'quality.csv', encoding='utf-8')))
         info = json.loads((self.root / 's1' / 'batch.json').read_text(encoding='utf-8'))
         self.assertEqual((info['method'], info['options']), ('wang-quality-s1-keep-all', {'leave_out': False}))
@@ -113,6 +125,20 @@ class Batch(unittest.TestCase):
         self.assertEqual(self.info['options'], {})
         with self.assertRaises(ValueError):
             q.evaluate(self.runs / 'campaigns' / 't' / 'case' / 'a' / 'seed1', 'wang-quality-v2')
+
+    def test_a_campaign_of_cases(self):
+        """A study's manifest names case ids: they resolve to research/cases and stay in the run column."""
+        case = '20261108-1254-TH_T80-pc1'
+        shutil.copytree(WALL, self.cases / case)
+        studies.create('new', 'campaign', {'id': 'new', 'arms': [{'name': 'a'}], 'seeds': [1]})
+        with open(q.camp.manifest_path('new'), 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(['arm', 'policy', 'order', 'seed', 'run'])
+            w.writerow(['a', 'paper', '3-0-2-1-4', 1, case])
+        self.assertEqual(q.batch('new', self.root / 'out-new', check_sources=False), 0)
+        with open(self.root / 'out-new' / 'quality.csv', encoding='utf-8') as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([(r['run'], r['status']) for r in rows], [(case, 'OK')])
 
     def test_a_failed_evaluation_is_a_fail_row(self):
         run = self.runs / 'campaigns' / 't' / 'case' / 'a' / 'seed1'

@@ -9,8 +9,10 @@ wall_density and wall_height of wall_metrics.wall_metrics. Raw values: no weight
 (see wall_metrics.render_original leave_out, overlap); its output goes to research/quality/<method>.
 
 Writes <out>/batch.json, quality.csv and quality.jsonl once; refuses an existing <out> or one
-inside research/runs, which it only reads. The runs are the campaign's manifest.csv rows, which
-must be its arms x seeds exactly. A run that fails an integrity check, whose evaluation raises
+inside research/runs or research/cases, which it only reads. The campaign may be a study or one of
+the research/runs archive (campaign.load, campaign.manifest_path); the runs are its manifest.csv rows,
+which must be its arms x seeds exactly, each run a case id or a research/runs path
+(case_id.wall_dir). A run that fails an integrity check, whose evaluation raises
 or leaves a metric undefined gets a FAIL row naming why; nothing is skipped, and the exit code
 is 1 when any row failed. Refuses to start when a source file differs from git HEAD, and to
 write when one changed during the batch. The output holds no time and no absolute path, so a
@@ -28,7 +30,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from research.paths import QUALITY_DIR, REPO, RUNS
+from research.paths import CASES_DIR, LEGACY_RUNS, QUALITY_DIR, REPO
+from research.storage import case_id as cid
+from research.walls import campaign as camp
 from research.walls import check_run
 from research.walls import wall_metrics
 
@@ -139,28 +143,29 @@ def evaluate(run, method=METHOD):
     return row, {'corrected': qc, 'author': qa, 'wall_metrics': wm}
 
 
-def batch(campaign_id, out, runs=RUNS, check_sources=True, method=METHOD):
+def batch(campaign_id, out, check_sources=True, method=METHOD):
     """Evaluate the campaign and write <out>; returns the number of FAIL rows."""
     if method not in METHODS:
         raise ValueError(f'unknown method {method}')
     out = Path(out).resolve()
     if out.exists():
         raise SystemExit(f'{out} exists: a batch is written once')
-    if out == runs.resolve() or runs.resolve() in out.parents:
-        raise SystemExit(f'{out} is inside {runs}: the run records are only read')
+    for records in (LEGACY_RUNS.resolve(), CASES_DIR.resolve()):
+        if out == records or records in out.parents:
+            raise SystemExit(f'{out} is inside {records}: the wall records are only read')
     hashes, dirty = sources()
     if check_sources and dirty:
         raise SystemExit(f'source files differ from HEAD: {dirty}')
-    camp_dir = runs / 'campaigns' / campaign_id
-    campaign = json.loads((camp_dir / 'campaign.json').read_text(encoding='utf-8'))
-    manifest = list(csv.DictReader(open(camp_dir / 'manifest.csv', encoding='utf-8')))
+    campaign = camp.load(campaign_id)
+    with open(camp.manifest_path(campaign_id), encoding='utf-8') as f:
+        manifest = list(csv.DictReader(f))
     planned = {(a['name'], str(s)) for a in campaign['arms'] for s in campaign['seeds']}
     listed = [(m['arm'], m['seed']) for m in manifest]
     if sorted(listed) != sorted(planned):
         raise SystemExit(f'manifest.csv does not list the campaign arms x seeds once each: {len(listed)} rows, {len(planned)} planned')
     rows, details = [], []
     for m in manifest:
-        row, detail = evaluate(runs / m['run'], method)
+        row, detail = evaluate(cid.wall_dir(m['run']), method)
         row = {**{k: m[k] for k in ('arm', 'policy', 'order', 'seed', 'run')}, 'campaign': campaign_id, 'method': method, **row}
         rows.append(row)
         details.append({'run': m['run'], 'arm': m['arm'], 'seed': m['seed'], 'status': row['status'],
@@ -172,8 +177,8 @@ def batch(campaign_id, out, runs=RUNS, check_sources=True, method=METHOD):
         'method': method, 'options': METHODS[method], 'campaign': campaign_id, 'formal': 'corrected canvas', 'reference': 'author canvas (*_author)',
         'git_head': git('rev-parse', 'HEAD').strip(), 'sources_git_blob': hashes, 'sources_dirty': dirty,
         'resolution': {'rescale': wall_metrics.RESCALE, 'mu': wall_metrics.MU, 'stone_images': sorted({
-            f"{wall_metrics.stone_source(runs / r['run']).name} {sha256(wall_metrics.stone_source(runs / r['run']))}"
-            for r in rows if r['status'] == 'OK'})},
+            f"{source.name} {sha256(source)}"
+            for source in (wall_metrics.stone_source(cid.wall_dir(r['run'])) for r in rows if r['status'] == 'OK')})},
         'environment': {'python': sys.version.split()[0], 'platform': platform.platform(),
                         **{m: __import__(m).__version__ for m in ('numpy', 'scipy', 'cv2', 'skimage', 'networkx')}},
         'n_runs': len(rows), 'n_ok': len(rows) - len(failed),

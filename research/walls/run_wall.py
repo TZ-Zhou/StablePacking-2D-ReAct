@@ -1,13 +1,16 @@
 """Run an original test case with a chosen filter policy and candidate tracing.
 
-Usage: python -B -m research.walls.run_wall <case> <run name> [--policy code_original|paper]
-                                      [--order 3,0,2,1,4] [--tol 1e-9] [--placements N]
-                                      [--seed S] [--switch STEP=a,b,c,d,e ...] [--controller JSON]
+Usage: python -B -m research.walls.run_wall <case> [--policy code_original|paper] [--order 3,0,2,1,4]
+                                      [--tol 1e-9] [--placements N] [--seed S] [--parent WALL]
+                                      [--switch STEP=a,b,c,d,e ...] [--controller JSON]
 
 Staging follows the frozen baseline run_original_case.py (copied inputs, Windows main guard,
 shell cleanup refused, spawned workers inherit constants/RNG via windows_case_runtime.py).
 research/validation/ holds tracked copies of the two baseline tools used here and the registered
-environment manifest; baseline/ itself is never read. Output goes to a new research/runs/<name>.
+environment manifest; baseline/ itself is never read. Output goes to a new research/cases/<case id>
+(research/storage/case_id.py); the research/runs archive is never written. The receipt there records
+the definition and outcome, and derived/steps.csv the policy and order of every traced selection.
+--parent names the wall a branch or lookahead wall starts from: a case id or a research/runs path.
 With --placements N the case is stopped once decisions.txt has N committed placements.
 --switch makes a one-step counterfactual branch: same seed and code, so every decision before
 STEP should repeat the run without it; verify that with check_run.py --compare.
@@ -23,8 +26,11 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime
 
-from research.paths import REPO, RUNS, VALIDATION
+from research.paths import REPO, VALIDATION
+from research.storage import case_id as cid
+from research.storage import case_index
 from research.validation import local_setup  # this computer's paths; the registered ones without a local-setup file
 ENV_PREFIX = local_setup.env_prefix(json.loads((VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix'])
 CASES = {  # case -> (entry script, original number of walls in its batch)
@@ -34,21 +40,48 @@ CASES = {  # case -> (entry script, original number of walls in its batch)
     'almeida-ir': ('Tests/Almeida/IR/run.py', 1),
     'fft-d2-0': ('Tests/FFT_stones/01_run.py', 5),
     'rubble': ('Tests/Rubble_stone_walls/00_run.py', 20),
+    'thangavelu-noise20': ('Tests/Thangavelu/00_run.py', 20),
     'thangavelu-noise80': ('Tests/Thangavelu/00_run.py', 20),
 }
+SOURCE_EDITS = {  # case -> (old, new) replacements that let one entry script serve several scenes
+    'thangavelu-noise20': (('/data/stones_noise_80_labels.png', '/data/stones_noise_20_labels.png'),),
+}
+SUCCESS = ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS')
+
+
+class TerminationFailed(RuntimeError):
+    """The case's process tree was not verified stopped: nothing else may be launched. `receipt` is the
+    wall's receipt, so a batch can list the wall in its study before it stops."""
+
+    def __init__(self, receipt):
+        super().__init__('case process tree not verified stopped; do not launch another case')
+        self.receipt = receipt
 
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def prepare_output(name):
-    """New directory under research/runs; refuses anything else so baseline data is never touched."""
-    output = (RUNS / name).resolve()
-    if not output.is_relative_to(RUNS.resolve()) or output == RUNS.resolve():
-        raise ValueError(f'output must be inside {RUNS}: {output}')
-    output.mkdir(parents=True, exist_ok=False)
-    return output
+def prepare_output(case, start, root=None):
+    """A new folder named by its case id (case_id.allocate), so neither baseline data nor the research/runs
+    archive is ever written. Returns (case id, folder)."""
+    case_id, output = cid.allocate(case, start, root=root)
+    return case_id, output.resolve()
+
+
+def source_text(case):
+    """The entry script of a case, with its SOURCE_EDITS applied."""
+    text = (REPO / CASES[case][0]).read_text(encoding='utf-8')
+    for old, new in SOURCE_EDITS.get(case, ()):
+        assert text.count(old) == 1, (case, old)
+        text = text.replace(old, new)
+    return text
+
+
+def parent_problem(ref):
+    """Why `ref` names no wall (None when it does): a case id of research/cases or a research/runs path."""
+    folder = cid.wall_dir(ref)
+    return None if (folder / 'receipt.json').exists() else f'no wall at {folder}'
 
 
 def stage(source, policy, seed=None):
@@ -112,7 +145,9 @@ def code_fingerprint(root=REPO):
     files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
         Path(root) / 'research' / name for name in ('paths.py', 'walls/run_wall.py', 'controller/order_controller.py',
                                                     'controller/worker.py', 'controller/llm_api.py', 'walls/check_run.py',
-                                                    'analysis/unplaced_stones.py', 'walls/campaign.py')] + [
+                                                    'analysis/unplaced_stones.py', 'walls/campaign.py',
+                                                    'walls/wall_metrics.py', 'storage/case_id.py',
+                                                    'storage/case_index.py')] + [
         Path(root) / 'research' / 'validation' / 'windows_case_runtime.py']
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
@@ -252,6 +287,16 @@ def verified_trace(output, args, process_status, termination):
     return trace
 
 
+def write_steps(output):
+    """derived/steps.csv of a traced wall: wall_metrics.step_rows of every result; returns the number of rows."""
+    from research.walls import check_run, wall_metrics
+    rows = [{'result': r.name, **row} for r in check_run.result_dirs(output) for row in wall_metrics.step_rows(r)]
+    path = output / 'derived' / 'steps.csv'
+    path.parent.mkdir(exist_ok=True)
+    case_index.write_csv(path, list(dict.fromkeys(k for row in rows for k in row)), rows)
+    return len(rows)
+
+
 def final_status(process_status, trace, termination):
     if termination is not None and not termination['verified']:
         return 'TERMINATION_FAILED'
@@ -260,10 +305,12 @@ def final_status(process_status, trace, termination):
     return process_status
 
 
-def main(argv=None):
+def run(argv=None):
+    """Build one wall in a new case folder; returns its receipt (also written to receipt.json there)."""
     parser = argparse.ArgumentParser()
     parser.add_argument('case', choices=CASES)
-    parser.add_argument('name')
+    parser.add_argument('--parent', metavar='WALL',
+                        help='the wall this one branches from: a case id or a research/runs path')
     parser.add_argument('--policy', default='code_original', choices=['code_original', 'paper'])
     parser.add_argument('--order', type=lambda s: tuple(int(c) for c in s.split(',')))
     parser.add_argument('--tol', type=float, default=1e-9)
@@ -278,6 +325,8 @@ def main(argv=None):
     parser.add_argument('--controller', type=json.loads, metavar='JSON',
                         help='paper policy only: research/controller/order_controller.py spec, e.g. {"kind": "random", "seed": 7}')
     args = parser.parse_args(argv)
+    if args.parent is not None and (problem := parent_problem(args.parent)):
+        parser.error(f'--parent: {problem}')
     if args.worker_venv and args.controller is None:
         parser.error('--worker-venv needs --controller')
     if args.controller is not None:
@@ -295,7 +344,8 @@ def main(argv=None):
             parser.error(f'--controller: {error}')
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix
 
-    output = prepare_output(args.name)
+    started = datetime.now().astimezone()
+    case_id, output = prepare_output(args.case, started)
     guard = subprocess.run([sys.executable, '-B', str(VALIDATION / 'verify_environment.py')],
                            cwd=REPO, capture_output=True, text=True, env=quiet_env())
     (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
@@ -303,13 +353,14 @@ def main(argv=None):
 
     source_name, replicates = CASES[args.case]
     original = REPO / source_name
+    source = source_text(args.case)
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
     if args.switch:
         filter_policy['switch'] = parse_switch(args.switch)
         if args.policy != 'paper':
             parser.error('--switch needs --policy paper')
-    staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name,
-                                                          'controller': args.controller, 'worker_venv': args.worker_venv}, seed=args.seed)
+    staged = stage(source, {'filter': filter_policy, 'run_id': None if args.no_trace else case_id,
+                            'controller': args.controller, 'worker_venv': args.worker_venv}, seed=args.seed)
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
@@ -319,7 +370,10 @@ def main(argv=None):
 
     git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True, env=quiet_env()).stdout.strip()
     receipt = {
-        'case': args.case, 'run_id': args.name, 'source': source_name, 'source_sha256': digest(original),
+        'schema_version': 2, 'case_id': case_id, 'scene': cid.scene_code(args.case), 'parent': args.parent,
+        'started': started.isoformat(timespec='seconds'),
+        'case': args.case, 'run_id': case_id, 'source': source_name, 'source_sha256': digest(original),
+        **({'source_edits': [list(e) for e in SOURCE_EDITS[args.case]]} if args.case in SOURCE_EDITS else {}),
         'staged_sha256': digest(target), 'filter_policy': filter_policy, 'controller': args.controller,
         **({'worker_venv': worker_venv_identity()} if args.worker_venv else {}),
         'trace': not args.no_trace,
@@ -332,6 +386,7 @@ def main(argv=None):
         'timeout_seconds': args.timeout, 'status': 'RUNNING',
         'command': [sys.executable, '-B', '-u', str(target)],
     }
+    receipt['spec_sha256'] = cid.spec_sha256(receipt)
     env = {**os.environ, 'MPLBACKEND': 'Agg', 'MPLCONFIGDIR': str(output / 'matplotlib-config'),
            'PYTHONHASHSEED': '20', 'PYTHONDONTWRITEBYTECODE': '1',
            'BASELINE_CASE_EVENTS': str(output / 'events.jsonl'),
@@ -364,14 +419,23 @@ def main(argv=None):
                        termination=termination, returncode=process.poll() if 'pid' in receipt else None,
                        elapsed_seconds=round(time.monotonic() - start, 3),
                        committed_placements=committed_placements(output), trace_check=trace)
+        if not args.no_trace and trace['ok']:
+            try:
+                receipt['derived'] = {'steps.csv': write_steps(output)}
+            except Exception as error:  # a derived table never changes the wall's status
+                receipt['derived'] = {'steps.csv': f'not written: {error!r}'}
         if receipt['status'] != process_status or process_status == 'FAILED':
             receipt['execution_log_tail'] = (output / 'execution.log').read_text(
                 encoding='utf-8', errors='replace').splitlines()[-25:]
         (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
     print(json.dumps({k: v for k, v in receipt.items() if k not in ('command', 'code_sha256', 'manifest')}, indent=2))
     if receipt['status'] == 'TERMINATION_FAILED':
-        raise RuntimeError('case process tree not verified stopped; do not launch another case')
-    return 0 if receipt['status'] in ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS') else 1
+        raise TerminationFailed(receipt)
+    return receipt
+
+
+def main(argv=None):
+    return 0 if run(argv)['status'] in SUCCESS else 1
 
 
 if __name__ == '__main__':

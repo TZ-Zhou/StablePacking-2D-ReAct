@@ -11,10 +11,11 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO)]
 from research.controller import llm_api as llm_adapter  # noqa: E402
 from research.llm_walls import gpt_wall_report as rep  # noqa: E402
+from research.paths import LEGACY_RUNS  # noqa: E402
 
-RUN = rep.quality_batch.RUNS / 'gpt-walls' / 'gpt-001'
+RUN = LEGACY_RUNS / 'gpt-walls' / 'gpt-001'
 REPORT = REPO / 'research' / 'reports' / 'gpt-001'
-PAPER = rep.quality_batch.RUNS / rep.DEV.format(arm='paper', seed=66794912)
+PAPER = LEGACY_RUNS / rep.DEV.format(arm='paper', seed=66794912)
 
 
 class Names(unittest.TestCase):
@@ -53,6 +54,18 @@ class Gpt001(unittest.TestCase):
     def test_a_report_is_written_once(self):
         with self.assertRaises(SystemExit):
             rep.main('gpt-001')
+
+    def test_the_archived_wall_is_found_by_its_name(self):
+        wall = rep.gpt_wall.walls(False)['gpt-001']
+        self.assertEqual((wall.folder, wall.report), (RUN, RUN / 'report.json'))
+        self.assertEqual(wall.journal, RUN.parent / 'journals' / 'gpt-001.json')
+        self.assertTrue(wall.journal.is_file() and wall.report.is_file())
+
+    def test_an_unknown_name_is_refused_before_anything_is_written(self):
+        with self.assertRaises(SystemExit) as refused:
+            rep.main('no-such-wall')
+        self.assertIn('no GPT wall is named', str(refused.exception))
+        self.assertFalse((REPO / 'research' / 'reports' / 'no-such-wall').exists())
 
 
 if __name__ == '__main__':

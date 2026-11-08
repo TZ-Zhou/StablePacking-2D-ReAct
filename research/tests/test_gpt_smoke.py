@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO))
 from research.llm_walls import gpt_smoke  # noqa: E402
 from research.controller import order_controller  # noqa: E402
 from research.controller import llm_api  # noqa: E402
+from research.storage import case_id, studies  # noqa: E402
 
 DUMMY = 'sk-smoke-dummy-' + 'k' * 40
 SDK = importlib.util.find_spec('openai') is not None
@@ -40,10 +41,42 @@ def spec(**over):
     return {**s, 'llm': llm, **over}
 
 
+def isolate(test):
+    """Temporary research/cases, research/studies and smoke archive (root/archive) for one test, on any
+    computer: nothing under the repository is written. Returns root."""
+    root = Path(tempfile.mkdtemp())
+    test.addCleanup(shutil.rmtree, root, True)
+    (root / 'archive').mkdir()
+    for patcher in (mock.patch.object(case_id, 'CASES_DIR', root / 'cases'),
+                    mock.patch.object(studies, 'STUDIES_DIR', root / 'studies'),
+                    mock.patch.object(gpt_smoke, 'LEGACY', root / 'archive'),
+                    mock.patch.dict(case_id.PCS, {socket.gethostname().upper(): 'pc1'})):
+        patcher.start()
+        test.addCleanup(patcher.stop)
+    return root
+
+
+def smoke_lock():
+    lock = gpt_smoke.lock_of(gpt_smoke.STUDY)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    return lock
+
+
+def case_run(name, state=None, started='2026-11-08T10:00:00'):
+    """A smoke run that is a case of the study, its journal in llm/ (state None: no journal); returns its folder."""
+    new_id, folder = case_id.allocate('thangavelu-noise80', hostname='GIAAIL-STRIX')
+    gpt_smoke.join_study(gpt_smoke.STUDY, gpt_smoke.STUDY, {}, {'case_id': new_id, 'name': name})
+    if state is not None:
+        files = gpt_smoke.case_records(folder)
+        files.journal.parent.mkdir()
+        files.journal.write_text(json.dumps({'state': state, 'started_at': started}), encoding='utf-8')
+    return folder
+
+
 class SmokeRules(unittest.TestCase):
     def setUp(self):
-        self.out = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.out)
+        self.root = isolate(self)
+        self.out = self.root / 'archive'  # runs written here are the archive's: <name>/journal.json
 
     def test_the_spec_is_checked_against_the_limits(self):
         self.assertEqual(gpt_smoke.spec_problems(gpt_smoke.spec_of(1)), [])
@@ -92,7 +125,7 @@ class SmokeRules(unittest.TestCase):
         (self.out / name / 'journal.json').write_text(json.dumps({'state': state, 'started_at': started, **more}), encoding='utf-8')
 
     def test_a_run_is_never_resent_unknowingly(self):
-        problems = lambda name, after=None, decisions=1: gpt_smoke.journal_problems(self.out, name, after, decisions)
+        problems = lambda name, after=None, decisions=1: gpt_smoke.journal_problems(name, after, decisions)
         self.assertEqual(problems('smoke-001'), [])
         self.assertTrue(problems('Smoke 1'))
         self.assertTrue(problems('smoke-002', decisions=2))  # more than one decision only after an approved run
@@ -107,18 +140,34 @@ class SmokeRules(unittest.TestCase):
         self.assertEqual(problems('smoke-002', after='smoke-001'), [])
         self.assertEqual(problems('smoke-002', after='smoke-001', decisions=3), [])
         self.assertTrue(problems('smoke-002', after='smoke-000'))
-        (self.out / gpt_smoke.LOCK).write_text('{}', encoding='utf-8')  # another run holds the lock, or a killed one left it
+        smoke_lock().write_text('{}', encoding='utf-8')  # another run holds the lock, or a killed one left it
         self.assertTrue(any('.lock exists' in p for p in problems('smoke-002', after='smoke-001')))
-        self.assertEqual(gpt_smoke.journal_problems(self.out, 'smoke-002', 'smoke-001', 1, holding=True), [])
-        (self.out / gpt_smoke.LOCK).unlink()
+        self.assertEqual(gpt_smoke.journal_problems('smoke-002', 'smoke-001', 1, holding=True), [])
+        smoke_lock().unlink()
         (self.out / 'stray').mkdir()  # a directory without a journal blocks too
         self.assertTrue(any('stray has no journal' in p for p in problems('smoke-002', after='smoke-001')))
+
+    def test_the_cases_of_the_study_are_earlier_runs_like_the_archives(self):
+        problems = lambda name, after=None: gpt_smoke.journal_problems(name, after, 1)
+        self.journal('smoke-002', 'finished')  # the archive's last run
+        folder = case_run('smoke-003', 'finished', started='2026-11-08T10:00:00')
+        self.assertEqual(gpt_smoke.all_runs()['smoke-003'].journal, folder / 'llm' / 'journal.json')
+        self.assertTrue(any('was used' in p for p in problems('smoke-003', after='smoke-003')))  # a name is used once
+        self.assertTrue(any('was used' in p for p in problems('smoke-002', after='smoke-003')))  # the archive's too
+        self.assertTrue(any('--after smoke-003' in p for p in problems('smoke-004', after='smoke-002')))  # the latest
+        self.assertEqual(problems('smoke-004', after='smoke-003'), [])
+        case_run('smoke-004', 'uncertain', started='2026-11-08T11:00:00')
+        self.assertTrue(any('smoke-004 is uncertain' in p for p in problems('smoke-005', after='smoke-004')))
+        self.setUp()
+        case_run('smoke-001')  # listed in the study, its journal never written
+        self.assertTrue(any('smoke-001 has no journal' in p for p in problems('smoke-002')))
 
     def test_a_refused_run_creates_nothing_and_sends_nothing(self):
         with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY}, clear=True):  # no gate
             with self.assertRaises(SystemExit) as refused:
-                gpt_smoke.run_smoke('smoke-001', gpt_smoke.spec_of(1), out=self.out)
+                gpt_smoke.run_smoke('smoke-001', gpt_smoke.spec_of(1))
         self.assertIn(llm_api.PAID_GATE, str(refused.exception))
+        self.assertEqual([p.name for p in self.root.iterdir()], ['archive'])
         self.assertEqual(list(self.out.iterdir()), [])
         with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY}, clear=True):
             with self.assertRaises(SystemExit):
@@ -166,15 +215,14 @@ class TargetRules(unittest.TestCase):
                 gpt_smoke.parse_target(bad)
 
     def test_a_refused_target_creates_nothing_and_sends_nothing(self):
-        out = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, out)
+        root = isolate(self)
         wrong = gpt_smoke.parse_target('184947496:10:8:single:0:left')
         with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY, llm_api.PAID_GATE: '1'}, clear=True), \
                 mock.patch.object(importlib.util, 'find_spec', return_value=object()):
             with self.assertRaises(SystemExit) as refused:
-                gpt_smoke.run_smoke('smoke-001', gpt_smoke.spec_of(1, 2, 10), out=out, target=wrong)
+                gpt_smoke.run_smoke('smoke-001', gpt_smoke.spec_of(1, 2, 10), target=wrong)
         self.assertIn('target: trace event 8', str(refused.exception))
-        self.assertEqual(list(out.iterdir()), [])
+        self.assertEqual([p.name for p in root.iterdir()], ['archive'])
 
 
 @unittest.skipUnless(SDK, 'the openai SDK is only in the isolated venv')
@@ -260,37 +308,38 @@ class LoopbackRuns(unittest.TestCase):
     """Whole smoke runs: main process -> ProcessTransport worker -> real SDK -> 127.0.0.1."""
 
     def setUp(self):
-        self.out, self.server = self.fresh(), Server()
+        self.root, self.server = isolate(self), Server()
         self.addCleanup(self.server.shutdown)
 
     def fresh(self):
-        out = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, out)
-        return out
+        """A new archive, study and cases: the runs so far no longer exist."""
+        self.root = isolate(self)
 
     def env(self, url=None):
         return mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY, 'OPENAI_BASE_URL': url or self.server.url,
                                             llm_api.PAID_GATE: '1'}, clear=True)
 
-    def run_smoke(self, name, s=None, url=None, after=None, out=None, target=None):
+    def run_smoke(self, name, s=None, url=None, after=None, target=None):
         with self.env(url):
-            return gpt_smoke.run_smoke(name, s or spec(), out=out or self.out, after=after, loopback=True, target=target)
+            return gpt_smoke.run_smoke(name, s or spec(), after=after, loopback=True, target=target)
 
-    def journal(self, name, out=None):
-        return json.loads(((out or self.out) / name / 'journal.json').read_text(encoding='utf-8'))
+    def files(self, name):
+        return gpt_smoke.all_runs()[name]
 
-    def assert_ended(self, name, report, state, clean, api_success=False, out=None):
-        out = out or self.out
-        journal = self.journal(name, out)
+    def journal(self, name):
+        return json.loads(self.files(name).journal.read_text(encoding='utf-8'))
+
+    def assert_ended(self, name, report, state, clean, api_success=False):
+        journal = self.journal(name)
         self.assertEqual((journal['state'], journal['clean'], journal['api_success'], journal['max_http_requests'], journal['mode']),
                          (state, clean, api_success, 3, 'loopback mock'), journal)
         self.assertEqual((report['clean'], report['api_success']), (clean, api_success))
         self.assertEqual((report['check']['ok'], report['key_scan'], report['workers']['reaped']), (True, [], True), report['check'])
         self.assertTrue(report['geometry_validation'].startswith('PARTIAL'))
         self.assertEqual(report['check']['verdict'], 'PARTIAL')  # no live outcome geometry: never PASS here
-        self.assertFalse((out / gpt_smoke.LOCK).exists())  # released after the final journal state
+        self.assertFalse(gpt_smoke.lock_of(gpt_smoke.STUDY).exists())  # released after the final journal state
         self.assertFalse(multiprocessing.active_children())
-        for path in (out / name).rglob('*'):
+        for path in self.files(name).folder.rglob('*'):
             if path.is_file():
                 self.assertNotIn(DUMMY[:12].encode(), path.read_bytes(), path)
 
@@ -307,19 +356,36 @@ class LoopbackRuns(unittest.TestCase):
         self.assertAlmostEqual(report['cost_usd_estimate'], 2 * (1200 * 1.00 + 90 * 5.00) / 1e6)
         self.assertEqual(report['skips'], ['not_a_decision_point', 'skip:wall_budget'])  # the rest of the trajectory sent nothing
         self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
+        self.assert_the_case_holds_the_run('smoke-001')
         for name, after in (('smoke-001', None), ('smoke-002', None)):  # the same name, or a new one without --after
             with self.assertRaises(SystemExit):
                 self.run_smoke(name, after=after)
         self.assertEqual(len(self.server.requests), 2)  # nothing resent
-        with mock.patch.object(gpt_smoke, 'OUT', self.out):
-            self.assertEqual(gpt_smoke.main(['check', '--name', 'smoke-001']), 0)  # offline again: Transcript Replay, key scan
-            with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY}, clear=True):
-                self.assertEqual(gpt_smoke.main(['preflight', '--name', 'smoke-002']), 1)  # --after smoke-001 missing
-                self.assertEqual(gpt_smoke.main(['preflight', '--name', 'smoke-002', '--after', 'smoke-001']), 0)
+        self.assertEqual(gpt_smoke.main(['check', '--name', 'smoke-001']), 0)  # offline again: replay, key scan
+        with mock.patch.dict(os.environ, {**CLEAN_ENV, 'OPENAI_API_KEY': DUMMY}, clear=True):
+            self.assertEqual(gpt_smoke.main(['preflight', '--name', 'smoke-002']), 1)  # --after smoke-001 missing
+            self.assertEqual(gpt_smoke.main(['preflight', '--name', 'smoke-002', '--after', 'smoke-001']), 0)
         self.assertEqual(len(self.server.requests), 2)
 
+    def assert_the_case_holds_the_run(self, name):
+        files = self.files(name)
+        self.assertEqual(files.folder.parent, self.root / 'cases')
+        self.assertEqual(studies.find(gpt_smoke.STUDY, name=name), [{'case_id': files.folder.name, 'name': name}])
+        self.assertTrue(files.report.is_file())
+        self.assertEqual((files.report.parent.name, files.journal.parent.name), ('llm', 'llm'))
+        receipt = json.loads((files.folder / 'receipt.json').read_text(encoding='utf-8'))
+        source = json.loads((gpt_smoke.WALL / 'receipt.json').read_text(encoding='utf-8'))
+        self.assertEqual((receipt['schema_version'], receipt['scene']), (2, 'TH_T80'))
+        self.assertEqual(receipt['case_id'], files.folder.name)
+        self.assertEqual(receipt['parent'], gpt_smoke.WALL.relative_to(gpt_smoke.LEGACY_RUNS).as_posix())
+        self.assertEqual((receipt['seed'], receipt['smoke_of']), (source['seed'], source['status']))
+        self.assertEqual(receipt['controller']['kind'], 'react')
+        self.assertEqual(receipt['spec_sha256'], case_id.spec_sha256(receipt))
+        self.assertTrue(receipt['started'] and receipt['manifest'])
+        self.assertEqual(self.journal(name)['case_id'], files.folder.name)
+
     def records(self, name):
-        result = gpt_smoke.check_run.result_dirs(self.out / name)[0]
+        result = gpt_smoke.check_run.result_dirs(self.files(name).folder)[0]
         return [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
 
     def test_a_v2_run_calls_only_the_target_decision_point(self):
@@ -355,13 +421,12 @@ class LoopbackRuns(unittest.TestCase):
         self.assertTrue(all(t['request']['messages'][0]['content'] == order_controller.SYSTEM_V2 for t in at['transcripts']))
         journal = self.journal('smoke-001')
         self.assertEqual((journal['spec'], journal['target']), (order_controller.full_spec(s), target))
-        receipt = json.loads((self.out / 'smoke-001' / 'receipt.json').read_text(encoding='utf-8'))
+        receipt = json.loads((self.files('smoke-001').folder / 'receipt.json').read_text(encoding='utf-8'))
         self.assertEqual((receipt['controller']['observation_version'], receipt['controller']['first_step']), (2, 10))
         self.assertEqual(len(report['check']['expected_on_base_trajectory']), 2)  # the switch at event 9, listed apart
         self.assertTrue(all(p.startswith('event 9 ') for p in report['check']['expected_on_base_trajectory']))
         self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
-        with mock.patch.object(gpt_smoke, 'OUT', self.out):  # offline again: Transcript Replay with version 2
-            self.assertEqual(gpt_smoke.main(['check', '--name', 'smoke-001']), 0)
+        self.assertEqual(gpt_smoke.main(['check', '--name', 'smoke-001']), 0)  # offline again, with version 2
         self.assertEqual(len(self.server.requests), 3)
 
     def test_keeping_paper_at_the_target_is_a_legal_decision(self):
@@ -386,7 +451,7 @@ class LoopbackRuns(unittest.TestCase):
             journal = self.journal(name)
             self.assertEqual(journal['state'], 'aborted')
             self.assertTrue(any('refused before sending' in r for r in journal['reasons']), journal['reasons'])
-            self.assertFalse((self.out / gpt_smoke.LOCK).exists())
+            self.assertFalse(gpt_smoke.lock_of(gpt_smoke.STUDY).exists())
         self.assertFalse(multiprocessing.active_children())
 
     def test_a_request_outside_the_target_ends_the_run_uncertain(self):
@@ -405,7 +470,7 @@ class LoopbackRuns(unittest.TestCase):
         self.assertEqual((report['decisions'][0]['order'], report['check']['ok']), ('0-1-2-3-4', True), report['check'])
         self.assertTrue(report['check']['expected_on_base_trajectory'])  # traced Paper, controller 0-1-2-3-4: listed apart
         self.assert_ended('smoke-001', report, 'finished', True, api_success=True)
-        run, spec_ = self.out / 'smoke-001', order_controller.full_spec(self.journal('smoke-001')['spec'])
+        run, spec_ = self.files('smoke-001').folder, order_controller.full_spec(self.journal('smoke-001')['spec'])
         result = gpt_smoke.check_run.result_dirs(run)[0]
         path = result / 'trace' / 'controller.jsonl'
         records = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()]
@@ -431,14 +496,14 @@ class LoopbackRuns(unittest.TestCase):
         self.assertTrue(any('traced policy' in p and f"event {switched['event']} " in p for p in report['problems']), report['problems'])
         self.assertTrue(gpt_smoke.offline_check(run, spec_)['ok'])  # the records restored: the check passes again
 
-    def stopped(self, name, report, requests, outcome, out=None):
+    def stopped(self, name, report, requests, outcome):
         self.assertEqual(len(self.server.requests), requests)
         decision = report['decisions'][0]
         self.assertEqual((decision['source'], decision['calls']), ('fallback:llm_error', 1))
         self.assertGreaterEqual(report['unknown_usage'], 1)
         self.assertEqual([(r['outcome'], r['billed']) for r in report['requests']], [(outcome, 'unknown')])
-        self.assert_ended(name, report, 'uncertain', False, out=out)
-        self.assertIn('unknown usage', self.journal(name, out)['reasons'])
+        self.assert_ended(name, report, 'uncertain', False)
+        self.assertIn('unknown usage', self.journal(name)['reasons'])
 
     def test_a_timeout_stops_after_one_request(self):
         self.server.script = ['sleep']
@@ -457,9 +522,10 @@ class LoopbackRuns(unittest.TestCase):
     def test_a_5xx_a_redirect_or_a_reply_without_usage_stops_after_one_request(self):
         for kind, outcome in (('500', 'failed'), ('307', 'failed'), ('308', 'failed'), ('no_usage', 'reply')):
             self.server.requests.clear()
-            self.server.script, out = [kind], self.fresh()
-            report = self.run_smoke('smoke-001', out=out)
-            self.stopped('smoke-001', report, 1, outcome, out=out)  # a redirect is never followed: one POST
+            self.server.script = [kind]
+            self.fresh()
+            report = self.run_smoke('smoke-001')
+            self.stopped('smoke-001', report, 1, outcome)  # a redirect is never followed: one POST
             if kind in ('307', '308'):
                 self.assertEqual((report['requests'][0]['status_code'], self.server.requests[0]['path']), (int(kind), '/v1/responses'))
 
@@ -491,7 +557,7 @@ class LoopbackRuns(unittest.TestCase):
 
         def first():
             try:
-                gpt_smoke.run_smoke('smoke-001', spec(), out=self.out, loopback=True)
+                gpt_smoke.run_smoke('smoke-001', spec(), loopback=True)
             except BaseException as error:
                 errors.append(error)
         with self.env():
@@ -499,28 +565,31 @@ class LoopbackRuns(unittest.TestCase):
             thread.start()
             while not self.server.requests and thread.is_alive():
                 time.sleep(0.05)
-            self.assertTrue((self.out / gpt_smoke.LOCK).exists())
+            self.assertTrue(gpt_smoke.lock_of(gpt_smoke.STUDY).exists())
             with self.assertRaises(SystemExit) as refused:
-                gpt_smoke.run_smoke('smoke-002', spec(), out=self.out, loopback=True)
+                gpt_smoke.run_smoke('smoke-002', spec(), loopback=True)
             thread.join()
         self.assertIn('.lock exists', str(refused.exception))
-        self.assertEqual((errors, sorted(p.name for p in self.out.iterdir())), ([], ['smoke-001']))
+        self.assertEqual((errors, list(gpt_smoke.all_runs())), ([], ['smoke-001']))
         self.assertEqual(len(self.server.requests), 2)  # the first run's two requests, none of the second
         self.assertEqual(self.journal('smoke-001')['state'], 'finished')
 
     def test_a_lock_left_behind_or_an_unfinished_run_blocks_every_new_one(self):
-        (self.out / gpt_smoke.LOCK).write_text('{"name": "smoke-000"}', encoding='utf-8')  # a run killed while it held the lock
+        lock = smoke_lock()
+        lock.write_text('{"name": "smoke-000"}', encoding='utf-8')  # a run killed while it held the lock
         with self.assertRaises(SystemExit) as refused:
             self.run_smoke('smoke-001')
         self.assertIn('.lock exists', str(refused.exception))
-        self.assertEqual((self.out / gpt_smoke.LOCK).read_text(encoding='utf-8'), '{"name": "smoke-000"}')  # never removed automatically
-        (self.out / gpt_smoke.LOCK).unlink()
-        (self.out / 'smoke-001').mkdir()
-        (self.out / 'smoke-001' / 'journal.json').write_text(json.dumps({'state': 'started', 'started_at': 'x'}), encoding='utf-8')
+        self.assertEqual(lock.read_text(encoding='utf-8'), '{"name": "smoke-000"}')  # never removed automatically
+        lock.unlink()
+        (self.root / 'archive' / 'smoke-001').mkdir()
+        started = json.dumps({'state': 'started', 'started_at': 'x'})
+        (self.root / 'archive' / 'smoke-001' / 'journal.json').write_text(started, encoding='utf-8')
         with self.assertRaises(SystemExit) as refused:
             self.run_smoke('smoke-002', after='smoke-001')
         self.assertIn('smoke-001 is started', str(refused.exception))
-        self.assertEqual((len(self.server.requests), sorted(p.name for p in self.out.iterdir())), (0, ['smoke-001']))
+        self.assertEqual((len(self.server.requests), list(gpt_smoke.all_runs())), (0, ['smoke-001']))
+        self.assertFalse((self.root / 'cases').exists())
 
 
 if __name__ == '__main__':

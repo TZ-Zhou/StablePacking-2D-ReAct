@@ -37,6 +37,7 @@ from research.walls import check_run  # noqa: E402
 from research.controller import worker as controller_worker  # noqa: E402
 from research.controller import order_controller  # noqa: E402
 from research.controller import llm_api  # noqa: E402
+from research.paths import LEGACY_RUNS  # noqa: E402
 from research.walls import run_wall  # noqa: E402
 
 from Stonepacker2D.stack import selection  # noqa: E402
@@ -44,10 +45,10 @@ from Stonepacker2D.stack.selection import controlled_policy  # noqa: E402
 from Stonepacker2D.utils import constant  # noqa: E402
 
 PAPER = {'policy': 'paper', 'order': (3, 0, 2, 1, 4), 'tol': 1e-9}
-WALL = REPO / 'research' / 'runs' / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
-RANDOM_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1' / 'random1-seed20-a'
-NULL_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p1-r2' / 'null-seed20'
-REACT_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p2-mock' / 'react-maxllc-seed20'  # Mock wall 4, live geometry
+WALL = LEGACY_RUNS / 'campaigns' / 'pilot-thangavelu-4arms' / 'thangavelu-noise80' / 'paper_3-0-2-1-4' / 'seed184947496'
+RANDOM_WALL = LEGACY_RUNS / 'controllers' / 'p1' / 'random1-seed20-a'
+NULL_WALL = LEGACY_RUNS / 'controllers' / 'p1-r2' / 'null-seed20'
+REACT_WALL = LEGACY_RUNS / 'controllers' / 'p2-mock' / 'react-maxllc-seed20'  # Mock wall 4, live geometry
 
 
 class Brick:
@@ -261,7 +262,7 @@ class Staging(unittest.TestCase):
         with mock.patch.object(run_wall, 'prepare_output', side_effect=AssertionError('the launcher would build a wall')):
             for spec in bad:
                 with self.assertRaises(SystemExit, msg=spec):
-                    run_wall.main(['thangavelu-noise80', 'never-created', '--policy', 'paper', '--controller', spec])
+                    run_wall.main(['thangavelu-noise80', '--policy', 'paper', '--controller', spec])
 
 
 class SpecsAndSchema(unittest.TestCase):
@@ -680,7 +681,7 @@ class StoppedRuns(unittest.TestCase):
                 self.assertTrue(any('trailing record' in p for p in trace['problems']), name)
 
 
-TWO_SIDED_WALL = REPO / 'research' / 'runs' / 'validation-pr-paper-right-01'
+TWO_SIDED_WALL = LEGACY_RUNS / 'validation-pr-paper-right-01'
 
 
 def copy_wall(run, dst):
@@ -1503,7 +1504,7 @@ class APIAdapter(unittest.TestCase):
             report = order_controller.check(result, records, spec)
         self.assertTrue(report['ok'], report['problems'][:3])
 
-FAKE_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p2-mock' / 'react-fake-maxllc-seed20'  # first end-to-end PASS
+FAKE_WALL = LEGACY_RUNS / 'controllers' / 'p2-mock' / 'react-fake-maxllc-seed20'  # first end-to-end PASS
 RELEASE = threading.Event()  # releases the I/O threads the stuck-pipe tests block
 
 

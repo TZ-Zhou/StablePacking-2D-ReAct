@@ -17,10 +17,10 @@ SCHEMA_VERSION = 1
 STUDY_ID = re.compile(r'[a-z0-9][a-z0-9-]*')
 
 
-def path_of(study_id, root=STUDIES_DIR):
+def path_of(study_id, root=None):
     if not STUDY_ID.fullmatch(study_id):
         raise ValueError(f'study ids are lower-case letters, digits and hyphens: {study_id!r}')
-    return Path(root) / study_id / 'study.json'
+    return Path(STUDIES_DIR if root is None else root) / study_id / 'study.json'
 
 
 def write_whole(path, study):
@@ -30,7 +30,7 @@ def write_whole(path, study):
     os.replace(tmp, path)
 
 
-def create(study_id, kind, design, root=STUDIES_DIR):
+def create(study_id, kind, design, root=None):
     """Write a new study with no cases yet; refuses an existing one, so a design is never overwritten."""
     path = path_of(study_id, root)
     if path.exists():
@@ -42,11 +42,11 @@ def create(study_id, kind, design, root=STUDIES_DIR):
     return study
 
 
-def load(study_id, root=STUDIES_DIR):
+def load(study_id, root=None):
     return json.loads(path_of(study_id, root).read_text(encoding='utf-8'))
 
 
-def add_case(study_id, entry, root=STUDIES_DIR):
+def add_case(study_id, entry, root=None):
     """Append one entry ({'case_id': ..., and the study's own keys}); a case is listed once per study."""
     problems = cid.problems(entry.get('case_id', ''))
     if problems:
@@ -59,6 +59,6 @@ def add_case(study_id, entry, root=STUDIES_DIR):
     return study
 
 
-def find(study_id, root=STUDIES_DIR, **keys):
+def find(study_id, root=None, **keys):
     """The study's entries whose fields equal `keys`, in the order they were added."""
     return [e for e in load(study_id, root)['cases'] if all(e.get(k) == v for k, v in keys.items())]

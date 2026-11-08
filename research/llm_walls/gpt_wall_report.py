@@ -2,6 +2,8 @@
 
   python -B -m research.llm_walls.gpt_wall_report gpt-001
 
+<name> is a GPT wall's name (gpt_wall.walls): a case of the study gpt-walls, or a wall of the
+research/runs archive. The dev walls beside it are the archive's campaigns/dev-2seeds.
 Writes research/reports/<name>/ once (refuses an existing one): decisions.csv, switches.json,
 trajectory.csv, quality.csv, summary.json. Reads the run records only: never writes them, builds
 no wall, calls no API.
@@ -26,13 +28,11 @@ import csv
 import json
 import re
 import sys
-from pathlib import Path
-
-import numpy as np
 
 from research.controller import llm_api as llm_adapter
 from research.controller import order_controller as controllers
-from research.paths import REPO
+from research.llm_walls import gpt_wall
+from research.paths import LEGACY_RUNS, REPO
 from research.walls import campaign_quality as quality_batch
 from research.walls import wall_metrics as metrics
 from Stonepacker2D.stack.selection import PAPER_ORDER, load_trace, select
@@ -121,7 +121,7 @@ def quality(run, seed):
         if d['seed'] == str(seed):
             out.append({'arm': d['arm'], **{k: d[k] for k in KEYS}, 'status': d['status']})
     for o in out:
-        run_dir = run if o['arm'] == 'gpt' else quality_batch.RUNS / DEV.format(arm=o['arm'], seed=seed)
+        run_dir = run if o['arm'] == 'gpt' else LEGACY_RUNS / DEV.format(arm=o['arm'], seed=seed)
         lam = metrics.mechanism_lambdas(next(run_dir.glob('result_*')))
         o.update(lambda_left=lam['left'], lambda_right=lam['right'])
     return out
@@ -135,18 +135,21 @@ def write_csv(path, rows):
 
 
 def main(name):
-    run = quality_batch.RUNS / 'gpt-walls' / name
     out = REPO / 'research' / 'reports' / name
     if out.exists():
         raise SystemExit(f'{out} exists: a report is written once')
+    wall = gpt_wall.walls(False).get(name)
+    if wall is None:
+        raise SystemExit(f'no GPT wall is named {name}')
+    run = wall.folder
     result = next(run.glob('result_*'))
     receipt = json.loads((run / 'receipt.json').read_text(encoding='utf-8'))
-    journal = json.loads((run.parent / 'journals' / f'{name}.json').read_text(encoding='utf-8'))
-    runner = json.loads((run / 'report.json').read_text(encoding='utf-8'))
+    journal = json.loads(wall.journal.read_text(encoding='utf-8'))
+    runner = json.loads(wall.report.read_text(encoding='utf-8'))
     records = [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
     seed = journal['seed']
     rows, switches = decision_rows(result, records, llm_adapter.price(receipt['controller']['llm']))
-    traj = trajectory(result, next((quality_batch.RUNS / DEV.format(arm='paper', seed=seed)).glob('result_*')))
+    traj = trajectory(result, next((LEGACY_RUNS / DEV.format(arm='paper', seed=seed)).glob('result_*')))
     check = controllers.check(result)
     leaks = [(r['event'], t['call']) for r in records for t in r.get('transcripts') or []
              if QUALITY_TERMS.search(json.dumps(t.get('request'), ensure_ascii=False))]

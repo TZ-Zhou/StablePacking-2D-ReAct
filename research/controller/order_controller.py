@@ -1407,11 +1407,11 @@ OFFLINE = [{'kind': 'null'}, {'kind': 'random', 'seed': 1}, {'kind': 'rule'},
 
 def offline(manifest, out):
     import pandas as pd
-    from research.walls import run_wall
+    from research.storage.case_id import wall_dir
     rows = []
     with (out / 'records.jsonl').open('w', encoding='utf-8') as f:
         for w in manifest.itertuples():
-            result = next((run_wall.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
+            result = next(wall_dir(w.run).rglob('trace/commits.jsonl')).parent.parent
             llm_switches = None
             for spec in OFFLINE + [{'kind': 'random', 'seed': 1, 'matched': True}]:
                 if spec.get('matched'):  # paired with the max_llc mock's switches on this wall
@@ -1448,7 +1448,7 @@ def main(argv=None):
         return 0 if reports and all(r['ok'] for r in reports) else 1
     from research.walls import campaign
     args.out.mkdir(parents=True, exist_ok=False)
-    manifest = pd.read_csv(campaign.CAMPAIGNS / args.id / 'manifest.csv')
+    manifest = pd.read_csv(campaign.manifest_path(args.id))
     df = offline(manifest[(manifest.arm == args.arm) & (manifest.status == 'PROCESS_PASS')], args.out)
     pd.set_option('display.width', 250)
     print(df.groupby('controller').agg(calls=('switched', 'size'), decision_points=('decision_point', 'sum'),
