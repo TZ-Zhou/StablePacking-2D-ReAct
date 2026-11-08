@@ -5,11 +5,12 @@
 ## 內容
 | 項目 | 說明 |
 | --- | --- |
-| `paths.py` | repo、`runs/`、`validation/`、`quality/` 的路徑，全套件只在這裡定義 |
+| `paths.py` | repo、`runs`（封存）、`cases`、`studies`、`validation/`、`quality/` 的路徑，全套件只在這裡定義 |
 | `walls/` | 建牆、檢查、批次實驗與品質評分（見下表） |
 | `controller/` | 濾波順序控制器與 LLM（見下表） |
 | `analysis/` | 離線分析與 P0–P2 探索研究；見該處 README |
 | `llm_walls/` | LLM 實牆與付費 API（見下表） |
+| `storage/` | 新牆的 case_id、索引與 study 紀錄，以及封存的 `runs`（見下表） |
 | `load_env.ps1` | 把 repo 根目錄 `.env.local`（授權與 API 金鑰，已被 git 忽略）載入目前 PowerShell 視窗，只印名稱不印值 |
 | `findings.md` | 研究結論 |
 | `quality/` | 各品質方法一個子資料夾，放批次彙總 json 與品質 csv、jsonl 輸出 |
@@ -40,6 +41,14 @@
 | `gpt_wall.py` | 以 OpenAI 模型選濾波順序跑完整面牆的安全執行器與花費帳本 |
 | `dev_walls.py` | 在 GPT 牆之前，以開發種子建 Paper 牆與各控制器牆並檢查 |
 | `gpt_wall_report.py` | 唯讀產生一面 GPT 實牆的離線報告（決策、切換、軌跡、品質），寫到 `reports/<名稱>/` |
+
+### storage/
+| 檔案 | 說明 |
+| --- | --- |
+| `case_id.py` | case_id 的產生、解析與檢查，以及定義雜湊 `spec_sha256`；場景代碼表與電腦代碼表只在這裡 |
+| `case_index.py` | 由各 receipt 重建 cases 資料夾的 index.csv |
+| `legacy_runs.py` | 封存的 runs 資料夾：產生 legacy-index.csv、設唯讀 |
+| `studies.py` | 讀寫各 study 的 study.json（一組事先設計的 case） |
 
 ## 使用
 - 從 repo 根目錄以模組執行，例如 `python -B -m research.walls.run_wall ...`；各檔開頭的 docstring 有子指令與參數。

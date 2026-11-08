@@ -33,7 +33,7 @@ research/cases/<case_id>/
   derived/<方法版本>/         可重算的分析，例如 wang-quality-v1/、order-sensitivity-v2/
 ```
 
-receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene`（場景代碼）、`parent`（母牆 case_id，沒有則為 null）、`spec_sha256`（定義的雜湊，同一定義的重跑以它分組）。
+receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene`（場景代碼）、`parent`（母牆 case_id，沒有則為 null）、`started`（開始時間，ISO 8601 帶時區）、`spec_sha256`（定義的雜湊，同一定義的重跑以它分組）。
 
 ## 存檔格式
 
@@ -74,7 +74,7 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 
 | 模組 | 改動 |
 | --- | --- |
-| `paths.py` | `RUNS` 改為唯讀的 `LEGACY_RUNS`；新增 `CASES`、`STUDIES` |
+| `paths.py` | `RUNS` 改為唯讀的 `LEGACY_RUNS`；新增 `CASES_DIR`、`STUDIES_DIR`（`run_wall.CASES` 已是場景表，故不用 `CASES`） |
 | `walls/run_wall.py` | 配 case_id、寫到 `cases/`、receipt 新欄位、結束時產生 `derived/steps.csv`、拒寫舊資料夾；`CASES` 新增 `TH_T20` |
 | `walls/campaign.py`、`llm_walls/dev_walls.py` | 以 study 記錄 arm × 種子，不再巢狀命名 |
 | `analysis/counterfactual_branches.py`、`analysis/lookahead_study.py` | 母牆以 `parent` 記錄 |
