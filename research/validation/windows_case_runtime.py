@@ -1,5 +1,5 @@
 """Process-local Windows compatibility and observation for original test scripts."""
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 import importlib
 import itertools
 import json
@@ -88,7 +88,78 @@ def _run_shared_task(constants, function, step, name, sizes, pose):
     global _step_arguments
     if _step_arguments[0] != step:
         _step_arguments = step, _load_step(name, sizes)
-    return _run_task(constants, function, (pose, *_step_arguments[1]))
+    result = _run_task(constants, function, (pose, *_step_arguments[1]))
+    return result, _batch_median_height(function)
+
+
+def _is_placement(function):
+    return getattr(function, "__name__", "") == "place_one_stone"
+
+
+def _batch_median_height(function):
+    """The stone height the last call of `function` compared with the batch's median, None when it did not."""
+    if not _is_placement(function):
+        return None
+    return importlib.import_module("Stonepacker2D.stack.place_stone").batch_median_height
+
+
+def _wall_lists(base):
+    return base.centers, base.rock_centers, base.rock_tops, base.rock_left_tops, base.rock_right_tops, base.rock_right_bottoms
+
+
+class PoseMemo:
+    """The results of the poses evaluated on the last two walls: a step evaluates a wall and its mirror image.
+
+    A sampling attempt that failed or only chose the cluster is followed by one on the same wall, which often evaluates
+    the same poses again. place_one_stone reads the pose, the wall and, when no stone is to the left of the pose, the
+    median height of the batch; everything else it returns stands, and that one value is computed again for the new batch.
+    A result is reused only after the wall and the pose are found equal to those it was computed for.
+    """
+
+    WALLS_KEPT = 2
+
+    def __init__(self):
+        self.walls = []  # [(wall image, lists of the wall, {(stone id, rotation): (pose, result, height)})], oldest first
+
+    def _results_of(self, base):
+        lists = _wall_lists(base)
+        for image, kept, results in self.walls:
+            if kept == lists and np.array_equal(image, base.matrix):
+                return results
+        return None
+
+    def results_for(self, base):
+        """The results of this wall; a wall not seen before replaces the oldest one."""
+        results = self._results_of(base)
+        if results is None:
+            results = {}
+            self.walls = [*self.walls[1 - self.WALLS_KEPT :], (base.matrix, _wall_lists(base), results)]
+        return results
+
+    @staticmethod
+    def _same_pose(first, second):
+        return (
+            (first.width, first.height, first.area) == (second.width, second.height, second.area)
+            and list(first.center) == list(second.center)
+            and np.array_equal(first.matrix, second.matrix)
+        )
+
+    def known(self, results, pose, stones):
+        """The result of `pose` for the batch `stones` when it was evaluated on this wall, else None."""
+        entry = results.get((pose.id, pose.rotate_from_ori))
+        if entry is None or not self._same_pose(entry[0], pose):
+            return None
+        _, result, height = entry
+        if height is None:
+            return result
+        filters = result[3].copy()
+        heights = np.array([stone.height for stone in stones], dtype=np.float64)
+        filters[0] = -abs(np.percentile(heights, 50) - height) / height
+        return (*result[:3], filters, *result[4:])
+
+    @staticmethod
+    def remember(results, pose, result, height):
+        results[(pose.id, pose.rotate_from_ori)] = (pose, result, height)
 
 
 def _exit_with_parent():
@@ -120,6 +191,9 @@ class SharedPool:
     block = None
     waiting = None
     step = 0  # numbers the steps, so that a worker can tell its arguments are those of the task's step
+    memo = PoseMemo()
+    known = None  # the results of the wall of this step when the function is place_one_stone, else None
+    reused = frozenset()  # the poses of this step answered from the memo
 
     def __init__(self, processes):
         if SharedPool.executor is None:
@@ -139,16 +213,20 @@ class SharedPool:
             self._submit_step(function, inputs[0][1:])
         assert all(a is b for task in inputs for a, b in zip(task[1:], SharedPool.shared)), "not the poses of one step"
         try:
-            results = [SharedPool.futures[task[0]].result() for task in inputs]
+            outcomes = [SharedPool.futures[task[0]].result() for task in inputs]
         except BaseException:
             for future in SharedPool.futures:
                 future.cancel()
             SharedPool.release()
             raise
+        if SharedPool.known is not None:
+            for task, (result, height) in zip(inputs, outcomes):
+                if task[0] not in SharedPool.reused:
+                    PoseMemo.remember(SharedPool.known, SharedPool.shared[1][task[0]], result, height)
         SharedPool.waiting -= {task[0] for task in inputs}
         if not SharedPool.waiting:
             SharedPool.release()
-        return results
+        return [result for result, _ in outcomes]
 
     @staticmethod
     def release():
@@ -165,12 +243,19 @@ class SharedPool:
         poses = range(len(shared[1]))
         SharedPool.block, SharedPool.shared, SharedPool.waiting = block, shared, set(poses)
         SharedPool.step += 1
-        SharedPool.futures = [
-            SharedPool.executor.submit(
-                _run_shared_task, constants, function, SharedPool.step, block.name, sizes, pose
-            )
-            for pose in poses
-        ]
+        SharedPool.known = SharedPool.memo.results_for(shared[2]) if _is_placement(function) else None
+        SharedPool.reused, SharedPool.futures = set(), []
+        for pose in poses:
+            result = None if SharedPool.known is None else SharedPool.memo.known(SharedPool.known, shared[1][pose], shared[0])
+            if result is None:
+                future = SharedPool.executor.submit(
+                    _run_shared_task, constants, function, SharedPool.step, block.name, sizes, pose
+                )
+            else:
+                SharedPool.reused.add(pose)
+                future = Future()
+                future.set_result((result, None))
+            SharedPool.futures.append(future)
 
 
 def configure(namespace):

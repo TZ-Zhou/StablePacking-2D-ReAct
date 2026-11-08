@@ -12,6 +12,7 @@ import time
 import unittest
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing.shared_memory import SharedMemory
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -148,8 +149,8 @@ class SharedPool(unittest.TestCase):
         block, sizes = runtime._share_step(step_with_arrays(2)[0][1:])
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
-        first, second = (runtime._run_shared_task({}, arguments_seen, 7, block.name, sizes, j) for j in (0, 1))
-        next_step = runtime._run_shared_task({}, arguments_seen, 8, block.name, sizes, 0)
+        first, second = (runtime._run_shared_task({}, arguments_seen, 7, block.name, sizes, j)[0] for j in (0, 1))
+        next_step = runtime._run_shared_task({}, arguments_seen, 8, block.name, sizes, 0)[0]
         self.assertIs(first[1], second[1])
         self.assertIsNot(first[1], next_step[1])
         self.assertTrue(np.array_equal(first[1][0], next_step[1][0]))
@@ -217,6 +218,111 @@ def all_arguments(pose, *shared):
     return shared
 
 
+def a_wall(value=1.0):
+    return SimpleNamespace(
+        matrix=np.full((6, 8), value),
+        centers=[[1.0, 2.0]],
+        rock_centers=[[1.0, 2.0]],
+        rock_tops=[3],
+        rock_left_tops=[[0, 3]],
+        rock_right_tops=[[2, 3]],
+        rock_right_bottoms=[[2, 0]],
+    )
+
+
+def a_pose(stone=7, rotation=0, height=4, fill=1.0):
+    return SimpleNamespace(
+        id=stone,
+        rotate_from_ori=rotation,
+        width=3,
+        height=height,
+        area=12,
+        center=[1.5, 2.0],
+        matrix=np.full((6, 8), fill),
+    )
+
+
+def batch_of(*heights):
+    return [SimpleNamespace(height=height) for height in heights]
+
+
+class PoseMemo(unittest.TestCase):
+    result = (2, 3, 0.5, np.array([-0.25, 1.0, 2.0, 3.0, 4.0, 5.0]), 3.0, np.zeros(6))
+
+    def setUp(self):
+        self.memo = runtime.PoseMemo()
+        self.results = self.memo.results_for(a_wall())
+
+    def test_an_equal_pose_on_an_equal_wall_is_answered(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, None)
+        results = self.memo.results_for(a_wall())
+        self.assertIs(self.memo.known(results, a_pose(), batch_of(1, 2, 3)), self.result)
+
+    def test_a_pose_not_evaluated_yet_is_not_answered(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, None)
+        self.assertIsNone(self.memo.known(self.results, a_pose(rotation=-90), batch_of(1, 2, 3)))
+
+    def test_a_pose_with_the_same_key_but_other_pixels_is_not_answered(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, None)
+        self.assertIsNone(self.memo.known(self.results, a_pose(fill=2.0), batch_of(1, 2, 3)))
+
+    def test_another_wall_starts_without_results(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, None)
+        self.assertEqual(self.memo.results_for(a_wall(2.0)), {})
+
+    def test_a_wall_and_its_mirror_image_are_both_kept_but_not_a_third(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, None)
+        self.memo.results_for(a_wall(2.0))
+        self.assertIs(self.memo.results_for(a_wall()), self.results)
+        self.memo.results_for(a_wall(3.0))
+        self.memo.results_for(a_wall(4.0))
+        self.assertEqual(self.memo.results_for(a_wall()), {})
+
+    def test_the_value_read_from_the_batch_is_computed_for_the_new_batch(self):
+        runtime.PoseMemo.remember(self.results, a_pose(), self.result, 4)
+        heights = batch_of(2, 3, 9, 10)
+        got = self.memo.known(self.results, a_pose(), heights)
+        expected = -abs(np.percentile([2.0, 3.0, 9.0, 10.0], 50) - 4) / 4
+        self.assertEqual(got[3][0], expected)
+        np.testing.assert_array_equal(got[3][1:], self.result[3][1:])
+        self.assertEqual(self.result[3][0], -0.25)
+        self.assertEqual(got[:3], self.result[:3])
+
+
+def place_one_stone(pose, stones, poses, base):
+    """Stands for the real function in SharedPool: a value that differs on every call shows whether a worker ran."""
+    return pose, time.perf_counter_ns()
+
+
+class PoseReuseInThePool(unittest.TestCase):
+    def setUp(self):
+        runtime.SharedPool.size = 1
+        runtime.SharedPool.memo = runtime.PoseMemo()
+        self.addCleanup(self.stop_workers)
+
+    @staticmethod
+    def stop_workers():
+        runtime.SharedPool.release()
+        if runtime.SharedPool.executor is not None:
+            runtime.SharedPool.executor.shutdown(wait=True, cancel_futures=True)
+            runtime.SharedPool.executor = None
+
+    @staticmethod
+    def attempt(poses, wall):
+        shared = (batch_of(4, 4), poses, wall)
+        return runtime.SharedPool(1).starmap(place_one_stone, [(index, *shared) for index in range(len(poses))])
+
+    def test_only_the_poses_not_evaluated_on_this_wall_reach_a_worker(self):
+        first = self.attempt([a_pose(stone=1), a_pose(stone=2)], a_wall())
+        second = self.attempt([a_pose(stone=3), a_pose(stone=2)], a_wall())
+        self.assertNotEqual(second[0], first[0])
+        self.assertEqual(second[1], first[1])
+
+    def test_a_new_wall_evaluates_the_same_pose_again(self):
+        first = self.attempt([a_pose()], a_wall())
+        self.assertNotEqual(self.attempt([a_pose()], a_wall(2.0)), first)
+
+
 @unittest.skipUnless(ARCHIVED_BASES, "the archived wall is not present")
 class RealStepPayload(unittest.TestCase):
     """A step's arguments rebuilt from an archived wall arrive through the shared block as through a per-task pickle."""
@@ -229,7 +335,7 @@ class RealStepPayload(unittest.TestCase):
         block, sizes = runtime._share_step(self.shared)
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
-        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, 9, block.name, sizes, 0)))
+        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, 9, block.name, sizes, 0)[0]))
 
     def test_it_equals_what_a_per_task_pickle_delivers(self):
         expected = list(leaves(pickle.loads(pickle.dumps(self.shared, 4))))

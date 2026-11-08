@@ -25,6 +25,8 @@ import os
 import cv2
 from ..utils.plot import save_matrix_plot,save_matrix_with_mask
 
+batch_median_height = None  # the stone height the last place_one_stone compared with the batch's median, if it did
+
 def isNaN(num):
     return num != num
 def seed_everything(seed=20):
@@ -56,6 +58,8 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     :return: Found translation x, y, score of the stone, kinematics result
     :rtype: bool
     """
+    global batch_median_height
+    batch_median_height = None
     prefill_regions(base)
     write_txt = get_record_detail()['RECORD_SELECTION_VALUE']
     plot_img_detail = get_record_detail()['RECORD_PLACEMENT_IMG']
@@ -476,6 +480,7 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
         #     #    (abs(np.percentile(heights_stones, 50)-try_stone.height)/try_stone.height)
         filters[0] = -abs(np.percentile(heights_stones, 50) -
                         try_stone.height)/try_stone.height
+        batch_median_height = try_stone.height
             # print(np.median(heights_stones))
         #filters[0] = -1
     
