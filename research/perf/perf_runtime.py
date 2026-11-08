@@ -58,7 +58,7 @@ def peak_working_set():
 PERSISTENT = os.environ.get("PERF_PERSISTENT") == "1"
 POOL_SIZE = int(os.environ.get("PERF_POOL_SIZE", "0"))  # 0: the case's set_number_cpu value
 DUMP_TASKS = int(os.environ.get("PERF_DUMP_TASKS", "0"))
-DUMP_EVERY = 10  # starmap calls per task sample
+DUMP_EVERY = int(os.environ.get("PERF_DUMP_EVERY", "10"))  # starmap calls per task sample
 PICKLE_PROTOCOL = 5
 
 STATS = defaultdict(lambda: [0.0, 0])  # label -> [seconds, or the amount for a counter such as main.pool.tasks; calls]

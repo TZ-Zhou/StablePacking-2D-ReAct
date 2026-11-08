@@ -34,7 +34,7 @@
 - 量測用的那次序列化與 task 樣本的寫檔發生在 `main.pool.starmap` 計時開始之前，但仍在砌牆迴圈內，所以算在秒/顆裡。
 
 ## task 樣本
-`--dump-tasks N` 把真實輸入存成 `perf/tasks/task_<i>.pkl`：主行程每第 10 次 `starmap` 取該批中間的 task，存滿 N 個為止。每個檔案是 `{"constants": <大寫常數>, "arguments": <place_one_stone 的參數>}`，可以不跑牆直接重現單次呼叫。序列化失敗時案例直接中止。取樣不抽亂數，也不改參數。
+`--dump-tasks N` 把真實輸入存成 `perf/tasks/task_<i>.pkl`：主行程每第 `--dump-every` 次（預設 10）`starmap` 取該批中間的 task，存滿 N 個為止。每個檔案是 `{"constants": <大寫常數>, "arguments": <place_one_stone 的參數>}`，可以不跑牆直接重現單次呼叫。序列化失敗時案例直接中止。取樣不抽亂數，也不改參數。
 
 ## 使用
 ```powershell

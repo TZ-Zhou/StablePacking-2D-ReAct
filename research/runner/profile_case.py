@@ -48,6 +48,7 @@ def case_environment(output, replicates, args):
         "PERF_CPROFILE": "1" if args.cprofile else "0",
         "PERF_POOL_SIZE": str(args.pool_size),
         "PERF_DUMP_TASKS": str(args.dump_tasks),
+        "PERF_DUMP_EVERY": str(args.dump_every),
     }
     return {
         **case_definition.quiet_env(),
@@ -89,6 +90,7 @@ def parse_args(argv):
         "--cprofile", action="store_true", help="cProfile every worker (slower; for function-level data)"
     )
     parser.add_argument("--dump-tasks", type=int, default=0, help="save up to N real tasks to perf/tasks")
+    parser.add_argument("--dump-every", type=int, default=10, help="starmap calls per saved task")
     return parser.parse_args(argv)
 
 
