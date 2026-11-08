@@ -2296,5 +2296,40 @@ class SeventhReview(unittest.TestCase):
         order_controller.refuse_paid({'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}}, 'replay')  # local: allowed
         order_controller.refuse_paid({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, 'replay')
 
+
+class WarmWorker(unittest.TestCase):
+    """A policy worker without an LLM starts before the first stone, once."""
+
+    def test_warm_starts_the_worker_once(self):
+        transport = controller_worker.ProcessTransport(order_controller.full_spec({"kind": "random", "seed": 1}))
+        self.addCleanup(transport.close)
+        transport.warm()
+        pid = transport.pid
+        self.assertIsNotNone(pid)
+        transport.warm()
+        self.assertEqual((transport.pid, transport.started), (pid, 1))
+
+    def test_a_worker_warmed_up_answers_as_a_cold_one(self):
+        spec = order_controller.full_spec({"kind": "random", "seed": 1})
+        warm, cold = controller_worker.ProcessTransport(spec), controller_worker.ProcessTransport(spec)
+        self.addCleanup(warm.close)
+        self.addCleanup(cold.close)
+        warm.warm()
+        request = {"observation": {}, "base_order": "0,1,2,3,4", "orders": {"0,1,2,3,4": {}, "4,3,2,1,0": {}}}
+        self.assertEqual(warm.decide(request), cold.decide(request))
+        self.assertEqual((warm.started, cold.started), (1, 1))
+
+    def test_only_a_policy_without_an_llm_is_warmed_up(self):
+        for spec, calls in (
+            ({"kind": "random", "seed": 1}, 1),
+            ({"kind": "react", "llm": {"kind": "mock", "mode": "max_llc"}}, 0),
+        ):
+            transport = mock.Mock(spec=["warm", "decide"])
+            order_controller.ControllerClient(
+                spec, transport, sink=lambda record: None, ledger=lambda entry: None
+            ).warm_worker()
+            self.assertEqual(transport.warm.call_count, calls, spec)
+
+
 if __name__ == '__main__':
     unittest.main()

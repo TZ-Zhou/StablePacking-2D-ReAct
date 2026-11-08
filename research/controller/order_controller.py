@@ -457,7 +457,14 @@ class ControllerClient:
             self.tokens += tokens_of(reply)
         return parse_order(reply['order']), {**{k: v for k, v in reply.items() if k not in ('order', 'restart')}, **digest}
 
+    def warm_worker(self):
+        """Start a policy worker without an LLM before the first stone; react keeps starting at its first request."""
+        if self.spec_["kind"] != "react" and hasattr(self.transport, "warm"):
+            self.transport.warm()
+
     def __call__(self, policy, ctx):
+        if self.calls == 0:
+            self.warm_worker()
         obs, info = self.observer(policy, ctx)
         decision_point = len(info['classes']) >= 2
         order, detail = self.ask(obs, info) if decision_point else (info['base'], {'source': 'not_a_decision_point'})

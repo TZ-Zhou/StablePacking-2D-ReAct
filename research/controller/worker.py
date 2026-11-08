@@ -426,6 +426,13 @@ class ProcessTransport:
             return 'worker_protocol_error', 'a message that is neither {"ok": reply} nor {"error": text}'
         return 'ok', message['ok']
 
+    def warm(self):
+        """Start the worker now, not at the first decision; a failed start is retried there."""
+        if self.process is None and self.unreaped is None:
+            status, _ = self.start()
+            if status != "ok":
+                self.close(status)
+
     def decide(self, request, settle=None):
         if self.unreaped is not None:
             self.close('reap_retry')
