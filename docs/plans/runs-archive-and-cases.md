@@ -18,7 +18,7 @@
 | `research/runs/` | 封存的舊紀錄，唯讀 | 忽略 |
 | `research/cases/<case_id>/` | 新牆，一 case 一資料夾，全部同一層 | 忽略 |
 | `research/cases/index.csv` | 一 case 一列，由各 receipt 重建，不手改 | 忽略 |
-| `research/studies/<study_id>/study.json` | study 的設計（arm × 種子、分支計畫）與用到的 case_id | 追蹤 |
+| `research/studies/<study_id>/` | `study.json`：study 的設計（arm × 種子、分支計畫）與用到的 case_id；旁邊放彙整表（`manifest.csv`、`steps.csv`、`branches.csv`）與 `runs.jsonl` | 追蹤 |
 
 ## 一個 case 資料夾
 
@@ -74,12 +74,13 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 
 | 模組 | 改動 |
 | --- | --- |
-| `paths.py` | `RUNS` 改為唯讀的 `LEGACY_RUNS`；新增 `CASES_DIR`、`STUDIES_DIR`（`run_wall.CASES` 已是場景表，故不用 `CASES`） |
+| `paths.py` | 封存路徑 `LEGACY_RUNS`（唯讀）；新牆 `CASES_DIR`、一組牆 `STUDIES_DIR`（`run_wall.CASES` 已是場景表，故不用 `CASES`） |
 | `walls/run_wall.py` | 配 case_id、寫到 `cases/`、receipt 新欄位、結束時產生 `derived/steps.csv`、拒寫舊資料夾；`CASES` 新增 `TH_T20` |
 | `walls/campaign.py`、`llm_walls/dev_walls.py` | 以 study 記錄 arm × 種子，不再巢狀命名 |
 | `analysis/counterfactual_branches.py`、`analysis/lookahead_study.py` | 母牆以 `parent` 記錄 |
-| `llm_walls/gpt_wall.py`、`llm_walls/gpt_smoke.py` | 輸出改到 `cases/`；LLM 紀錄放 `llm/` |
-| `walls/campaign_quality.py`、`analysis/order_sensitivity.py` | 輸出改到 `derived/<方法版本>/` |
+| `llm_walls/gpt_wall.py`、`llm_walls/gpt_smoke.py` | 輸出改到 `cases/`，LLM 紀錄放 `llm/`，study 為 `gpt-walls`、`gpt-walls-loopback`、`api-smoke`；封存內的舊牆仍計入名稱唯一性與預算。smoke 是舊牆的副本，也佔一個 case，receipt 有 `smoke_of`，統計牆數時要排除。建牆期間的鎖在 study 資料夾的 `.lock`（不進版控） |
+| `analysis/order_sensitivity.py` | 未指定輸出資料夾時寫到該 case 的 `derived/order-sensitivity-v2/`；拒絕寫入封存 |
+| `walls/campaign_quality.py` | 一次評一整個 campaign，彙總仍寫到 `research/quality/<方法>/`；來源牆以 `wall_dir` 解析，輸出拒絕落在封存或 `cases/` 內 |
 
 ## 實作順序
 
@@ -90,7 +91,7 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 3. 寫入端改用 `cases/`、`parent` 與 `studies/`。
 4. 衍生分析改存 `derived/`。
 5. 測試路徑、`research/README.md`、`.claude/SHELL.md`、`.claude/PYTHON_CODING.md` 同步。
-6. `.gitignore` 加入 `research/cases/`（該檔目前有他人未提交的修改，提交前先協調）。
+6. `.gitignore` 加入 `research/cases/`。
 
 ## case_id
 
@@ -101,13 +102,13 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 | `AL_IR` | Tests/Almeida/IR | `almeida-ir` |
 | `AL_PR` | Tests/Almeida/PR | `almeida-pr` |
 | `AL_R` | Tests/Almeida/R | `almeida-r` |
-| `TH_T20` | Tests/Thangavelu，noise 20 | 尚無，需新增 |
+| `TH_T20` | Tests/Thangavelu，noise 20 | `thangavelu-noise20` |
 | `TH_T80` | Tests/Thangavelu，noise 80 | `thangavelu-noise80` |
 | `BR` | Tests/Bricks | `bricks` |
 | `FF_D20` | Tests/FFT_stones | `fft-d2-0` |
 | `RB` | Tests/Rubble_stone_walls | `rubble` |
 
-`TH_T20` 要在 `run_wall.CASES` 新增：`Tests/Thangavelu/00_run.py` 寫死 noise 80 的資料與牆寬。
+`TH_T20` 與 `TH_T80` 共用 `Tests/Thangavelu/00_run.py`：該檔寫死 noise 80 的資料檔名，`run_wall.SOURCE_EDITS` 在 staging 時換成 noise 20，並記在 receipt 的 `source_edits`；牆寬由資料算出。
 
 - 同一台機器、同一場景、同一分鐘撞名時，在分鐘後依序加 `b`、`c`…，例如 `20261108-1254b-TH_T80-pc1`。
 - pc 代碼由程式依主機名判斷，對照表只在 `storage/case_id.py`：`GIAAIL-STRIX` 是 pc1；另一台（舊紀錄的 `C:\Users\user`）是 pc2，主機名在該機第一次建牆前填入。主機名不在對照表就拒絕建牆。

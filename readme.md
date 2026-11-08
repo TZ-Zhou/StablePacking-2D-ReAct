@@ -90,25 +90,25 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 
 ## 命令
 
-`run_wall.py` 的格式是 `<案例> <run 名稱>`，輸出到新資料夾 `research/runs/<run 名稱>/`（名稱不可重複使用）。
+`run_wall.py` 的格式是 `<案例>`。每面牆自動取得一個 case_id（開始時間、場景代碼、電腦，例如 `20261108-1254-TH_T80-pc1`），輸出到新資料夾 `research/cases/<case_id>/`；case_id 印在結束時的收據裡。舊牆封存在 `research/runs/`，只讀不寫。`python -B -m research.storage.case_index` 依各收據重建總表 `research/cases/index.csv`。
 
 ```powershell
 # A1. 單面牆、Wang 的原始行為（--policy code_original）
-& $PY -B -m research.walls.run_wall bricks my-wang-bricks --policy code_original
+& $PY -B -m research.walls.run_wall bricks --policy code_original
 
 # A2. 論文的濾波級聯，預設順序 3,0,2,1,4
-& $PY -B -m research.walls.run_wall thangavelu-noise80 my-paper-01 --policy paper --seed 20
+& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20
 
 # A3. 指定濾波順序（五個濾波器 0–4 的排列）
-& $PY -B -m research.walls.run_wall thangavelu-noise80 my-alt-01 --policy paper --order 2,4,3,1,0 --seed 20
+& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --order 2,4,3,1,0 --seed 20
 
 # A4. 先試跑：只放 3 塊就停（確認環境、授權、流程都通）
-& $PY -B -m research.walls.run_wall bricks smoke-01 --policy code_original --placements 3
+& $PY -B -m research.walls.run_wall bricks --policy code_original --placements 3
 ```
 
 `code_original` 是重現 Wang 程式碼的濾波順序（含它的實作細節）；`paper` 是論文描述的順序，各濾波器只套用一次。兩者差別見 `Stonepacker2D/stack/selection.py`。
 
-選項：`--seed S`（預設 20）、`--timeout 秒`（預設 1800）、`--no-trace`（不寫候選追蹤，只留輸出）、`--placements N`（放 N 塊後停）、`--tol`（數值容差，預設 1e-9）。
+選項：`--parent 牆`（這面牆分支自哪面牆：case_id 或 `research/runs` 內的路徑）、`--seed S`（預設 20）、`--timeout 秒`（預設 1800）、`--no-trace`（不寫候選追蹤，只留輸出）、`--placements N`（放 N 塊後停）、`--tol`（數值容差，預設 1e-9）。
 
 ## 案例
 
@@ -119,18 +119,20 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 | `fft-d2-0` | Figures 26–27 | 5 | 傅立葉形狀產生的石頭 |
 | `rubble` | Figure B.33 | 20 | 92 個真實石頭 |
 | `thangavelu-noise80` | Figures 22–25 | 20 | 多邊形、雜訊 80；研究層的主要案例 |
+| `thangavelu-noise20` | 同一組資料的雜訊 20 | 20 | 與 noise80 共用建牆程式，只換石頭影像 |
 
 `run_wall` 一次只建批次中的第一面牆。實驗要建多面牆請用 `campaign`（見第四節）。
 
 ## 看結果
 
-`research/runs/<名稱>/` 內容：
+`research/cases/<case_id>/` 內容：
 
 | 項目 | 說明 |
 | --- | --- |
 | `receipt.json` | 整次執行的收據：狀態、種子、git 版本、程式雜湊、耗時、放置數、追蹤檢查 |
 | `result_<時間>/` | 牆本身：`img/`（牆圖）、`decisions.txt`、`filter.txt`、`base.pkl`、`time.txt`、`record/`、`trace/` |
 | `execution.log`、`events.jsonl`、`environment-guard.log` | 過程紀錄 |
+| `derived/steps.csv` | 有追蹤的牆才有：每一步的動作與實際用的政策、順序 |
 
 `receipt.json` 的 `status`：
 
@@ -147,10 +149,10 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 ```powershell
 # 唯讀檢查一個 run（參數是含 receipt.json 的 run 資料夾，不是 result_<時間>）：
 # 追蹤重放、提交與候選一致、基底矩陣與位姿一致
-& $PY -B -m research.walls.check_run research\runs\my-paper-01
+& $PY -B -m research.walls.check_run research\cases\<case_id>
 
 # 逐位元組比較兩個 run（例如換電腦重跑同一個種子）
-& $PY -B -m research.walls.check_run research\runs\my-paper-01 --compare research\runs\other-run
+& $PY -B -m research.walls.check_run research\cases\<case_id> --compare research\cases\<另一個 case_id>
 ```
 
 `time.txt` 記錄耗時、PDF 內嵌建立日期，這兩者每次都不同，是預期的差異。
@@ -174,10 +176,10 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 
 ```powershell
 # Null 控制器（約 10 個放置；Thangavelu 有真正的決策點）
-& $PY -B -m research.walls.run_wall thangavelu-noise80 my-null-01 --policy paper --seed 20 --controller '{\"kind\": \"null\"}' --placements 10
+& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"null\"}' --placements 10
 
 # 假 LLM 的 ReAct，控制器在獨立 worker venv 的子行程中執行
-& $PY -B -m research.walls.run_wall thangavelu-noise80 my-react-mock-01 --policy paper --seed 20 --controller '{\"kind\": \"react\", \"llm\": {\"kind\": \"mock\", \"mode\": \"max_llc\"}}' --worker-venv --placements 10
+& $PY -B -m research.walls.run_wall thangavelu-noise80 --policy paper --seed 20 --controller '{\"kind\": \"react\", \"llm\": {\"kind\": \"mock\", \"mode\": \"max_llc\"}}' --worker-venv --placements 10
 ```
 
 實測（本機，MOSEK 授權就位）：Thangavelu 放 10 塊，Null 控制器約 9 分鐘、mock LLM 的 ReAct（經 worker venv）約 11 分鐘，兩者都是 7 個決策點、檢查 `verdict: PASS`，ReAct 的傳輸帳本 `ledger: ok`。控制器牆比 Wang 原版慢。
@@ -187,7 +189,7 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 重放驗證控制器紀錄（每筆紀錄在它自己事件的追蹤上重新執行並比對）：
 
 ```powershell
-& $PY -B -m research.controller.order_controller check research\runs\my-null-01
+& $PY -B -m research.controller.order_controller check research\cases\<case_id>
 ```
 
 ## B1. 開發牆（免費）
@@ -195,13 +197,13 @@ PowerShell 5.1 會吃掉傳給外部程式的雙引號，所以 JSON 內的 `"` 
 在 GPT 牆之前，以 2 個開發種子建 Paper 牆與各控制器牆，並檢查 Null 牆等於 Paper 牆：
 
 ```powershell
-& $PY -B -m research.llm_walls.dev_walls init     # 寫 research/runs/campaigns/dev-2seeds/campaign.json（只寫一次）
-& $PY -B -m research.llm_walls.dev_walls run      # 建尚未建的牆，然後檢查（要建很久）
-& $PY -B -m research.llm_walls.dev_walls check    # 檢查每面牆，寫 manifest.csv
-& $PY -B -m research.walls.campaign_quality dev-2seeds --out research\quality\dev-2seeds
+& $PY -B -m research.llm_walls.dev_walls init my-dev     # 寫 research/studies/my-dev/study.json（只寫一次）
+& $PY -B -m research.llm_walls.dev_walls run my-dev      # 建尚未建的牆，然後檢查（要建很久）
+& $PY -B -m research.llm_walls.dev_walls check my-dev    # 檢查每面牆，寫 manifest.csv
+& $PY -B -m research.walls.campaign_quality my-dev --out research\quality\my-dev
 ```
 
-這份資料已經存在於 `research/runs/campaigns/dev-2seeds`（同事 zip 帶來），通常不必重跑。
+現成的一份在封存的 `research/runs/campaigns/dev-2seeds`（同事 zip 帶來），通常不必重跑；`dev_walls check`（不加 id）檢查它，只讀不寫。
 
 ## B2. 真實 GPT 呼叫（**付費**）
 
@@ -275,7 +277,7 @@ Remove-Item Env:STONEPACKING_ALLOW_PAID_API
 
 規則：程式碼改了就拒絕繼續（保證各組只差在濾波順序）；已存在的 run 不會重跑或覆蓋；`FAILED` 會停下整個 campaign，`TIMEOUT` 與 `INCOMPLETE_TRACE` 只記錄後繼續。一面 Thangavelu 牆通常 5–20 分鐘，所以一個 campaign 可能要跑很多小時，建議分次用 `--max-runs`。
 
-已存在的 campaign（來自同事的 zip）在 `research/runs/campaigns/`，例如 `thangavelu-5arms-10seeds`（5 組 × 10 個種子）。
+新 campaign 的設計、case 清單與彙整表在 `research/studies/<id>/`，每面牆在 `research/cases/<case_id>/`。已存在的 campaign（來自同事的 zip）封存在 `research/runs/campaigns/`，例如 `thangavelu-5arms-10seeds`（5 組 × 10 個種子），只讀不寫；可用 `--extends` 接續的前提是執行程式碼未變。
 
 # 五、離線分析（不建牆，只讀已記錄的追蹤；不需要 MOSEK）
 

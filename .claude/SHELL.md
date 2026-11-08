@@ -10,7 +10,7 @@
 ## 執行方式
 
 - 一律從 repo 根目錄執行：`python -B -m research.<資料夾>.<模組> <子指令與參數>`，例如 `python -B -m research.walls.run_wall ...`（`-B` 不寫 bytecode；`research` 是套件，不能用檔案路徑跑）。各模組的子指令寫在檔案開頭的 docstring。
-- 輸出寫進 `research/runs/`（不進版控）；評估結果用 `campaign_quality.py` 寫到 `research/quality/<方法>/`。
+- 新牆由 `run_wall.py` 寫進 `research/cases/<case_id>/`（不進版控），一組牆的設計與 case 清單在 `research/studies/<id>/study.json`；`research/runs/` 是唯讀封存，不再寫入。規則見 `docs/plans/runs-archive-and-cases.md`。評估結果用 `campaign_quality.py` 寫到 `research/quality/<方法>/`。
 - 測試：`python -m pytest research/tests`（unittest 寫法）；缺 baseline 環境、openai SDK 或記錄牆的測試會自動 skip。
 
 ## 付費 API
@@ -27,7 +27,7 @@ python 加 `-u` 關掉輸出緩衝，並用 `Tee-Object` 同時寫 log，才讀�
 ```powershell
 $pyExe = "<environment-manifest.json 的 prefix>\python.exe"
 $workDir = "C:\Users\GAI\Desktop\Scott\StablePacking-2D-ReAct"
-$log = "$workDir\research\runs\<name>.log"
+$log = "$workDir\research\cases\<name>.log"
 $cmd = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; `$env:PYTHONIOENCODING = 'utf-8'; Set-Location '$workDir'; & '$pyExe' -u -B -m research.<資料夾>.<模組> <args> 2>&1 | Tee-Object -FilePath '$log'; pause"
 Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $cmd
 ```

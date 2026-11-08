@@ -37,6 +37,7 @@
 
 - 控制器只拿唯讀副本、只回 JSON（`research/controller/worker.py`），不碰 Wang 的物件與 RNG。
 - 離線分析只讀追蹤與記錄，不重建牆；要建牆就經 `research/walls/run_wall.py`。
+- 新牆只由 `run_wall.run` 寫到 `research/cases/<case_id>/`；一組牆用 `research/storage/studies.py` 記錄。讀牆一律用 `case_id.wall_dir(ref)`（case_id 或封存路徑皆可）或 `paths.LEGACY_RUNS`；`research/runs/` 只讀不寫。一面牆的衍生分析寫到該 case 的 `derived/<方法版本>/`。
 - 有狀態的才用 class；無狀態計算寫成函式。繼承深度以一層為度，其餘用組合。
 
 ## 5. docstring 與註解

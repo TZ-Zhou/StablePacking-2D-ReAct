@@ -42,7 +42,7 @@
 ## 與實驗的關係
 
 - `campaign.py init` 會記下 git head 與每個執行原始檔的 SHA256；程式改了，`run` 就拒絕繼續。要引用的 campaign 先 commit 再 init。
-- `research/runs/` 不進版控；評估結果放在 `research/quality/<方法>/`，用 `data:` commit。
+- `research/cases/` 與封存的 `research/runs/` 不進版控；`research/studies/` 的 study 紀錄與 `research/quality/<方法>/` 的評估結果進版控，用 `data:` commit。
 
 ## 沿革寫在這裡
 
@@ -50,7 +50,7 @@
 
 ## 不進版控
 
-- `research/runs/`、`Tests/*/result*/`、`.venv/`、`__pycache__/`、`.env`
+- `research/runs/`、`research/cases/`、`Tests/*/result*/`、`.venv/`、`__pycache__/`、`.env`
 - API 金鑰與 token
 - 超過 10 MB 的檔案一律先問過再加
 

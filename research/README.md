@@ -54,4 +54,4 @@
 - 從 repo 根目錄以模組執行，例如 `python -B -m research.walls.run_wall ...`；各檔開頭的 docstring 有子指令與參數。
 - 付費 API 呼叫需設 `STONEPACKING_ALLOW_PAID_API=1` 並加 `--confirm-paid`；先用 `preflight` 檢查。
 - 測試：`python -m unittest discover -s research/tests`（或 `python -m pytest research/tests`）。
-- `runs/` 是未追蹤的輸出資料夾。
+- 新牆在 `cases`（未追蹤，一 case 一資料夾），一組牆的設計與 case 清單在 `studies`；`runs` 是唯讀封存，說明在該處的 ARCHIVE.md。
