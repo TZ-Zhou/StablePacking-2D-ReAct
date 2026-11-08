@@ -56,9 +56,9 @@ into Observation V2.
 ## Temporal myopia on TH_T80 (recorded walls)
 
 Does the step-by-step cascade miss the long-term result? All offline from `research/runs` traces; final metrics from
-`wall_metrics.wall_quality` (`corrected`). Exploratory: one scene, 18 stones, tests uncorrected. Scripts:
-`research/analysis/myopia_tables.py`, `myopia_report.py`, `surface_fit_check.py`; whether they reproduce every number
-below is not yet checked (`docs/TODO.md`). What follows from it: `docs/plans/surface-fit-heuristic.md`.
+`wall_metrics.wall_quality` (`corrected`). Exploratory: one scene, 18 stones, tests uncorrected. Reproduced by
+`research/analysis/myopia_tables.py`, `myopia_report.py`, `surface_fit_check.py`. What follows from it:
+`docs/plans/surface-fit-heuristic.md`.
 
 ### Sample
 - 101 finished walls; 72 remain after deduplicating on seed plus placement sequence (null = Paper, lookahead "recorded",
@@ -125,6 +125,6 @@ T = 3 / 6 / 9 / 12 / 15:
   So void under the skyline is not all sealed.
 - 94.6% of real placements have their centre of mass between the outermost contact columns (2 px tolerance).
 - Void under a placed stone over its area: median 0.17, p90 0.585.
-- Cost per candidate in ms, one process, one wall, 17 / 11 / 5 stones left: skyline envelope 0.11 / 0.24 / 0.12;
-  fit of every remaining stone 11.8 / 12.9 / 4.3; largest-first drop rollout 11.7 / 14.3 / 4.1; best-fit rollout 213 / 75 / 12;
-  2-D convolution of all poses 338 / 449 / 125. Predictive value of these heuristics is not tested.
+- Cost per candidate in ms, one process, one wall, 17 / 11 / 5 stones left, one run on a busy machine: skyline envelope
+  0.12 / 0.11 / 0.11; fit of every remaining stone 11.2 / 7.4 / 3.4; largest-first drop rollout 11.9 / 7.3 / 3.6; best-fit
+  rollout 105 / 43 / 12; 2-D convolution of all poses 277 / 202 / 103. Predictive value of these heuristics is not tested.

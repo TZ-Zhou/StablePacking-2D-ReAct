@@ -1,80 +1,62 @@
 # TODO：尚未完成的項目
 
-## 下一步
+## batch
 
-接手步驟與另一台電腦要準備的東西見 [`docs/HANDOFF.md`](HANDOFF.md)。
-
-- 把 `research/runs/`（1.7 GB，不進 git）複製到另一台電腦。
-- 驗證下面三支新分析模組，指令與判定方式見 `docs/HANDOFF.md`「下一步」。尚未開始，建表也還沒成功跑完過一次。
+- 在 pc1 跑 `al-th-all-orders`（`research/walls/batch_al_th.yaml`：`AL_R`、`AL_PR`、`AL_IR`、`TH_T20`、`TH_T80`，121 面）。pc1 的 hostname 要先加進 `research/storage/case_id.py` 的 `PCS`，代碼 `pc1`。
+- 輸出在 pc1 的 `runs/batch/al-th-all-orders/`，不進 git。
 
 ## 待驗證
 
-- `research/analysis/myopia_tables.py`：建出的表還沒和原本的分析表逐欄比對。
-- `research/analysis/myopia_report.py`：還沒逐行對照 `research/findings.md` 的 Temporal myopia 一節；對不上的要先查原因，再改模組或改結論。
-- `research/analysis/surface_fit_check.py`：還沒確認它重現 82.6%／17.4%／94.6% 與各 heuristic 耗時。
-- 上面三支與 `surface_fit.py` 只跑過各自的單元測試（小型手造輸入，全數通過），還沒在封存牆上完整跑過。
-- `research/tests/test_worker_pool.py` 目前失敗：`PermissionError: [WinError 5]`，出在 `_winapi.DuplicateHandle`。還沒判定是執行環境或程式造成。
-- 完整測試集還沒跑過。`research/runner/` 這次改動只跑了 `test_runner_layout`、`test_batch`、`test_step_writer`、`test_stone_bar`、`test_verify_speedup`，都通過。
-- 真實 `gpt_wall` loopback 牆沒實際跑過。
+- 整面牆比較未跑。目前只比過 `thangavelu-noise80`、`paper` 的前 5 塊石頭：fresh 與持久 worker 各一面，零差異，`check_run` 通過。其他場景、`code_original`、整面牆與封存牆比對都沒驗證；比較出差異時從 `6886b87` 查起：
+
+  ```bash
+  python -B -m research.runner.verify_speedup final --scenes thangavelu-noise80,fft-d2-0,bricks,almeida-pr --timeout 3600
+  ```
+
+- `gpt_wall` loopback 在建牆入口搬到 `research/runner` 之後沒跑過（`lb-001` 是搬移前的牆）。repo 沒有可獨立啟動的 mock 伺服器，只有 `test_gpt_smoke` 內建的測試伺服器。
 - case-v1（`feat/case-output`）從未端到端跑過。
-
-## 另一台電腦建牆前
-
-- 把 hostname 加進 `research/storage/case_id.py` 的 `PCS`（代碼 `pc2`）。
 
 ## surface-fit heuristic（`docs/plans/surface-fit-heuristic.md`）
 
-待決：
-- 第一版預測目標：完成度＋牆高，或納入 `F_LR`。
-- 控制器可否直接選候選，或只能換濾波順序。
-- 可否跑離線建牆批次。
-- 第二個驗證場景選哪一個。
-
-待執行：
 - 階段 0–6。
 - 驗證 A：74 個分支點上的離線篩選。
 - 驗證 B：因果分支。
 - 驗證 C：牆的比較，保留 holdout seeds。
 - 終局枚舉的校準。
 - 常駐 Pool 的相依處理。
-
-文件：
-- 計畫裡有和 `research/findings.md` 重複的數字；依 `.claude/DOC_STYLE.md` 決定是否改成只引用。
-
-## 分支
-
-- `feat/case-output`（`d55755f`）尚未併入 `main`。
-- 砌牆加速與 runner 重整已在 `main`，完整牆比較與全套測試未跑；比較出差異時從 `6886b87` 查起。
-- 待清理：`feat/case-storage`（含 `-cases` worktree）、`chore/project-setup`、本地 `feat/filter-cascade`、`zhou/feat-filter-cascade`、本地 `chore/machine-local-setup`。
+- 計畫裡有和 `research/findings.md` 重複的數字，改成只引用。
 
 ## 砌牆加速（`docs/plans/case-speedup-2s-per-stone.md`）
-
-待驗證：
-- 完整比較：T80、FFT、bricks、PR 完整牆，2 政策，`--fresh-pool` 與持久 worker 各一次，含封存牆比對。階段 3–6 只有前段短牆與單元比對的證據，整面牆是否相同要靠這次比較：
-
-  ```bash
-  python -B -m research.runner.verify_speedup final --scenes thangavelu-noise80,fft-d2-0,bricks,almeida-pr --timeout 3600
-  ```
-
-- `thangavelu-noise80` 在階段 3–6 改動後未驗證；改動前每步約 12.9 秒，150 秒內放 9 顆就逾時。
-- `test_lookahead` 要 MOSEK 授權，先載 `.env.local` 再跑。
-- 階段 6 少一個測試：寫檔停在第 k 項時，`check_commits(stopped=True)` 無問題。
-- 階段 3 的序列化相等只用合成陣列比過，沒有真實步驟的 payload；協定 5 下唯讀陣列仍是唯讀，協定 4 會變可寫。
-
-未做：
 
 | 項 | 要做什麼 |
 | --- | --- |
 | 4a 重用 `mosek.Env` | 載授權後比對重用與新建 Env 的求解結果 |
-| 4g `num_threads=1` | 計畫限定先量到超訂才做，且會改變求解路徑 |
 | 階段 5 worker 預熱 | `configure` 時 `NUMBER_CPU` 還是預設 8，`set_number_cpu(10)` 在其後才跑；Python 3.10 的 executor 要 submit 才建 worker，需要暖機 task |
 | 階段 5 完成後評估 | `tilting_angle.plot_failure_mec` 把 `mechanism.csv` 的寫入移到函式開頭，略過圖時提早返回 |
 
-`rotate_min_shape_factor` 的平行分支要等 worker 預熱完成才會啟用，目前走序列分支。
+- `rotate_min_shape_factor` 的平行分支要等 worker 預熱完成才會啟用，目前走序列分支。
+- PR 階段 3–6 後前 11 顆約 2.5 秒/顆，尚未達 2 秒/顆。
+- batch 跑完後拆 `run_wall.run`、`configure`。
 
-待決定：
-- D4：PR 是否一定要 < 2 秒/顆；階段 3–6 後前 11 顆約 2.5 秒/顆，尚未達標。
-- D5：workers 是否超過 10。
-- 是否清理 `research/runs/verify-perf-*`。
-- 編輯舊單引號 Python 檔時 clean-hook 會整檔排版，是否接受。
-- `run_wall.run`、`configure` 過長，是否拆分。
+## 分支與清理（只在 pc2 `GIAAIL-STRIX`）
+
+- 待清理：`feat/case-storage`（含 `../StablePacking-2D-ReAct-cases` worktree）、`chore/project-setup`、本地 `feat/filter-cascade`、`zhou/feat-filter-cascade`、本地 `chore/machine-local-setup`。
+- 待刪：`research/runs/verify-perf-*`（21 個）。
+- `feat/case-output`（`d55755f`，tag `backup/case-output-d55755f`，worktree 在 `.claude/worktrees/case-output`）尚未併入 `main`：
+  - 把 `main` 併進它，在獨立 worktree 解衝突，不要 stash 主工作樹，解完再快轉 `main`。
+  - `research/validation/windows_case_runtime.py` 的 `configure()` 兩邊都改：`SharedPool`／`BASELINE_PERSISTENT_POOL` 與 `_keep_records_only`／`BASELINE_CASE_RECORDS` 都要留，自動合併成功也要人工看過。
+  - `run_wall.py` 跟著搬到 `research/runner/`，環境變數區塊要同時有兩個變數。`check_run.py` 在試合併時也有衝突。
+  - 合併後把 `research/perf/verify_speedup.py` 改用 case-v1，並在 `research/walls/README.md` 加一列 `post_case.py`。
+
+## 已決定
+
+| 項目 | 決定 |
+| --- | --- |
+| surface-fit 第一版預測對象 | 完成度＋牆高，`F_LR` 當次要檢查 |
+| 控制器可否直接選候選 | 可以 |
+| 離線建牆批次 | 可以 |
+| 第二個驗證場景 | `TH_T20` |
+| D4：PR 是否一定要 < 2 秒/顆 | 不強制，以實測為準 |
+| D5：workers 是否超過 10 | 維持 10，worker 數不影響決策 |
+| 4g `num_threads=1` | 量到超訂才做 |
+| 舊單引號 Python 檔被 clean-hook 整檔排版 | 接受，排版變動獨立 commit |
