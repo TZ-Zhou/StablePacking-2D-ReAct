@@ -37,6 +37,7 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import pickle
 import re
 import sys
@@ -960,16 +961,25 @@ def make_policy(spec):
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 
-def make_controller(spec, sink=None, transport='process', ledger=None):
+def make_controller(spec, sink=None, transport='process', ledger=None, worker_venv=False):
     """Controller from a JSON-able spec, e.g. {'kind': 'random', 'seed': 7}; bad specs raise here,
     before any wall is built (validate_spec: no policy or LLM client is built in this process).
     transport 'process' (live walls) runs the policy in a worker process
-    (controller_worker.ProcessTransport); 'inline' runs it in this process."""
+    (controller_worker.ProcessTransport); 'inline' runs it in this process. worker_venv: the worker
+    runs in the registered venv (controller_worker.worker_python, checked here), with only the
+    environment worker_env gives it; the API key variables then leave this process's environment,
+    so nothing this process starts later (Wang's Pool) inherits them."""
     validate_spec(spec)
     if transport == 'inline':
         return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
     import controller_worker
-    return ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec)), sink, ledger)
+    python = controller_worker.worker_python() if worker_venv else None
+    client = ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec), python=python), sink, ledger)
+    if worker_venv:
+        import llm_adapter
+        for k in llm_adapter.KEY_ENV.values():
+            os.environ.pop(k, None)
+    return client
 
 
 def append_trace(name, entry):

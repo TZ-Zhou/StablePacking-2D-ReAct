@@ -62,10 +62,13 @@ RECORDS = {
 V2_PROMPT_SHA256 = '91a0f6f7e8efca4846080897556d2d7176b182f5315097768d4dda3101fbbbae'  # smoke-002's
 
 
-def digest(d):
+NEW = {'campaigns': ('dev-2seeds',)}  # campaigns added after the pin: the pinned ones must stay as they were
+
+
+def digest(d, skip=()):
     h, n = hashlib.sha256(), 0
     for p in sorted(Path(d).rglob('*')):
-        if p.is_file():
+        if p.is_file() and p.relative_to(d).parts[0] not in skip:
             h.update(p.relative_to(d).as_posix().encode() + b'\0' + hashlib.sha256(p.read_bytes()).digest())
             n += 1
     return n, h.hexdigest()
@@ -276,7 +279,7 @@ class RecordsUnchanged(unittest.TestCase):
         for rel, pinned in RECORDS.items():
             if (RUNS / rel).exists():
                 with self.subTest(rel):
-                    self.assertEqual(digest(RUNS / rel), pinned)
+                    self.assertEqual(digest(RUNS / rel, NEW.get(rel, ())), pinned)
         self.assertTrue((RUNS / 'never-created').exists())
 
     def test_v2_prompt_is_smoke_002s(self):

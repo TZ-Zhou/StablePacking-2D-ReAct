@@ -76,7 +76,8 @@ def stage(source, policy, seed=None):
         header += (f"    __import__('sys').path.insert(0, {str(REPO / 'research')!r})\n"
                    "    from controllers import make_controller\n"
                    "    from Stonepacker2D.utils.constant import set_filter_controller\n"
-                   f"    set_filter_controller(make_controller({policy['controller']!r}))\n")
+                   f"    set_filter_controller(make_controller({policy['controller']!r}"
+                   f"{', worker_venv=True' if policy.get('worker_venv') else ''}))\n")
     body = ''.join('    ' + l if l.strip() else l for l in safe[boundary:].splitlines(keepends=True))
     if seed is not None:
         call = '    seed_everything()\n'
@@ -96,6 +97,13 @@ def parse_switch(texts):
     return switch
 
 
+def worker_venv_identity():
+    import controller_worker
+    m = json.loads(controller_worker.VENV_MANIFEST.read_text(encoding='utf-8'))
+    return {'manifest': controller_worker.VENV_MANIFEST.relative_to(REPO).as_posix(), 'manifest_sha256': digest(controller_worker.VENV_MANIFEST),
+            **{k: m[k] for k in ('path', 'version', 'sdks', 'files_sha256')}}
+
+
 def committed_placements(output):
     return sum(len(p.read_text(encoding='utf-8').splitlines()) for p in output.rglob('decisions.txt'))
 
@@ -109,12 +117,20 @@ def code_fingerprint(root=REPO):
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
 
+def quiet_env():
+    """This process's environment without the API key variables: for every child but the case itself
+    (the environment guard, git, powershell, taskkill), so the key reaches only the case, which hands
+    it to the controller worker and drops it (controllers.make_controller worker_venv)."""
+    import llm_adapter
+    return {k: v for k, v in os.environ.items() if k.upper() not in llm_adapter.KEY_ENV.values()}
+
+
 def process_table():
     """{pid: (parent pid, creation ticks)}; creation time guards against PID reuse."""
     out = subprocess.run(['powershell', '-NoProfile', '-Command',
                           'Get-CimInstance Win32_Process | ForEach-Object '
                           '{ "$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.Ticks)" }'],
-                         capture_output=True, text=True, timeout=120, check=True).stdout.split()
+                         capture_output=True, text=True, timeout=120, check=True, env=quiet_env()).stdout.split()
     return {int(p): (int(pp), c) for p, pp, c in (line.split(',') for line in out)}
 
 
@@ -128,17 +144,28 @@ def process_tree(table, root):
 
 
 def terminate(pid, settle_seconds=30):
-    """taskkill the tree, then verify every member (same PID and creation time) is gone."""
-    members = process_tree(process_table(), pid)
+    """taskkill the tree, then verify every member (same PID and creation time) is gone. If the
+    process listing fails, taskkill still runs, and the stop is unverified."""
+    try:
+        members = process_tree(process_table(), pid)
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        members, listing = None, f"{type(error).__name__}: {error}"
     try:
         kill = subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], capture_output=True,
-                              text=True, errors='replace', timeout=60)
+                              text=True, errors='replace', timeout=60, env=quiet_env())
         record = {'taskkill_returncode': kill.returncode, 'stdout': kill.stdout, 'stderr': kill.stderr}
     except subprocess.TimeoutExpired:
         record = {'taskkill_returncode': None, 'error': 'taskkill timed out'}
+    if members is None:
+        record.update(tree=None, alive_after=None, verified=False, listing_error=listing)
+        return record
     deadline = time.monotonic() + settle_seconds
     while True:
-        table = process_table()
+        try:
+            table = process_table()
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            record.update(tree=sorted(members), alive_after=None, verified=False, listing_error=f'{type(error).__name__}: {error}')
+            return record
         alive = sorted(p for p, created in members.items() if table.get(p, (None, None))[1] == created)
         if not alive or time.monotonic() > deadline:
             break
@@ -246,12 +273,21 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
     parser.add_argument('--switch', action='append', default=[], metavar='STEP=a,b,c,d,e',
                         help='paper policy only: use this order at construction step STEP (every sampling trial of that step), the --order elsewhere; repeatable')
+    parser.add_argument('--worker-venv', action='store_true',
+                        help='with --controller: the controller worker runs in the registered venv (research/validation/worker-venv.json)')
     parser.add_argument('--controller', type=json.loads, metavar='JSON',
                         help='paper policy only: research/controllers.py spec, e.g. {"kind": "random", "seed": 7}')
     args = parser.parse_args(argv)
+    if args.worker_venv and args.controller is None:
+        parser.error('--worker-venv needs --controller')
     if args.controller is not None:
         if args.policy != 'paper' or args.switch or args.no_trace:
             parser.error('--controller needs --policy paper, tracing and no --switch')
+        if args.worker_venv:
+            import controller_worker
+            problems = controller_worker.venv_problems()
+            if problems:
+                parser.error('--worker-venv: ' + '; '.join(problems))
         import controllers
         try:
             controllers.make_controller(args.controller, sink=lambda record: None)
@@ -261,7 +297,7 @@ def main(argv=None):
 
     output = prepare_output(args.name)
     guard = subprocess.run([sys.executable, '-B', str(VALIDATION / 'verify_environment.py')],
-                           cwd=REPO, capture_output=True, text=True)
+                           cwd=REPO, capture_output=True, text=True, env=quiet_env())
     (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
     assert guard.returncode == 0, guard.stderr
 
@@ -273,7 +309,7 @@ def main(argv=None):
         if args.policy != 'paper':
             parser.error('--switch needs --policy paper')
     staged = stage(original.read_text(encoding='utf-8'), {'filter': filter_policy, 'run_id': None if args.no_trace else args.name,
-                                                          'controller': args.controller}, seed=args.seed)
+                                                          'controller': args.controller, 'worker_venv': args.worker_venv}, seed=args.seed)
     target = output / original.name
     target.write_text(staged, encoding='utf-8')
     shutil.copy2(VALIDATION / 'windows_case_runtime.py', output / 'windows_case_runtime.py')
@@ -281,10 +317,11 @@ def main(argv=None):
     if (original.parent / 'config.json').exists():
         shutil.copy2(original.parent / 'config.json', output / 'config.json')
 
-    git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True, env=quiet_env()).stdout.strip()
     receipt = {
         'case': args.case, 'run_id': args.name, 'source': source_name, 'source_sha256': digest(original),
         'staged_sha256': digest(target), 'filter_policy': filter_policy, 'controller': args.controller,
+        **({'worker_venv': worker_venv_identity()} if args.worker_venv else {}),
         'trace': not args.no_trace,
         'seed': 'seed_everything() default in source (20)' if args.seed is None else args.seed,
         'python_hash_seed_launcher': 20, 'placements_limit': args.placements,
@@ -317,6 +354,8 @@ def main(argv=None):
                 # A trace write failure raises inside the case and lands here as a non-zero exit.
                 process_status = 'PROCESS_PASS' if process.returncode == 0 else 'FAILED'
     finally:
+        if 'pid' in receipt and process.poll() is None:  # an exception left the case running (with its paid requests): stop it first
+            termination = terminate(process.pid)
         if 'pid' in receipt and not args.no_trace:  # the outputs as the case left them, before any check reads them
             receipt['manifest'] = manifest(output)
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')

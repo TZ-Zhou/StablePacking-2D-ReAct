@@ -163,14 +163,23 @@ def call_bound(llm):
     return tries * spec.get('request_timeout_s', 0) + sum(spec['retry_backoff_s'] * 2 ** k for k in range(tries - 1))
 
 
+def loopback(llm, environ=None):
+    """True if this provider's requests can only reach this machine: openai with OPENAI_BASE_URL on
+    a loopback host (a local mock server), which bills nothing."""
+    from urllib.parse import urlparse
+    environ = os.environ if environ is None else environ
+    return full(llm)['provider'] == 'openai' and urlparse(environ.get('OPENAI_BASE_URL', '')).hostname in LOOPBACK
+
+
 def enabled(llm):
     """Raises unless a live wall may call this provider: the fake one, or a paid one with the gate
-    of an approved API test set, its key variable set (not read here) and a price for the model."""
+    of an approved API test set (or, for a local mock server, a loopback endpoint), its key
+    variable set (not read here) and a price for the model."""
     spec = full(llm)
     if spec['provider'] not in PROVIDERS:
         raise NotImplementedError(f"provider {spec['provider']!r} is not implemented")
     if paid(llm):
-        if os.environ.get(PAID_GATE) != '1':
+        if os.environ.get(PAID_GATE) != '1' and not loopback(llm):
             raise NotImplementedError(f'paid API calls are off: an approved API test sets {PAID_GATE}=1')
         if KEY_ENV[spec['provider']] not in os.environ:
             raise ValueError(f"the API key variable {KEY_ENV[spec['provider']]} is not set")
@@ -344,6 +353,7 @@ class OpenAISender:
         self.sdk = sdk
         http = sdk.DefaultHttpxClient(follow_redirects=False, trust_env=False)  # one attempt, one POST; no proxy or CA from the environment
         self.client = sdk.OpenAI(api_key=api_key('openai'), max_retries=0, timeout=spec['request_timeout_s'], http_client=http)
+        self.real = getattr(sdk, '__name__', None) == 'openai'  # a test stand-in sends nowhere
         self.turns = []  # the output items of this decision's replies, sent back unchanged
 
     def request(self, payload):
@@ -378,6 +388,10 @@ class OpenAISender:
         return body
 
     def __call__(self, body, attempt):
+        if self.real and os.environ.get(PAID_GATE) != '1':  # no gate: only to this machine (enabled's loopback)
+            from urllib.parse import urlparse
+            if urlparse(str(self.client.base_url)).hostname not in LOOPBACK:
+                raise ProviderError('without the paid gate requests go only to a loopback endpoint; nothing was sent')
         try:
             response = self.client.responses.create(**body)
         except Exception as error:
