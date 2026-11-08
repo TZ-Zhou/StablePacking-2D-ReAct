@@ -333,59 +333,44 @@ def solve_force_rigid(elems, contps, Aglobal):
                     buc.extend([value.dl[0], value.dl[1], value.dl[2]])
 
             # Bound keys and values for constraints -- contact failure condition
-            for key, value in contps.items():
-                if value.cont_type.name == 'friction':
-                    for i in range(3):
-                        bkc.append(mosek.boundkey.up)
-                        blc.append(-inf)
-                        buc.append(0.0)
-                else:
-                    raise NameError("unknown contact type!")
+            if any(value.cont_type.name != 'friction' for value in contps.values()):
+                raise NameError("unknown contact type!")
+            nb_contacts = len(contps)
+            bkc.extend([mosek.boundkey.up] * (3 * nb_contacts))
+            blc.extend([-inf] * (3 * nb_contacts))
+            buc.extend([0.0] * (3 * nb_contacts))
 
-            # Bound keys for variables
-            bkx = []
-            blx = []
-            bux = []
-            g_index = 0
-            for key, value in contps.items():
-                for i in range(2):
-                    bkx.append(mosek.boundkey.fr)
-                    blx.append(-inf)
-                    bux.append(+inf)
-
-                    g_index += 1
-            bkx.append(mosek.boundkey.lo)
-            blx.append(0)
-            bux.append(+inf)
+            # Bound keys for variables: t and n of every contact, then the load multiplier
+            bkx = [mosek.boundkey.fr] * (2 * nb_contacts) + [mosek.boundkey.lo]
+            blx = [-inf] * (2 * nb_contacts) + [0]
+            bux = [+inf] * (2 * nb_contacts + 1)
 
             # Objective coefficients
-            c = []
-            g_index = 0
-            for key, value in contps.items():
-                for i in range(2):  # 2variables(t,n)*1nodes*2contact faces
-                    c.append(-0)
-                    # print(-g[g_index])
-                    g_index += 1
-            c.append(1.0)
+            c = [0] * (2 * nb_contacts) + [1.0]
 
             # Below is the sparse representation of the A
             # matrix stored by column.
-            asub = []
-            aval = []
-            # the nonzeros of every column of Aglobal, rows ascending, without a Python loop over the rows
+            # the nonzeros of every column of Aglobal, rows ascending, then the three failure rows of its contact
             columns, rows = np.nonzero(Aglobal.T)
             values = Aglobal.T[columns, rows]
-            column_starts = np.searchsorted(columns, np.arange(Aglobal.shape[1] + 1))
-            for i, value in enumerate(contps.values()):
-                for j in range(2):  # 2variables(t,n)*1nodes*
-                    col = i*2+j
-                    first, last = column_starts[col], column_starts[col + 1]
-                    _start_row = len(elems) * 3 + i * 3
-                    asub.append(rows[first:last].tolist() + [_start_row, _start_row + 1, _start_row + 2])
-                    if col % 2 == 0:
-                        aval.append(values[first:last].tolist() + [1, -1, 0])
-                    else:
-                        aval.append(values[first:last].tolist() + [-value.cont_type.mu, -value.cont_type.mu, -1])
+            column_starts = np.searchsorted(columns, np.arange(Aglobal.shape[1] + 1))[: 2 * nb_contacts + 1]
+            nb_contact_nonzeros = column_starts[-1]
+            contact_lengths = np.diff(column_starts) + 3
+            failure_entries = (np.cumsum(contact_lengths)[:, None] - 3 + np.arange(3)).ravel()
+            is_failure_entry = np.zeros(nb_contact_nonzeros + 6 * nb_contacts, dtype=bool)
+            is_failure_entry[failure_entries] = True
+            first_failure_row = len(elems) * 3 + np.repeat(np.arange(nb_contacts), 2) * 3
+            contact_rows = np.empty(is_failure_entry.size, dtype=np.int64)
+            contact_rows[~is_failure_entry] = rows[:nb_contact_nonzeros]
+            contact_rows[is_failure_entry] = (first_failure_row[:, None] + np.arange(3)).ravel()
+            mu = np.array([value.cont_type.mu for value in contps.values()], dtype=np.float64)
+            failure_values = np.empty((2 * nb_contacts, 3))
+            failure_values[0::2] = [1, -1, 0]
+            failure_values[1::2, 0] = failure_values[1::2, 1] = -mu
+            failure_values[1::2, 2] = -1
+            contact_values = np.empty(is_failure_entry.size)
+            contact_values[~is_failure_entry] = values[:nb_contact_nonzeros]
+            contact_values[is_failure_entry] = failure_values.ravel()
 
             col_index = []
             col_value = []
@@ -395,8 +380,6 @@ def solve_force_rigid(elems, contps, Aglobal):
                 col_value.extend(
                     [-value.ll[0], -value.ll[1], -value.ll[2]])
                 i += 1
-            asub.append(col_index)
-            aval.append(col_value)
 
             numvar = len(bkx)
             numcon = len(bkc)
@@ -412,11 +395,11 @@ def solve_force_rigid(elems, contps, Aglobal):
             # Set the objective, the variable bounds and the columns of A in one call each.
             task.putcslice(0, numvar, c)
             task.putvarboundslice(0, numvar, bkx, blx, bux)
-            col_lengths = np.array([len(col_index) for col_index in asub], dtype=np.int64)
+            col_lengths = np.append(contact_lengths, len(col_index))
             col_ends = np.cumsum(col_lengths)
             task.putacolslice(0, numvar, col_ends-col_lengths, col_ends,
-                              [k for col_index in asub for k in col_index],
-                              [v for col_value in aval for v in col_value])
+                              contact_rows.tolist() + col_index,
+                              contact_values.tolist() + col_value)
 
             # Set the bounds on constraints.
              # blc[i] <= constraint_i <= buc[i]
@@ -425,6 +408,7 @@ def solve_force_rigid(elems, contps, Aglobal):
             # Input the objective sense (minimize/maximize)
             task.putobjsense(mosek.objsense.maximize)
 
+            task.putintparam(mosek.iparam.num_threads, 1)  # 8 workers already use every core
             # Solve the problem
             # task.writedata("data.opf")
             task.optimize()

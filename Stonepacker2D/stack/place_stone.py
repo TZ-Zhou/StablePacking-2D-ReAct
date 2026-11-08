@@ -1,7 +1,7 @@
 
 import matplotlib.pyplot as plt
 from copy import deepcopy
-from ..utils.region_memo import occupied_bounds
+from ..utils.region_memo import occupied_bounds, prefill_regions
 
 import numpy as np
 
@@ -56,6 +56,7 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     :return: Found translation x, y, score of the stone, kinematics result
     :rtype: bool
     """
+    prefill_regions(base)
     write_txt = get_record_detail()['RECORD_SELECTION_VALUE']
     plot_img_detail = get_record_detail()['RECORD_PLACEMENT_IMG']
     seed_everything()#! It is important to reset seed for each processor. If not, the random numbers are not reproducible as processors' computation order is changed every run.

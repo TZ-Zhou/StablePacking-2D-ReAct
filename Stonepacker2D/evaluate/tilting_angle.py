@@ -135,6 +135,12 @@ def plot_failure_mec(base_image, base_image_id, elems, LA, direction='right',plo
     plt.savefig(get_dir()+"img/"+direction+str(LA)+'_mechanism.png', dpi=2400, transparent=True)
 
 
+def _contact_image(matrix):
+    """The wall image the contacts are found in: pixel ids as uint8, without the pixels to ignore."""
+    img = matrix.astype(np.uint8)
+    return np.where(img != get_ignore_pixel_value(), img, 0)
+
+
 def evaluate_kine(final_base, save_failure=False, load='linear_acceleration', wall=None):
     """Evaluate the limit tilting angle of the placed stones
 
@@ -143,13 +149,10 @@ def evaluate_kine(final_base, save_failure=False, load='linear_acceleration', wa
     :return: The limit tilting angle of the placed stones, minimal of two direction
     :rtype: float
     """
-    ignore_pixel_value = get_ignore_pixel_value()
-    img = final_base.matrix.astype(np.uint8)
-    # print(img.shape)
-    img = np.where(img != ignore_pixel_value, img, 0)
+    img = _contact_image(final_base.matrix)
     # print(img.shape)
     elems = base_to_elements(final_base)
-    contps = contps_of_image(elems, img, None if wall is None else wall.astype(np.uint8))
+    contps = contps_of_image(elems, img, None if wall is None else _contact_image(wall))
     # ****************************************************************
     # ******** Tilting Table Load********************************
     # ****************************************************************
@@ -513,9 +516,10 @@ def _contact_geometries(img, wall):
             cols = np.flatnonzero(changed.any(axis=0))
             first_row, first_col = max(int(rows[0]) - 1, 0), max(int(cols[0]) - 1, 0)
             window = img[first_row : int(rows[-1]) + 2, first_col : int(cols[-1]) + 2]
-            local = _pair_geometries(*_contact_pixels(window, first_row, first_col))
-            new_pairs = {pair: value for pair, value in local.items() if pair[0] in new_values or pair[1] in new_values}
-            return {**geometries, **new_pairs}
+            pixels = _contact_pixels(window, first_row, first_col)
+            added = list(new_values)
+            of_new_stone = np.isin(pixels[0], added) | np.isin(pixels[1], added)
+            return {**geometries, **_pair_geometries(*(part[of_new_stone] for part in pixels))}
     return _pair_geometries(*_contact_pixels(img))
 
 

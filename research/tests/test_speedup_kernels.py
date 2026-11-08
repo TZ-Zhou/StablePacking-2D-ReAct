@@ -78,6 +78,34 @@ class StoneRegion(unittest.TestCase):
         self.assertEqual(stone_region(stone)[1], 6)
 
 
+class PrefillRegions(unittest.TestCase):
+    def wall_of(self, images):
+        wall = sum((label + 1) * image for label, image in enumerate(images))
+        return SimpleNamespace(matrix=wall, placed_bricks=[SimpleNamespace(matrix=image) for image in images])
+
+    def test_equals_regionprops_of_each_stone(self):
+        first, second, empty = np.zeros((20, 30)), np.zeros((20, 30)), np.zeros((20, 30))
+        first[3:9, 5:12] = 1
+        second[11:15, 1:3] = 1
+        second[12, 3] = 1
+        base = self.wall_of([first, second, empty])
+        region_memo.prefill_regions(base)
+        for stone in base.placed_bricks[:2]:
+            properties = regionprops(stone.matrix.astype(np.uint8))[0]
+            self.assertEqual(stone._region, (properties.centroid, properties.area))
+            self.assertIs(stone._region_of, stone.matrix)
+        self.assertIsNone(base.placed_bricks[2]._region)
+
+    def test_the_second_call_for_the_same_wall_does_nothing(self):
+        image = np.zeros((20, 30))
+        image[3:9, 5:12] = 1
+        base = self.wall_of([image])
+        region_memo.prefill_regions(base)
+        base.placed_bricks[0]._region = "kept"
+        region_memo.prefill_regions(base)
+        self.assertEqual(base.placed_bricks[0]._region, "kept")
+
+
 class OccupiedBounds(unittest.TestCase):
     def bounds_of(self, matrix):
         return region_memo.occupied_bounds(SimpleNamespace(matrix=matrix))

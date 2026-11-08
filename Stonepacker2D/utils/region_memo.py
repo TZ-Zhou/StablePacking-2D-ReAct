@@ -23,3 +23,24 @@ def occupied_bounds(base):
         base._bounds = (found, rows.min(), rows.max(), cols.min()) if found else (False, 0, 0, 0)
         base._bounds_of = base.matrix
     return base._bounds
+
+
+def prefill_regions(base):
+    """Set the stone_region of every placed stone from one pass over the wall: the stones of a step arrive unpickled.
+
+    Each stone holds the pixels of value (its index + 1) in the wall, so the sums per value give what regionprops does.
+    """
+    if base.__dict__.get("_regions_of") is base.matrix:
+        return
+    count = len(base.placed_bricks)
+    labels = base.matrix.astype(np.int64)
+    rows, cols = np.nonzero((labels >= 1) & (labels <= count))
+    values = labels[rows, cols]
+    areas = np.bincount(values, minlength=count + 1)
+    row_sums = np.bincount(values, weights=rows, minlength=count + 1)
+    col_sums = np.bincount(values, weights=cols, minlength=count + 1)
+    for label, stone in enumerate(base.placed_bricks, start=1):
+        area = areas[label]
+        stone._region = ((row_sums[label] / area, col_sums[label] / area), area) if area else None
+        stone._region_of = stone.matrix
+    base._regions_of = base.matrix
