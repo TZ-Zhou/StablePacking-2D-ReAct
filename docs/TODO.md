@@ -1,5 +1,12 @@
 # TODO：尚未完成的項目
 
+## 下一步
+
+接手步驟與另一台電腦要準備的東西見 [`docs/HANDOFF.md`](HANDOFF.md)。
+
+- 把 `research/runs/`（1.7 GB，不進 git）複製到另一台電腦。
+- 驗證下面三支新分析模組，指令與判定方式見 `docs/HANDOFF.md`「下一步」。尚未開始，建表也還沒成功跑完過一次。
+
 ## 待驗證
 
 - `research/analysis/myopia_tables.py`：建出的表還沒和原本的分析表逐欄比對。
@@ -8,6 +15,12 @@
 - 上面三支與 `surface_fit.py` 只跑過各自的單元測試（小型手造輸入，全數通過），還沒在封存牆上完整跑過。
 - `research/tests/test_worker_pool.py` 目前失敗：`PermissionError: [WinError 5]`，出在 `_winapi.DuplicateHandle`。還沒判定是執行環境或程式造成。
 - 完整測試集還沒跑過。`research/runner/` 這次改動只跑了 `test_runner_layout`、`test_batch`、`test_step_writer`、`test_stone_bar`、`test_verify_speedup`，都通過。
+- 真實 `gpt_wall` loopback 牆沒實際跑過。
+- case-v1（`feat/case-output`）從未端到端跑過。
+
+## 另一台電腦建牆前
+
+- 把 hostname 加進 `research/storage/case_id.py` 的 `PCS`（代碼 `pc2`）。
 
 ## surface-fit heuristic（`docs/plans/surface-fit-heuristic.md`）
 
@@ -31,7 +44,7 @@
 ## 分支
 
 - `feat/case-output`（`d55755f`）尚未併入 `main`。
-- 砌牆加速與 runner 重整在 `pref/case-speedup`，完整牆比較通過前不併入 `main`。
+- 砌牆加速與 runner 重整已在 `main`，完整牆比較與全套測試未跑；比較出差異時從 `6886b87` 查起。
 - 待清理：`feat/case-storage`（含 `-cases` worktree）、`chore/project-setup`、本地 `feat/filter-cascade`、`zhou/feat-filter-cascade`、本地 `chore/machine-local-setup`。
 
 ## 砌牆加速（`docs/plans/case-speedup-2s-per-stone.md`）
