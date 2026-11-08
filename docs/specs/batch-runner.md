@@ -23,7 +23,7 @@
 | `sampler_seed` | 抽樣的種子；設定相同，案例就相同 | `20` |
 | `placements` | 每面牆放到 N 塊就停止，停止前通常會多放幾塊；`0` 建到完 | `0` |
 | `timeout` | 每面牆的秒數上限 | `1800` |
-| `workers` | 每面牆的 worker 數 | `10` |
+| `workers` | 每面牆的 worker 數 | `8` |
 
 `filter_policy` 的值：
 

@@ -39,7 +39,7 @@ class Config(unittest.TestCase):
         config = batch_plan.read_config("name: a\nsamples: 2\nwall_type: BR\nfilter_policy: code_original\n")
         self.assertEqual(
             (config["sampler_seed"], config["seed"], config["placements"], config["timeout"], config["workers"]),
-            (20, [20], 0, 1800, 10),
+            (20, [20], 0, 1800, 8),
         )
 
     def test_refused(self):

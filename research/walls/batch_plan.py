@@ -45,7 +45,7 @@ DEFAULTS = {
     "seed": [20],
     "placements": 0,
     "timeout": 1800,
-    "workers": 10,
+    "workers": 8,
 }
 LOWEST_VALUES = {"samples": 1, "sampler_seed": 0, "placements": 0, "timeout": 1, "workers": 1}
 PLAN_FIELDS = ("case", *FACTORS, "controller_seed")
