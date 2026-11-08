@@ -9,6 +9,7 @@
 | --- | --- |
 | `perf_runtime.py` | 暫存進案例資料夾的執行期：先套用登記的相容層，再換掉 `build_wall.Pool`，加上計時、傳輸量、記憶體與 task 樣本；不可匯入 `research` 套件（spawn 的 worker 在案例資料夾執行） |
 | `profile_report.py` | 唯讀報告：秒/顆、階段耗時、主行程計時、傳輸量、worker 區段、平均忙碌 worker 數、worker 記憶體，以及 `--cprofile` 的函式層級資料 |
+| `task_results.py` | 不建牆比較兩份程式：對 `perf/tasks` 存下的真實 task 跑 `place_one_stone`，比每個回傳值的位元，`PYTHONPATH` 決定跑哪一份程式 |
 | `verify_speedup.py` | 加速比較的定義：要建哪些牆、兩面牆是否相同、報告內容。建牆由 `research/runner/verify_speedup.py` 執行，輸出到 `runs/speedup/<標籤>/` |
 
 `profile_case` 的輸出在 `research/perf/runs/<名稱>/`（不進版控）。

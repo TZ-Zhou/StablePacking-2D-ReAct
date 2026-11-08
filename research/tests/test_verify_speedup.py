@@ -20,7 +20,7 @@ from research.runner import environment as runner_environment
 from research.walls import case_definition
 from research.runner import run_wall
 from research.runner import verify_speedup as speedup_runner
-from research.walls import check_run
+from research.walls import check_run, wall_metrics
 
 LABEL = "test-label"
 ONE_CELL = ("--scenes", "fft-d2-0", "--policies", "paper", "--placements", "3")
@@ -118,7 +118,7 @@ class Arguments(unittest.TestCase):
         self.assertEqual(options.scenes, list(case_definition.CASES))
         self.assertEqual(options.policies, ["paper", "code_original"])
         self.assertEqual(options.modes, ["fresh", "persistent"])
-        self.assertEqual((options.placements, options.repeat, options.workers, options.timeout), (0, 1, 10, 3600))
+        self.assertEqual((options.placements, options.repeat, options.workers, options.timeout), (0, 1, 8, 3600))
 
     def test_lists_are_split_on_commas(self):
         options = speedup_runner.parse_args([LABEL, "--scenes", "bricks,rubble", "--modes", "persistent,fresh"])
@@ -562,6 +562,70 @@ class Environment(unittest.TestCase):
     def test_temp_files_go_to_the_given_folder(self):
         environment, tmp = self.prepared(self.ENV_FILE)
         self.assertEqual((environment["TEMP"], environment["TMP"]), (str(tmp), str(tmp)))
+
+
+class StoneSeconds(unittest.TestCase):
+    EVENTS = [
+        {"event": "build_enter", "elapsed_seconds": 1.0},
+        {"event": "step_commit", "step": 1, "outcome": "probe", "elapsed_seconds": 2.0},
+        {"event": "step_commit", "step": 1, "outcome": "placed", "elapsed_seconds": 3.0},
+        {"event": "step_commit", "step": 2, "outcome": "probe", "elapsed_seconds": 3.5},
+        {"event": "step_commit", "step": 2, "outcome": "no_placement", "elapsed_seconds": 4.5},
+        {"event": "step_commit", "step": 2, "outcome": "placed", "elapsed_seconds": 6.0},
+        {"event": "step_commit", "step": 3, "outcome": "placed", "elapsed_seconds": 6.25},
+        {"event": "step_commit", "step": 4, "outcome": "no_placement", "elapsed_seconds": 9.0},
+    ]
+
+    def write_events(self, folder):
+        (folder / "events.jsonl").write_text(
+            "".join(json.dumps(event) + "\n" for event in self.EVENTS), encoding="utf-8"
+        )
+
+    def test_each_stone_after_the_first_counts_its_attempts_and_the_end_search_does_not(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.write_events(Path(folder))
+            self.assertEqual(wall_metrics.stone_seconds(Path(folder) / "events.jsonl"), [3.0, 0.25])
+
+    def test_the_summary_counts_the_stones_over_each_threshold(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.write_events(Path(folder))
+            summary = verify_speedup.stone_summary(Path(folder))
+        self.assertEqual((summary["counted"], summary["max"], summary["over_2s"]), (2, 3.0, 1))
+        self.assertEqual(summary["over_half_s"], 1)
+
+
+class GoldenWalls(unittest.TestCase):
+    def test_only_walls_that_passed_their_own_checks_are_used(self):
+        rows = [
+            {
+                "scene": "bricks",
+                "policy": "paper",
+                "case_id": "a",
+                "error": None,
+                "check_ok": True,
+                "status": "PROCESS_PASS",
+            },
+            {
+                "scene": "almeida-r",
+                "policy": "paper",
+                "case_id": "b",
+                "error": None,
+                "check_ok": False,
+                "status": "PROCESS_PASS",
+            },
+            {
+                "scene": "rubble",
+                "policy": "paper",
+                "case_id": "c",
+                "error": "boom",
+                "check_ok": None,
+                "status": "RAISED",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "report.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+            walls = verify_speedup.golden_walls(Path(folder))
+        self.assertEqual(walls, {("bricks", "paper"): Path(folder) / "a"})
 
 
 if __name__ == "__main__":

@@ -3,13 +3,15 @@
 Usage (from the repository root, in the baseline environment):
   python -B -m research.runner.verify_speedup <label> [--scenes a,b] [--policies paper,code_original] [--placements N]
                                             [--modes fresh,persistent] [--repeat R] [--workers W] [--timeout S]
+                                            [--golden RUN]
 
 The comparison of docs/plans/case-speedup-2s-per-stone.md. For each scene and policy the modes are built in the
 given order, R times over (R=2: fresh, persistent, fresh, persistent), one wall at a time in this process. Mode fresh
 is run_wall --fresh-pool, mode persistent is run_wall's default; --placements 0 builds the full wall.
 
-Every wall is compared with the first good wall of its scene and policy, and every full persistent code_original wall
-also with its archived wall in research/runs, which is only read. No paid API: the keys are removed from the
+Every wall is compared with the first good wall of its scene and policy, or with that scene and policy's wall of an
+earlier run named by --golden, and every full persistent code_original wall also with its archived wall in
+research/runs, which is only read. No paid API: the keys are removed from the
 environment and .env.local gives only the MOSEK license and PYTHONNOUSERSITE.
 
 Output in runs/speedup/<label>/: the case folders, tmp/ for temporary files, report.json (one row per wall and a
@@ -58,8 +60,9 @@ def parse_args(argv):
         "--modes", type=names_in(verify_speedup.WORKER_POOLS), default=list(verify_speedup.WORKER_POOLS)
     )
     parser.add_argument("--repeat", type=int, default=1, help="how many times every mode is built")
-    parser.add_argument("--workers", type=int, default=10)
+    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--timeout", type=int, default=3600, help="seconds allowed per wall")
+    parser.add_argument("--golden", help="run folder of walls every wall must equal: a label or an absolute path")
     return parser.parse_args(argv)
 
 
@@ -117,7 +120,7 @@ def save_report(folder, report):
 
 def run_matrix(options, folder):
     """Build every planned wall in order, replacing report.json after each one; returns the rows."""
-    rows, first_walls = [], {}
+    rows, first_walls = [], verify_speedup.golden_walls(SPEEDUP_RUNS / options.golden) if options.golden else {}
     for entry in verify_speedup.planned_walls(options.scenes, options.policies, options.modes, options.repeat):
         key = entry["scene"], entry["policy"]
         row = verified_row(entry, options, folder, first_walls.get(key))

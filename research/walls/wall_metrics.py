@@ -316,6 +316,20 @@ def step_wall_times(events):
     return out
 
 
+def stone_seconds(events):
+    """Wall-clock seconds of every placed stone after the first, from events.jsonl: the time from one stone's commit to
+    the next stone's, which holds its probe and every attempt that placed nothing."""
+    out, previous = [], None
+    for e in read_jsonl(events):
+        if e["event"] == "build_enter":
+            previous = None
+        elif e["event"] == "step_commit" and e["outcome"] == "placed":
+            if previous is not None:
+                out.append(round(e["elapsed_seconds"] - previous, 3))
+            previous = e["elapsed_seconds"]
+    return out
+
+
 RESCALE = 0.5  # _rescale of Tests/Thangavelu/02_view_transformation_ori_reso.py
 
 

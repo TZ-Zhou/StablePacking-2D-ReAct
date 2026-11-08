@@ -5,7 +5,11 @@ wall of its scene and policy, and every full persistent code_original wall also 
 which is only read.
 """
 
+import json
 import math
+import statistics
+
+import numpy as np
 
 from research.paths import LEGACY_RUNS
 from research.perf import profile_report
@@ -63,6 +67,7 @@ def blank_row(entry):
         "elapsed_seconds": None,
         "placed": None,
         "seconds_per_stone": None,
+        "stones": None,
         "trace_ok": None,
         "differences": [NOT_COMPARED],
         "compared_to": None,
@@ -157,12 +162,39 @@ def archive_differences(wall, archive):
     return [line for line in found if line != UNTRACED_ARCHIVE] if "notrace" in archive.name else found
 
 
+def golden_walls(folder):
+    """{(scene, policy): wall folder} of an earlier run of this tool, from the walls whose own checks passed."""
+    rows = json.loads((folder / "report.json").read_text(encoding="utf-8"))["rows"]
+    return {
+        (row["scene"], row["policy"]): folder / row["case_id"]
+        for row in rows
+        if row["error"] is None and row["check_ok"] and row["status"] in case_definition.SUCCESS
+    }
+
+
+def stone_summary(wall):
+    """Count, mean, median, p90, maximum and threshold counts of a wall's seconds per stone, without the first stone."""
+    seconds = wall_metrics.stone_seconds(wall / "events.jsonl")
+    if not seconds:
+        return None
+    return {
+        "counted": len(seconds),
+        "mean": round(statistics.mean(seconds), 3),
+        "median": round(statistics.median(seconds), 3),
+        "p90": round(float(np.percentile(seconds, 90)), 3),
+        "max": max(seconds),
+        "over_2s": sum(value > 2 for value in seconds),
+        "over_half_s": sum(value > 0.5 for value in seconds),
+    }
+
+
 def fill_checks(row, wall, first, placements):
     """Measure a built wall into its row, field by field so a later check that raises keeps the earlier results.
 
     `first` is the folder of the wall this one must equal, None when this one is the first of its scene and policy.
     """
     row["seconds_per_stone"] = profile_report.seconds_per_stone(wall)
+    row["stones"] = stone_summary(wall)
     row["differences"] = [] if first is None else wall_differences(wall, first, placements)
     row["compared_to"] = None if first is None else first.name
     row["check_ok"] = check_run.check_run(wall)["ok"]
