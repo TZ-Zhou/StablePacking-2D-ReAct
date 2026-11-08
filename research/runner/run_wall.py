@@ -311,8 +311,13 @@ def run(argv=None, root=None, label=None):
 
     started = datetime.now().astimezone()
     case_id, output = prepare_output(args.case, started, root)
-    guard = subprocess.run([sys.executable, '-B', str(VALIDATION / 'verify_environment.py')],
-                           cwd=REPO, capture_output=True, text=True, env=case_definition.quiet_env())
+    guard = subprocess.run(
+        [sys.executable, "-B", str(VALIDATION / "verify_environment.py")],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env={**case_definition.quiet_env(), "PYTHONPATH": str(REPO)},
+    )
     if guard.returncode:
         (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
     assert guard.returncode == 0, guard.stderr
@@ -379,6 +384,7 @@ def run(argv=None, root=None, label=None):
         **os.environ,
         "MPLBACKEND": "Agg",
         "MPLCONFIGDIR": str(output / "matplotlib-config"),
+        "PYTHONPATH": str(REPO),  # the environment's editable install points at one checkout: run this one's code
         "PYTHONHASHSEED": "20",
         "PYTHONDONTWRITEBYTECODE": "1",
         "BASELINE_CASE_EVENTS": str(output / "events.jsonl"),

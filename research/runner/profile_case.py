@@ -53,6 +53,7 @@ def case_environment(output, replicates, args):
         **case_definition.quiet_env(),
         "MPLBACKEND": "Agg",
         "MPLCONFIGDIR": str(output / "matplotlib-config"),
+        "PYTHONPATH": str(REPO),  # the environment's editable install points at one checkout: time this one's code
         "PYTHONHASHSEED": PYTHON_HASH_SEED,
         "PYTHONDONTWRITEBYTECODE": "1",
         "BASELINE_CASE_EVENTS": str(output / "events.jsonl"),
