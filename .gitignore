@@ -166,3 +166,10 @@ cython_debug/
 
 # Research experiment outputs (Phase 1+)
 research/runs/
+
+# Secrets and licenses: fill them in .env.local only (template: .env.example)
+.env
+.env.local
+.env.*.local
+secrets/
+*.lic

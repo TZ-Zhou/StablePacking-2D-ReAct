@@ -10,6 +10,7 @@
 | `controller/` | 濾波順序控制器與 LLM（見下表） |
 | `analysis/` | 離線分析與 P0–P2 探索研究；見該處 README |
 | `llm_walls/` | LLM 實牆與付費 API（見下表） |
+| `load_env.ps1` | 把 repo 根目錄 `.env.local`（授權與 API 金鑰，已被 git 忽略）載入目前 PowerShell 視窗，只印名稱不印值 |
 | `findings.md` | 研究結論 |
 | `quality/` | 各品質方法一個子資料夾，放批次彙總 json 與品質 csv、jsonl 輸出 |
 | `tests/` | 測試（unittest 寫法，pytest 也可跑） |
