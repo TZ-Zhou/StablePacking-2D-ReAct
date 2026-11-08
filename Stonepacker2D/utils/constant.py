@@ -269,7 +269,7 @@ def get_filter_policy(step=None):
         return {**FILTER_POLICY, 'order': FILTER_SWITCH[step]}
     return FILTER_POLICY
 
-# Dynamic filter order (research/controllers.py): called before each selection, may change only
+# Dynamic filter order (research/controller/order_controller.py): called before each selection, may change only
 # the order (selection.controlled_policy). Lowercase on purpose: uppercase constants are copied
 # to pool workers and written to events.jsonl; the controller stays in the main process.
 _filter_controller = None

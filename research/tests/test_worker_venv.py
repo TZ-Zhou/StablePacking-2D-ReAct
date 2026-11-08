@@ -14,11 +14,11 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO / 'research'), str(REPO / 'research' / 'tests')]
-import controller_worker as w  # noqa: E402
-import controllers  # noqa: E402
-import llm_adapter  # noqa: E402
-from test_controllers import misbehaving_worker  # noqa: E402
+sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
+from research.controller import worker as w  # noqa: E402
+from research.controller import order_controller  # noqa: E402
+from research.controller import llm_api  # noqa: E402
+from test_order_controller import misbehaving_worker  # noqa: E402
 
 VENV = w.VENV_MANIFEST.exists() and not w.venv_problems()
 REQUEST = {'observation': {'step': 1, 'phase': 'single', 'sample_trial': 0, 'side': 'left', 'n_remaining': 5},
@@ -29,7 +29,7 @@ API = {'kind': 'react', 'llm': {'kind': 'api', 'provider': 'openai', 'model': 'g
 
 
 def transport(spec, **kw):
-    t = w.ProcessTransport(controllers.full_spec(spec) | kw.pop('extra', {}), python=w.worker_python(), **kw)
+    t = w.ProcessTransport(order_controller.full_spec(spec) | kw.pop('extra', {}), python=w.worker_python(), **kw)
     t.log = (log := []).append
     return t, log
 
@@ -37,32 +37,32 @@ def transport(spec, **kw):
 class Environment(unittest.TestCase):
     def test_only_the_listed_variables_reach_a_worker(self):
         env = {'SYSTEMROOT': 'C:\\W', 'PATH': 'p', 'HTTPS_PROXY': 'http://p:1', 'OPENAI_API_KEY': FAKE_KEY, 'OTHER': '1',
-               llm_adapter.PAID_GATE: '1', 'OPENAI_BASE_URL': 'https://example.com/v1', 'ANTHROPIC_API_KEY': 'a'}
-        self.assertEqual(w.worker_env(controllers.full_spec({'kind': 'null'}), env), {'SYSTEMROOT': 'C:\\W', 'PATH': 'p'})
-        self.assertEqual(w.worker_env(controllers.full_spec(API), env),
-                         {'SYSTEMROOT': 'C:\\W', 'PATH': 'p', 'OPENAI_API_KEY': FAKE_KEY, llm_adapter.PAID_GATE: '1'})
-        loop = w.worker_env(controllers.full_spec(API), {**env, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'})
+               llm_api.PAID_GATE: '1', 'OPENAI_BASE_URL': 'https://example.com/v1', 'ANTHROPIC_API_KEY': 'a'}
+        self.assertEqual(w.worker_env(order_controller.full_spec({'kind': 'null'}), env), {'SYSTEMROOT': 'C:\\W', 'PATH': 'p'})
+        self.assertEqual(w.worker_env(order_controller.full_spec(API), env),
+                         {'SYSTEMROOT': 'C:\\W', 'PATH': 'p', 'OPENAI_API_KEY': FAKE_KEY, llm_api.PAID_GATE: '1'})
+        loop = w.worker_env(order_controller.full_spec(API), {**env, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'})
         self.assertEqual(loop['OPENAI_BASE_URL'], 'http://127.0.0.1:9/v1')  # a mock server only
 
     def test_the_gate_is_waived_only_for_a_loopback_endpoint(self):
         llm = API['llm']
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': FAKE_KEY}, clear=True):
             with self.assertRaises(NotImplementedError):
-                llm_adapter.enabled(llm)
+                llm_api.enabled(llm)
             for url in ('https://api.openai.com/v1', 'http://127.0.0.2.example.com/v1', 'http://10.0.0.1/v1'):
                 with mock.patch.dict(os.environ, {'OPENAI_BASE_URL': url}), self.assertRaises(NotImplementedError):
-                    llm_adapter.enabled(llm)
+                    llm_api.enabled(llm)
             with mock.patch.dict(os.environ, {'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}):
-                llm_adapter.enabled(llm)
+                llm_api.enabled(llm)
                 with self.assertRaises(NotImplementedError):  # anthropic has no loopback mode
-                    llm_adapter.enabled({**llm, 'provider': 'anthropic', 'model': 'claude-opus-5-5'})
+                    llm_api.enabled({**llm, 'provider': 'anthropic', 'model': 'claude-opus-5-5'})
 
     @unittest.skipUnless(importlib.util.find_spec('openai'), 'the openai SDK is only in the venv')
     def test_without_the_gate_a_real_client_sends_only_to_loopback(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': FAKE_KEY}, clear=True):
-            sender = llm_adapter.OpenAISender(llm_adapter.full(API['llm']))
+            sender = llm_api.OpenAISender(llm_api.full(API['llm']))
             with mock.patch.object(sender.client.responses, 'create', side_effect=AssertionError('sent')):
-                with self.assertRaises(llm_adapter.ProviderError) as refused:
+                with self.assertRaises(llm_api.ProviderError) as refused:
                     sender({'model': 'gpt-6.1-terra'}, 1)
             self.assertEqual(refused.exception.billed, 'none')
 
@@ -89,7 +89,7 @@ class VenvWorker(unittest.TestCase):
         t.close()
         self.assertEqual([e['action'] for e in log], ['start', 'close'])
         self.assertIs(log[1]['alive'], False)
-        self.assertEqual(controllers.worker_problems(log, False)[0], [])
+        self.assertEqual(order_controller.worker_problems(log, False)[0], [])
 
     def test_failures_are_those_of_a_multiprocessing_worker(self):
         for bad, status in (('exit', 'worker_error'), ('garbage', 'worker_protocol_error'), ('huge', 'worker_protocol_error'),
@@ -105,8 +105,8 @@ class VenvWorker(unittest.TestCase):
 
     def test_the_key_leaves_wangs_process(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': FAKE_KEY, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}):
-            import gpt_wall
-            client = controllers.make_controller(gpt_wall.SPEC, sink=lambda r: None, worker_venv=True)
+            from research.llm_walls import gpt_wall
+            client = order_controller.make_controller(gpt_wall.SPEC, sink=lambda r: None, worker_venv=True)
             self.assertNotIn('OPENAI_API_KEY', os.environ)
             self.assertEqual(client.transport.env['OPENAI_API_KEY'], FAKE_KEY)
             self.assertEqual(client.transport.python, w.worker_python())

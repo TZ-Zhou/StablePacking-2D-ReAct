@@ -1,4 +1,4 @@
-"""research/lookahead_study.py: the branch points it studies, Wang's tilting analysis of a wall
+"""research/analysis/lookahead_study.py: the branch points it studies, Wang's tilting analysis of a wall
 matrix alone against the recorded lambda, and the lookahead states read from a recorded trace."""
 import pickle
 import sys
@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO), str(REPO / 'research'), str(REPO / 'research' / 'tests')]
-import lookahead_study as L  # noqa: E402
-import metrics  # noqa: E402
-from test_controllers import WALL  # noqa: E402
+sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
+from research.analysis import lookahead_study as L  # noqa: E402
+from research.walls import wall_metrics  # noqa: E402
+from test_order_controller import WALL  # noqa: E402
 
 
 @unittest.skipUnless(WALL.exists() and (L.RUNS / 'branches' / L.PLANS[0]).exists(), 'records absent')
@@ -26,7 +26,7 @@ class Lookahead(unittest.TestCase):
 
     def test_tilting_of_the_matrix_alone(self):
         result = next(WALL.glob('result_*'))
-        lam = metrics.mechanism_lambdas(result)
+        lam = wall_metrics.mechanism_lambdas(result)
         lr = L.kine_lr(np.asarray(pickle.load(open(result / 'base.pkl', 'rb')).matrix))
         self.assertAlmostEqual(lr, min(lam.values()) / 0.58, places=12)
 

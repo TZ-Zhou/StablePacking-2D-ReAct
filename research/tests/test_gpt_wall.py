@@ -1,4 +1,4 @@
-"""research/gpt_wall.py: its refusals (spec limits, environment, journal chain, experiment budget,
+"""research/llm_walls/gpt_wall.py: its refusals (spec limits, environment, journal chain, experiment budget,
 formal seeds, paid-only rules) and short live walls against a local mock Responses API with a
 fake key: a clean one, a redirect and a reply without usage (both uncertain, blocking the next)."""
 import datetime
@@ -13,21 +13,21 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO / 'research'), str(REPO / 'research' / 'tests')]
-import controller_worker  # noqa: E402
-import gpt_wall as g  # noqa: E402
-import llm_adapter  # noqa: E402
-from test_api_smoke import Server  # noqa: E402
+sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
+from research.controller import worker as controller_worker  # noqa: E402
+from research.llm_walls import gpt_wall as g  # noqa: E402
+from research.controller import llm_api  # noqa: E402
+from test_gpt_smoke import Server  # noqa: E402
 
 KEY = g.LOOPBACK_KEY + 'k' * 40
 SEED = 66794912  # development seed A
-CLEAN = {k: v for k, v in os.environ.items() if k.upper() not in {'OPENAI_API_KEY', llm_adapter.PAID_GATE, *llm_adapter.CONNECTION_ENV}}
+CLEAN = {k: v for k, v in os.environ.items() if k.upper() not in {'OPENAI_API_KEY', llm_api.PAID_GATE, *llm_api.CONNECTION_ENV}}
 VENV = controller_worker.VENV_MANIFEST.exists() and not controller_worker.venv_problems()
-BASELINE = Path(sys.prefix).resolve() == g.run_case.ENV_PREFIX  # run_case builds walls only there
+BASELINE = Path(sys.prefix).resolve() == g.wall_runner.ENV_PREFIX  # run_wall builds walls only there
 
 
 def scratch(test):
-    out = g.run_case.RUNS / 'tmp-tests' / uuid.uuid4().hex[:12]
+    out = g.wall_runner.RUNS / 'tmp-tests' / uuid.uuid4().hex[:12]
     test.addCleanup(shutil.rmtree, out, True)
     return out
 
@@ -40,7 +40,7 @@ def journal(out, name, state='finished', started='2026-11-08T10:00:00', spend=No
 class Rules(unittest.TestCase):
     def test_the_spec_fits_the_wall_limits(self):
         self.assertEqual(g.spec_problems(), [])
-        self.assertEqual(g.max_requests(g.controllers.full_spec(g.SPEC)), 60)
+        self.assertEqual(g.max_requests(g.order_controller.full_spec(g.SPEC)), 60)
         self.assertTrue(g.spec_problems({**g.SPEC, 'llm': {**g.SPEC['llm'], 'max_retries': 1}, 'llm_timeout': 200.0}))
         self.assertTrue(g.spec_problems({**g.SPEC, 'max_decisions': 21}))
         self.assertTrue(g.spec_problems({**g.SPEC, 'max_cost_usd': 0.61}))
@@ -49,16 +49,16 @@ class Rules(unittest.TestCase):
     def test_environment(self):
         loop, real = {'OPENAI_API_KEY': KEY, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}, {'OPENAI_API_KEY': 'sk-real' + 'r' * 40}
         self.assertEqual(g.env_problems(True, loop), [])
-        self.assertTrue(g.env_problems(True, {**loop, llm_adapter.PAID_GATE: '1'}))  # loopback never with the gate
+        self.assertTrue(g.env_problems(True, {**loop, llm_api.PAID_GATE: '1'}))  # loopback never with the gate
         self.assertTrue(g.env_problems(True, {**loop, 'OPENAI_API_KEY': 'sk-real' + 'r' * 40}))  # never a real key to a mock
         self.assertTrue(g.env_problems(True, {'OPENAI_API_KEY': KEY}))
         self.assertTrue(g.env_problems(True, {**loop, 'OPENAI_BASE_URL': 'https://api.openai.com/v1'}))
         self.assertTrue(g.env_problems(True, {**loop, 'HTTPS_PROXY': 'http://p:1'}))
-        self.assertEqual(g.env_problems(False, {**real, llm_adapter.PAID_GATE: '1'}), [])
+        self.assertEqual(g.env_problems(False, {**real, llm_api.PAID_GATE: '1'}), [])
         self.assertTrue(g.env_problems(False, real))  # no gate
-        self.assertTrue(g.env_problems(False, {**real, llm_adapter.PAID_GATE: '1', 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}))
-        self.assertTrue(g.env_problems(False, {'OPENAI_API_KEY': KEY, llm_adapter.PAID_GATE: '1'}))
-        self.assertTrue(g.env_problems(False, {llm_adapter.PAID_GATE: '1'}))
+        self.assertTrue(g.env_problems(False, {**real, llm_api.PAID_GATE: '1', 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}))
+        self.assertTrue(g.env_problems(False, {'OPENAI_API_KEY': KEY, llm_api.PAID_GATE: '1'}))
+        self.assertTrue(g.env_problems(False, {llm_api.PAID_GATE: '1'}))
 
     def test_journal_chain_and_experiment_budget(self):
         out = scratch(self)
@@ -90,9 +90,9 @@ class Rules(unittest.TestCase):
                 mock.patch.object(controller_worker, 'venv_problems', return_value=[]):
             self.assertEqual(g.preflight('w-1', SEED, out, loopback=True), [])
             self.assertTrue(any('formal campaign' in p for p in g.preflight('w-1', 20, out, loopback=True)))
-        with mock.patch.dict(os.environ, {**CLEAN, 'OPENAI_API_KEY': 'sk-real' + 'r' * 40, llm_adapter.PAID_GATE: '1'}, clear=True), \
+        with mock.patch.dict(os.environ, {**CLEAN, 'OPENAI_API_KEY': 'sk-real' + 'r' * 40, llm_api.PAID_GATE: '1'}, clear=True), \
                 mock.patch.object(controller_worker, 'venv_problems', return_value=[]):
-            with mock.patch.object(g, 'code_dirty', return_value=' M research/gpt_wall.py'):
+            with mock.patch.object(g, 'code_dirty', return_value=' M research/llm_walls/gpt_wall.py'):
                 self.assertTrue(any('commit them' in p for p in g.preflight('w-1', SEED, out)))
             with mock.patch.object(g, 'code_dirty', return_value=''):
                 self.assertEqual(g.preflight('w-1', SEED, out, today=g.PRICE_CHECKED), [])
@@ -123,7 +123,7 @@ class Rules(unittest.TestCase):
     def test_a_failing_git_is_never_a_clean_tree(self):
         out = Path(tempfile.mkdtemp())  # outside the repository: not a git work tree
         self.addCleanup(shutil.rmtree, out, True)
-        with mock.patch.object(g.run_case, 'REPO', out):
+        with mock.patch.object(g.wall_runner, 'REPO', out):
             for check in (g.code_dirty, g.head):
                 with self.assertRaises(g.subprocess.CalledProcessError):
                     check()
@@ -133,7 +133,7 @@ class Rules(unittest.TestCase):
         boom = mock.Mock(side_effect=RuntimeError('case process tree not verified stopped'))
         with mock.patch.dict(os.environ, {**CLEAN, 'OPENAI_API_KEY': KEY, 'OPENAI_BASE_URL': 'http://127.0.0.1:9/v1'}, clear=True), \
                 mock.patch.object(controller_worker, 'venv_problems', return_value=[]), \
-                mock.patch.object(g.run_case, 'worker_venv_identity', return_value={}), self.assertRaises(RuntimeError):
+                mock.patch.object(g.wall_runner, 'worker_venv_identity', return_value={}), self.assertRaises(RuntimeError):
             g.run_wall('w-1', SEED, out, loopback=True, launch=boom)
         j = json.loads((out / 'journals' / 'w-1.json').read_text(encoding='utf-8'))
         self.assertEqual(j['state'], 'aborted')
@@ -142,11 +142,11 @@ class Rules(unittest.TestCase):
 
 
 class Launcher(unittest.TestCase):
-    """run_case: children other than the case never get the key; an exception never leaves a case running."""
+    """run_wall: children other than the case never get the key; an exception never leaves a case running."""
 
     def test_other_children_get_no_key(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': KEY, 'ANTHROPIC_API_KEY': 'a', 'PATH': 'p'}):
-            env = g.run_case.quiet_env()
+            env = g.wall_runner.quiet_env()
         self.assertFalse({'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'} & set(env))
         self.assertEqual(env['PATH'], 'p')
 
@@ -155,29 +155,29 @@ class Launcher(unittest.TestCase):
         self.addCleanup(child.kill)
         listing = g.subprocess.CalledProcessError(1, 'powershell')
         for failing in ([listing], [{}, listing]):  # before the kill, or while verifying it
-            with mock.patch.object(g.run_case, 'process_table', side_effect=failing):
+            with mock.patch.object(g.wall_runner, 'process_table', side_effect=failing):
                 if failing[0] == {}:
                     child = g.subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
                     self.addCleanup(child.kill)
-                record = g.run_case.terminate(child.pid, settle_seconds=1)
+                record = g.wall_runner.terminate(child.pid, settle_seconds=1)
             self.assertIs(record['verified'], False)
             self.assertIn('CalledProcessError', record['listing_error'])
             self.assertIsNotNone(child.wait(timeout=30))  # killed all the same
 
-    @unittest.skipUnless(BASELINE, 'run_case builds walls only in the baseline environment')
+    @unittest.skipUnless(BASELINE, 'run_wall builds walls only in the baseline environment')
     def test_an_exception_after_the_case_started_stops_it(self):
         name = f'tmp-tests/{uuid.uuid4().hex[:12]}'
-        self.addCleanup(shutil.rmtree, g.run_case.RUNS / name, True)
-        real, calls = g.run_case.committed_placements, []
+        self.addCleanup(shutil.rmtree, g.wall_runner.RUNS / name, True)
+        real, calls = g.wall_runner.committed_placements, []
 
         def interrupted(output):  # the launcher's loop fails with the case running
             calls.append(output)
             if len(calls) == 1:
                 raise RuntimeError('launcher interrupted')
             return real(output)
-        with mock.patch.object(g.run_case, 'committed_placements', side_effect=interrupted), self.assertRaises(RuntimeError):
-            g.run_case.main(['thangavelu-noise80', name, '--policy', 'paper', '--seed', str(SEED), '--placements', '99'])
-        receipt = json.loads((g.run_case.RUNS / name / 'receipt.json').read_text(encoding='utf-8'))
+        with mock.patch.object(g.wall_runner, 'committed_placements', side_effect=interrupted), self.assertRaises(RuntimeError):
+            g.wall_runner.main(['thangavelu-noise80', name, '--policy', 'paper', '--seed', str(SEED), '--placements', '99'])
+        receipt = json.loads((g.wall_runner.RUNS / name / 'receipt.json').read_text(encoding='utf-8'))
         self.assertEqual(receipt['status'], 'LAUNCHER_ERROR')
         self.assertIs(receipt['termination']['verified'], True)
         self.assertIsNotNone(receipt['returncode'])  # the case is gone

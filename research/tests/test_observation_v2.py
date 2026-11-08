@@ -1,4 +1,4 @@
-"""Observation version 2 (controllers.Observer.version_2, SYSTEM_V2, TOOLS_V2) and the
+"""Observation version 2 (order_controller.Observer.version_2, SYSTEM_V2, TOOLS_V2) and the
 compatibility of version 1, the default. No API, no wall is built; tests on recorded walls are
 skipped when the run is absent.
 
@@ -19,16 +19,16 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'research'))
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
-import controllers  # noqa: E402
-from test_controllers import PAPER, REACT_WALL, WALL, two_outcomes  # noqa: E402
+from research.controller import order_controller  # noqa: E402
+from test_order_controller import PAPER, REACT_WALL, WALL, two_outcomes  # noqa: E402
 
 from Stonepacker2D.stack import selection  # noqa: E402
 from Stonepacker2D.stack.selection import FEATURE_NAMES, controlled_policy, select  # noqa: E402
 
 SMOKE = REPO / 'research' / 'runs' / 'api-smoke' / 'smoke-001'
-# Computed with the controllers.py of 3805b86 (before version 2) on WALL's 23 selections and for ReActPolicy.
+# Computed with the order_controller.py of 3805b86 (before version 2) on WALL's 23 selections and for ReActPolicy.
 V1_STREAM_SHA256 = '5d360d88d76a1adc67ada0f89a211e4de0c8151fe8c13e3cf7b2a5add57621f5'
 V1_PROMPT_SHA256 = {True: '911f511f494e1d3a3be13b34ee73997d233d5d255bae2c7ed688764032378a39',
                     False: 'd4e6c0665ce7e1531cfb2b610431060abeac74923bdf2f55f0c253cff78451d9'}
@@ -44,9 +44,9 @@ def result_of(run):
 
 
 def stream(run, observer):
-    base = controllers.base_policy(run)
-    return [observer(types.MappingProxyType(dict(base)), controllers.context_from_trace(m, a))
-            for m, a in controllers.trace_events(result_of(run))]
+    base = order_controller.base_policy(run)
+    return [observer(types.MappingProxyType(dict(base)), order_controller.context_from_trace(m, a))
+            for m, a in order_controller.trace_events(result_of(run))]
 
 
 def live(ctx):
@@ -66,7 +66,7 @@ class V1Compatibility(unittest.TestCase):
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
     def test_v1_stream_equals_the_code_before_version_2(self):
-        for observer in (controllers.Observer(), controllers.Observer(version=1)):
+        for observer in (order_controller.Observer(), order_controller.Observer(version=1)):
             obs = [o for o, _ in stream(WALL, observer)]
             self.assertEqual(len(obs), 23)
             self.assertEqual(hashlib.sha256(json.dumps(obs, sort_keys=True).encode()).hexdigest(), V1_STREAM_SHA256)
@@ -74,11 +74,11 @@ class V1Compatibility(unittest.TestCase):
 
     def test_v1_prompt_and_spec_unchanged(self):
         for feedback, digest in V1_PROMPT_SHA256.items():
-            policy = controllers.ReActPolicy(None, tool_feedback=feedback)
-            self.assertEqual((policy.prompt_sha256, policy.system), (digest, controllers.SYSTEM))
-        spec = controllers.full_spec({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'keep'}})
+            policy = order_controller.ReActPolicy(None, tool_feedback=feedback)
+            self.assertEqual((policy.prompt_sha256, policy.system), (digest, order_controller.SYSTEM))
+        spec = order_controller.full_spec({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'keep'}})
         self.assertNotIn('observation_version', spec)  # earlier walls keep their recorded spec
-        self.assertEqual(controllers.observation_version(spec), 1)
+        self.assertEqual(order_controller.observation_version(spec), 1)
 
     @unittest.skipUnless(REACT_WALL.exists() and SMOKE.exists(), 'recorded walls absent')
     def test_recorded_prompt_hashes_are_version_1(self):
@@ -90,10 +90,10 @@ class V1Compatibility(unittest.TestCase):
 
     @unittest.skipUnless(SMOKE.exists(), 'smoke-001 absent')
     def test_smoke_001_still_replays(self):
-        import api_smoke
+        from research.llm_walls import gpt_smoke
         files = {p: p.read_bytes() for p in SMOKE.rglob('*') if p.is_file()}
         spec = json.loads((SMOKE / 'journal.json').read_text(encoding='utf-8'))['spec']
-        report = api_smoke.offline_check(SMOKE, controllers.full_spec(spec))
+        report = gpt_smoke.offline_check(SMOKE, order_controller.full_spec(spec))
         self.assertEqual((report['ok'], report['verdict'], report['records']), (True, 'PARTIAL', 23))
         self.assertEqual(len(report['expected_on_base_trajectory']), 2)
         self.assertEqual({p: p.read_bytes() for p in SMOKE.rglob('*') if p.is_file()}, files)  # nothing written
@@ -102,23 +102,23 @@ class V1Compatibility(unittest.TestCase):
 class Version2(unittest.TestCase):
 
     def test_spec(self):
-        spec = controllers.validate_spec(V2_SPEC)
-        self.assertEqual(controllers.observation_version(spec), 2)
+        spec = order_controller.validate_spec(V2_SPEC)
+        self.assertEqual(order_controller.observation_version(spec), 2)
         for bad in (3, 0, '2', True, 2.0):
             with self.assertRaises(ValueError):
-                controllers.validate_spec({**V2_SPEC, 'observation_version': bad})
+                order_controller.validate_spec({**V2_SPEC, 'observation_version': bad})
         with self.assertRaises(ValueError):  # react only
-            controllers.validate_spec({'kind': 'null', 'observation_version': 2})
-        client = controllers.make_controller(V2_SPEC, transport='inline')
+            order_controller.validate_spec({'kind': 'null', 'observation_version': 2})
+        client = order_controller.make_controller(V2_SPEC, transport='inline')
         self.assertEqual(client.observer.version, 2)
 
     def test_prompt_defines_filters_from_the_code(self):
-        policy = controllers.ReActPolicy(None, observation_version=2)
-        self.assertEqual((policy.system, policy.tools), (controllers.SYSTEM_V2, controllers.TOOLS_V2))
+        policy = order_controller.ReActPolicy(None, observation_version=2)
+        self.assertEqual((policy.system, policy.tools), (order_controller.SYSTEM_V2, order_controller.TOOLS_V2))
         self.assertNotEqual(policy.prompt_sha256, V1_PROMPT_SHA256[True])
-        text = controllers.SYSTEM_V2
+        text = order_controller.SYSTEM_V2
         for c in range(5):  # number, abbreviation and the feature name of selection.FEATURE_NAMES
-            self.assertIn(f'- {c} {controllers.FILTERS[c]} {FEATURE_NAMES[c]}:', text)
+            self.assertIn(f'- {c} {order_controller.FILTERS[c]} {FEATURE_NAMES[c]}:', text)
         for needle in ('higher score is better', 'LLC > 0', 'w >= m - tol x max(1, |m|)', "tol being the base policy's tolerance",
                        'largest sum of all five', '3-0-2-1-4', 'advantages and costs', 'Never cite a geometry value that is null',
                        'median stored height of the sampled stones', '0.7 or less', 'friction coefficient',
@@ -137,10 +137,10 @@ class Version2(unittest.TestCase):
                        'With finite w and m the best candidate always passes', 'If a stage keeps none',
                        'this one included, and the later filters are not used'):
             self.assertIn(needle, text)
-        commit = {t['name']: t for t in controllers.TOOLS_V2}['commit_order']
+        commit = {t['name']: t for t in order_controller.TOOLS_V2}['commit_order']
         self.assertIn('advantages and costs', commit['parameters']['properties']['rationale']['description'])
-        self.assertEqual(controllers.reply_problem(  # the schema still accepts the same commits
-            {'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 'x'}}, controllers.TOOLS_V2), None)
+        self.assertEqual(order_controller.reply_problem(  # the schema still accepts the same commits
+            {'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 'x'}}, order_controller.TOOLS_V2), None)
 
     def test_lfr_as_the_prompt_defines_it_is_wangs(self):
         """SYSTEM_V2's LFR, implemented from its text alone, against local_void.get_void_to_left
@@ -289,7 +289,7 @@ class Version2(unittest.TestCase):
         NHR is the no-left-neighbour rule with the sampled stones' median height, IWR 0.5 (no stone
         below), GDS 0: B is the ground band. Were the frame (255, all around the wall) a wall pixel, B
         would be the whole matrix and every GDS 1."""
-        m, a = next(iter(controllers.trace_events(result_of(WALL))))
+        m, a = next(iter(order_controller.trace_events(result_of(WALL))))
         raw, n = a['features_raw'], len(a['sampled_ids'])
         median = np.percentile(a['height'][:n], 50)  # rotation-0 rows: the sampled stones themselves
         np.testing.assert_allclose(raw[:, 0], -np.abs(median - a['height']) / a['height'])
@@ -301,58 +301,58 @@ class Version2(unittest.TestCase):
     def test_stone_ids_stay_anonymous(self):
         """Renaming every stone id (one bijection for the whole wall; sampling order, candidates and
         scores unchanged) gives byte-identical serialized observations and order tables in version 2."""
-        events = list(controllers.trace_events(result_of(WALL)))
+        events = list(order_controller.trace_events(result_of(WALL)))
         ids = sorted({int(s) for _, a in events for k in ('sampled_ids', 'inventory_ids') for s in a[k]})
         rename = dict(zip(ids, reversed([1000 + i for i in range(len(ids))])))  # reverses the id order
-        base = controllers.base_policy(WALL)
+        base = order_controller.base_policy(WALL)
 
         def run(mapping):
-            observer, out = controllers.Observer(version=2), []
+            observer, out = order_controller.Observer(version=2), []
             for meta, a in events:
                 a = {**a, **{k: np.array([mapping.get(int(s), int(s)) for s in a[k]]) for k in ('sampled_ids', 'inventory_ids')}}
-                obs, info = observer(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
-                out.append(json.dumps(obs) + json.dumps(controllers.tool_table(info, observer.label)))
+                obs, info = observer(types.MappingProxyType(dict(base)), order_controller.context_from_trace(meta, a))
+                out.append(json.dumps(obs) + json.dumps(order_controller.tool_table(info, observer.label)))
             return out
         original, renamed = run({}), run(rename)
         self.assertEqual(len(original), len(events))
         for k, (x, y) in enumerate(zip(original, renamed)):
             self.assertEqual(x, y, f'event {k}')
         # version 1 keeps its recorded behaviour (stone-id order in memory.stones), unchanged here
-        v1 = controllers.Observer()
+        v1 = order_controller.Observer()
         for meta, a in events[:10]:
-            obs, _ = v1(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
+            obs, _ = v1(types.MappingProxyType(dict(base)), order_controller.context_from_trace(meta, a))
         labels = {int(s): v1.label(s) for s in ids if int(s) in v1.labels}
         self.assertEqual(list(obs['memory']['stones']), [labels[s] for s in sorted(labels) if labels[s] in obs['memory']['stones']])
 
     def test_geometry_availability(self):
-        obs, _ = controllers.Observer(version=2)(PAPER, live(two_outcomes()))
+        obs, _ = order_controller.Observer(version=2)(PAPER, live(two_outcomes()))
         self.assertEqual(obs['geometry_available'], 'pixels')
         self.assertTrue(all(o['geometry'] is not None and o['shape'] == {'width': 2, 'height': 2} for o in obs['outcomes']))
-        obs, _ = controllers.Observer(version=2)(PAPER, offline(live(two_outcomes())))
-        self.assertEqual((obs['geometry_available'], obs['geometry_note']), ('summary', controllers.GEOMETRY_NOTES['summary']))
+        obs, _ = order_controller.Observer(version=2)(PAPER, offline(live(two_outcomes())))
+        self.assertEqual((obs['geometry_available'], obs['geometry_note']), ('summary', order_controller.GEOMETRY_NOTES['summary']))
         self.assertTrue(all(o['geometry'] is None and o['shape'] == {'width': 2, 'height': 2} for o in obs['outcomes']))
         self.assertIn('not the wall after placement', obs['geometry_note'])
         bare = {**two_outcomes(), 'all_bricks': None}
-        obs, _ = controllers.Observer(version=2)(PAPER, bare)
+        obs, _ = order_controller.Observer(version=2)(PAPER, bare)
         self.assertEqual(obs['geometry_available'], 'none')
         self.assertTrue(all(o['geometry'] is None and o['shape'] is None for o in obs['outcomes']))
         self.assertEqual(obs['remaining']['sampled_sizes'], [])
 
     def test_live_and_replay_observations_agree(self):
         """A live wall's check re-executes it from the trace with LiveGeometry: same observation."""
-        live_obs, _ = controllers.Observer(version=2)(PAPER, live(two_outcomes()))
+        live_obs, _ = order_controller.Observer(version=2)(PAPER, live(two_outcomes()))
 
         class Fill:  # stands in for LiveGeometry: the recorded geometry by pose
             def fill(self, obs, classes):
                 for o, g in zip(obs['outcomes'], live_obs['outcomes']):
                     o['geometry'] = g['geometry']
-        replayed, _ = controllers.Observer(geometry=Fill(), version=2)(PAPER, offline(live(two_outcomes())))
+        replayed, _ = order_controller.Observer(geometry=Fill(), version=2)(PAPER, offline(live(two_outcomes())))
         self.assertEqual(replayed, live_obs)
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
     def test_only_current_and_earlier_information(self):
-        obs = [o for o, _ in stream(WALL, controllers.Observer(version=2))]
-        _, arrays = controllers.load_trace(sorted((result_of(WALL) / 'trace').glob('e*.npz'))[0])
+        obs = [o for o, _ in stream(WALL, order_controller.Observer(version=2))]
+        _, arrays = order_controller.load_trace(sorted((result_of(WALL) / 'trace').glob('e*.npz'))[0])
         seen = set()
         for k, o in enumerate(obs):
             self.assertEqual(set(o), V2_KEYS)
@@ -372,34 +372,34 @@ class Version2(unittest.TestCase):
         self.assertEqual(obs[0]['wall_size'], {'width': arrays['wall'].shape[1], 'height': arrays['wall'].shape[0]})
         # the observation at a selection never depends on later ones: a fresh observer fed the prefix agrees
         for k in (0, 5, 12, len(obs) - 1):
-            observer, base = controllers.Observer(version=2), controllers.base_policy(WALL)
-            for j, (m, a) in enumerate(controllers.trace_events(result_of(WALL))):
-                o, _ = observer(types.MappingProxyType(dict(base)), controllers.context_from_trace(m, a))
+            observer, base = order_controller.Observer(version=2), order_controller.base_policy(WALL)
+            for j, (m, a) in enumerate(order_controller.trace_events(result_of(WALL))):
+                o, _ = observer(types.MappingProxyType(dict(base)), order_controller.context_from_trace(m, a))
                 if j == k:
                     self.assertEqual(o, obs[k])
                     break
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
     def test_same_state_same_observation(self):
-        first = [o for o, _ in stream(WALL, controllers.Observer(version=2))]
-        again = [o for o, _ in stream(WALL, controllers.Observer(version=2))]
+        first = [o for o, _ in stream(WALL, order_controller.Observer(version=2))]
+        again = [o for o, _ in stream(WALL, order_controller.Observer(version=2))]
         self.assertEqual(json.dumps(first, sort_keys=True), json.dumps(again, sort_keys=True))
         # the unsampled inventory's order and the traced RNG state carry no information into it
-        base, observer = controllers.base_policy(WALL), controllers.Observer(version=2)
-        for (m, a), expected in zip(controllers.trace_events(result_of(WALL)), first):
+        base, observer = order_controller.base_policy(WALL), order_controller.Observer(version=2)
+        for (m, a), expected in zip(order_controller.trace_events(result_of(WALL)), first):
             a = dict(a)
             a['inventory_ids'] = a['inventory_ids'][::-1]
             a['np_rng_keys'], a['py_rng_state'] = np.zeros_like(a['np_rng_keys']), np.zeros_like(a['py_rng_state'])
             m = {**m, 'np_rng': None, 'py_rng': None}
-            o, _ = observer(types.MappingProxyType(dict(base)), controllers.context_from_trace(m, a))
+            o, _ = observer(types.MappingProxyType(dict(base)), order_controller.context_from_trace(m, a))
             self.assertEqual(o, expected)
 
     @unittest.skipUnless(WALL.exists(), 'recorded wall absent')
     def test_wang_selection_untouched(self):
         """A version 2 client keeping Paper picks what Wang traced at every selection, and the
         version 2 observer leaves its inputs as they were."""
-        records = controllers.rerun(result_of(WALL), V2_SPEC, controllers.base_policy(WALL))
-        events = list(controllers.trace_events(result_of(WALL)))
+        records = order_controller.rerun(result_of(WALL), V2_SPEC, order_controller.base_policy(WALL))
+        events = list(order_controller.trace_events(result_of(WALL)))
         self.assertEqual(len(records), len(events))
         for r, (m, a) in zip(records, events):
             traced = int(a['selected'])  # -1: no feasible candidate (record: None)
@@ -408,11 +408,11 @@ class Version2(unittest.TestCase):
             self.assertEqual(r['observation']['observation_version'], 2)
             self.assertIn(r['source'], ('llm', 'not_a_decision_point'))
             for t in r.get('transcripts', []):
-                self.assertEqual(t['request']['messages'][0]['content'], controllers.SYSTEM_V2)
+                self.assertEqual(t['request']['messages'][0]['content'], order_controller.SYSTEM_V2)
         m, a = events[0]
-        ctx = controllers.context_from_trace(m, a)
+        ctx = order_controller.context_from_trace(m, a)
         before = copy.deepcopy(dict(ctx))
-        controllers.Observer(version=2)(PAPER, ctx)
+        order_controller.Observer(version=2)(PAPER, ctx)
         self.assertEqual(set(ctx), set(before))
         self.assertTrue(all(np.array_equal(ctx[k], before[k]) if isinstance(before[k], np.ndarray) else ctx[k] == before[k]
                             for k in before))
@@ -423,13 +423,13 @@ class Version2(unittest.TestCase):
         budget; without it (every earlier spec) the first decision point is answered as before."""
         for bad in (0, -1, '10', True, 2.5):
             with self.assertRaises(ValueError):
-                controllers.validate_spec({**V2_SPEC, 'first_step': bad})
+                order_controller.validate_spec({**V2_SPEC, 'first_step': bad})
         with self.assertRaises(ValueError):  # react only: the other controllers are unchanged
-            controllers.validate_spec({'kind': 'random', 'seed': 1, 'first_step': 10})
+            order_controller.validate_spec({'kind': 'random', 'seed': 1, 'first_step': 10})
         mock_ = {'kind': 'mock', 'mode': 'max_llc'}
         for first, step in ((None, 1), (10, 10)):
             spec = {**V2_SPEC, 'llm': mock_, 'max_decisions': 1, **({} if first is None else {'first_step': first})}
-            records = controllers.rerun(result_of(WALL), spec, controllers.base_policy(WALL))
+            records = order_controller.rerun(result_of(WALL), spec, order_controller.base_policy(WALL))
             asked = [r for r in records if r['source'] == 'llm']
             self.assertEqual([(r['event'], r['step']) for r in asked], [(step - 1, step)])
             before = {r['source'] for r in records if r['decision_point'] and r['step'] < step}
@@ -440,10 +440,10 @@ class Version2(unittest.TestCase):
     def test_through_the_build_wall_hook(self):
         """controlled_policy (what build_wall calls) accepts a version 2 controller: global RNGs,
         settings and the selection inputs unchanged, and 'keep' returns the base policy itself."""
-        client = controllers.make_controller(V2_SPEC, sink=lambda r: None, transport='inline')
+        client = order_controller.make_controller(V2_SPEC, sink=lambda r: None, transport='inline')
         ctx = live(two_outcomes())
         self.assertIs(controlled_policy(PAPER, client, ctx), PAPER)
-        client = controllers.make_controller({**V2_SPEC, 'llm': {'kind': 'mock', 'mode': 'max_llc'}},
+        client = order_controller.make_controller({**V2_SPEC, 'llm': {'kind': 'mock', 'mode': 'max_llc'}},
                                              sink=lambda r: None, transport='inline')
         policy = controlled_policy(PAPER, client, live(two_outcomes()))
         self.assertEqual(set(policy), {'policy', 'order', 'tol'})

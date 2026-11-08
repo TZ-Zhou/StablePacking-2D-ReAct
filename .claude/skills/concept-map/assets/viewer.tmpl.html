@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>概念地圖</title>
+<style>
+:root {
+  --bg: #f8fafc; --surface: #ffffff; --border: #cbd5e1; --text: #0f172a;
+  --muted: #64748b; --edge: #475569; --accent: #2563eb; --ok: #059669;
+  --bad: #dc2626; --group: #e2e8f0; --code: #e2e8f0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0;
+    --muted: #94a3b8; --edge: #94a3b8; --accent: #60a5fa; --ok: #34d399;
+    --bad: #f87171; --group: #1e293b; --code: #334155;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0;
+  --muted: #94a3b8; --edge: #94a3b8; --accent: #60a5fa; --ok: #34d399;
+  --bad: #f87171; --group: #1e293b; --code: #334155;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.55 system-ui, "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+  display: flex; flex-direction: column;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 16px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+.meta { color: var(--muted); font-size: 12px; }
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.crumbs button, .tools button, .btn {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px;
+  cursor: pointer;
+}
+.crumbs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.crumbs span { color: var(--muted); }
+.tools { margin-left: auto; display: flex; gap: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; }
+.legend i {
+  display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+  margin-right: 5px; vertical-align: -1px; border: 2px solid;
+}
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 380px; }
+#stage { position: relative; min-width: 0; overflow: hidden; }
+#stage svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+#stage svg.drag { cursor: grabbing; }
+#page { position: absolute; inset: 0; overflow: auto; padding: 20px 24px; }
+aside {
+  border-left: 1px solid var(--border); background: var(--surface);
+  overflow: auto; padding: 14px 16px;
+}
+aside h2 { font-size: 16px; margin: 0 0 6px; }
+aside h3 {
+  font-size: 12px; margin: 14px 0 4px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+aside p, aside li { margin: 2px 0; }
+aside ul { padding-left: 18px; margin: 4px 0; }
+code {
+  background: var(--code); border-radius: 4px; padding: 0 4px;
+  font: 12.5px ui-monospace, Consolas, monospace;
+}
+.chip {
+  display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 10px;
+  color: #fff; vertical-align: 2px; margin-left: 6px;
+}
+.ok { color: var(--ok); } .bad { color: var(--bad); }
+.link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 16px; margin: 0 0 14px; max-width: 900px;
+}
+.card h2 { margin: 0 0 8px; font-size: 15px; }
+.card pre { margin: 6px 0; padding: 8px 10px; background: var(--code); border-radius: 6px; overflow: auto; }
+table { border-collapse: collapse; margin: 6px 0; }
+th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; }
+.entries { columns: 3 200px; font-size: 13px; }
+.entries div { break-inside: avoid; }
+.node { cursor: pointer; }
+.node text { pointer-events: none; }
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  aside { border-left: 0; border-top: 1px solid var(--border); max-height: 45vh; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="crumbs" id="crumbs"></div>
+  <div class="legend" id="legend"></div>
+  <div class="tools">
+    <button id="fit" title="適合視窗">適合</button>
+    <button id="up" title="回上一層 (Esc)">上一層</button>
+  </div>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <div id="stage"></div>
+  <aside id="side"></aside>
+</main>
+<script>
+const M = __MODEL__;
+const NS = "http://www.w3.org/2000/svg";
+const NEUTRAL = {fill: "#64748B", stroke: "#475569"};
+const $ = (s) => document.querySelector(s);
+const state = {scope: "", sel: null};
+let svg = null, world = null, view = null;
+
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "onclick") e.addEventListener("click", v);
+    else if (k === "class") e.className = v;
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) e.append(k instanceof Node ? k : document.createTextNode(k));
+  return e;
+}
+function s(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function inline(text) {
+  const out = document.createDocumentFragment();
+  String(text || "").split("`").forEach((part, i) => {
+    if (i % 2) out.append(h("code", {}, part));
+    else out.append(document.createTextNode(part.replace(/\*\*/g, "")));
+  });
+  return out;
+}
+function width(t) {
+  let w = 0;
+  for (const c of t) w += c.charCodeAt(0) > 255 ? 1 : 0.56;
+  return w;
+}
+function clip(t, maxEm) {
+  t = String(t || "").replace(/`/g, "");
+  if (width(t) <= maxEm) return t;
+  let out = "";
+  for (const c of t) {
+    if (width(out + c) > maxEm - 1) break;
+    out += c;
+  }
+  return out + "…";
+}
+
+function colorOf(id) {
+  let b = M.boxes[id];
+  while (b) {
+    if (b.cls && M.legend[b.cls]) return M.legend[b.cls];
+    b = b.parent ? M.boxes[b.parent] : null;
+  }
+  return NEUTRAL;
+}
+function hasScope(id) { return !!M.scopes[id]; }
+function topPaths(id) { return (M.boxes[id].paths || []).filter((p) => !p.inside); }
+function keyNames(id, dir) {
+  return (M.boxes[id].paths || []).filter((p) => p.inside === dir)
+    .map((p) => p.path.slice(dir.length + 1));
+}
+function hasPaths(id) { return topPaths(id).length > 0; }
+function chain(scope) {
+  const out = [];
+  let cur = scope;
+  while (cur) { out.unshift(cur); cur = M.boxes[cur].parent; }
+  return out;
+}
+
+/* ---------- 版面標頭 ---------- */
+function renderHeader() {
+  $("#title").textContent = M.title;
+  $("#meta").textContent =
+    `最後確認 ${M.confirmed || "—"} · 產生 ${M.generated} · 警告 ${M.warnings.length}`;
+  const lg = $("#legend");
+  lg.replaceChildren();
+  for (const v of Object.values(M.legend)) {
+    const i = h("i"); i.style.background = v.fill; i.style.borderColor = v.stroke;
+    lg.append(h("span", {}, i, v.label));
+  }
+  const cr = $("#crumbs");
+  cr.replaceChildren();
+  const add = (label, on, fn) => cr.append(h("button", {class: on ? "on" : "", onclick: fn}, label));
+  add("L0", state.scope === "L0", () => go("L0"));
+  add("L1", state.scope === "", () => go(""));
+  for (const id of chain(state.scope === "L0" ? "" : state.scope)) {
+    cr.append(h("span", {}, "›"));
+    add(`${id} ${M.boxes[id].name}`, state.scope === id, () => go(id));
+  }
+}
+
+/* ---------- 主畫面 ---------- */
+function render() {
+  renderHeader();
+  const st = $("#stage");
+  st.replaceChildren();
+  svg = world = null;
+  if (state.scope === "L0") renderL0(st);
+  else if (state.scope && !hasScope(state.scope)) renderL3(st, state.scope);
+  else renderGraph(st, M.scopes[state.scope] || {nodes: [], groups: [], edges: []});
+  renderSide();
+}
+
+function mdLite(text) {
+  const root = h("div");
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.trim().startsWith("```")) {
+      const buf = [];
+      for (i++; i < lines.length && !lines[i].trim().startsWith("```"); i++) buf.push(lines[i]);
+      root.append(h("pre", {}, buf.join("\n")));
+    } else if (ln.trim().startsWith("|")) {
+      const rows = [];
+      for (; i < lines.length && lines[i].trim().startsWith("|"); i++) rows.push(lines[i]);
+      i--;
+      const tb = h("table");
+      rows.forEach((r, k) => {
+        const cells = r.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        if (cells.every((c) => /^[-: ]+$/.test(c))) return;
+        tb.append(h("tr", {}, cells.map((c) => h(k === 0 ? "th" : "td", {}, inline(c)))));
+      });
+      root.append(tb);
+    } else if (ln.trim()) root.append(h("p", {}, inline(ln)));
+  }
+  return root;
+}
+function renderL0(st) {
+  const page = h("div", {id: "page"});
+  page.append(h("div", {class: "card"}, h("h2", {}, "L0 整個系統"),
+    mdLite(M.l0 || "（地圖沒有 L0 章節）")));
+  st.append(page);
+}
+function renderL3(st, id) {
+  const page = h("div", {id: "page"});
+  const b = M.boxes[id];
+  page.append(h("div", {class: "card"}, h("h2", {}, `L3 ${id} ${b.name}：實際檔案`),
+    h("p", {class: "meta"}, "自動列出「程式」欄的路徑內容，未讀原始碼。")));
+  for (const p of topPaths(id)) page.append(pathCard(p, keyNames(id, p.path)));
+  if (!b.paths.length) page.append(h("div", {class: "card"}, "這個盒子沒有登記程式路徑。"));
+  st.append(page);
+}
+function pathCard(p, keys) {
+  const card = h("div", {class: "card"});
+  card.append(h("h2", {}, h("span", {class: p.exists ? "ok" : "bad"}, p.exists ? "✓ " : "✗ "),
+    h("code", {}, p.path), p.kind === "dir" ? "（資料夾）" : ""));
+  if (!p.exists) card.append(h("p", {class: "bad"}, "路徑不存在"));
+  const box = h("div", {class: "entries"});
+  for (const e of p.entries) {
+    const key = (keys || []).includes(e.name);
+    box.append(h("div", {}, e.kind === "dir" ? "▸ " : key ? "★ " : "· ", h("code", {}, e.name)));
+  }
+  if ((keys || []).length) card.append(h("p", {class: "meta"}, "★ 地圖點名的入口檔"));
+  if (p.entries.length) card.append(box);
+  if (p.more) card.append(h("p", {class: "meta"}, `…另有 ${p.more} 項`));
+  return card;
+}
+
+/* ---------- SVG 圖 ---------- */
+function renderGraph(st, sc) {
+  svg = s("svg");
+  const defs = s("defs");
+  const mk = s("marker", {id: "arr", viewBox: "0 0 10 10", refX: 9, refY: 5,
+    markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse"});
+  mk.append(s("path", {d: "M0 0L10 5L0 10z", fill: "var(--edge)"}));
+  defs.append(mk);
+  svg.append(defs);
+  world = s("g");
+  svg.append(world);
+  const pos = {};
+  sc.nodes.forEach((n) => { pos[n.id] = n; });
+
+  for (const g of sc.groups) {
+    world.append(s("rect", {x: g.x, y: g.y, width: g.w, height: g.h, rx: 12,
+      fill: "var(--group)", "fill-opacity": 0.55, stroke: "var(--border)",
+      "stroke-dasharray": "5 4"}));
+    world.append(s("text", {x: g.x + 12, y: g.y + 19, fill: "var(--muted)",
+      "font-size": 12, "font-weight": 600}, clip(g.title, 24)));
+  }
+  let back = 0;
+  skipCount = 0;
+  inCount = {};
+  for (const e of sc.edges) inCount[e.to] = (inCount[e.to] || 0) + 1;
+  for (const e of sc.edges) back += drawEdge(e, pos[e.from], pos[e.to], back);
+  for (const n of sc.nodes) drawNode(n);
+
+  svg.addEventListener("click", (ev) => {
+    if (ev.target === svg) select(null);
+  });
+  attachPanZoom();
+  $("#stage").append(svg);
+  if (view) applyView(); else fit();
+}
+
+let inCount = {};
+let skipCount = 0;
+function allNodes() {
+  return (M.scopes[state.scope] || {nodes: []}).nodes;
+}
+function hasNodeBetween(a, b) {
+  return allNodes().some((n) => n.x > a.x + 1 && n.x < b.x - 1);
+}
+function bez(t, p0, p1, p2, p3) {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+function drawEdge(e, a, b, backIndex) {
+  if (!a || !b) return 0;
+  let d, lx, ly, isBack = 0;
+  const ax = a.x + a.w, ay = a.y + a.h / 2, bx = b.x, by = b.y + b.h / 2;
+  if (b.x > a.x + 1 && hasNodeBetween(a, b)) {
+    // 跨欄的前進線：從下方繞過中間的盒子，避免穿過它們
+    const bottom = Math.max(...allNodes().map((n) => n.y + n.h)) + 44 + skipCount * 22;
+    skipCount += 1;
+    const sx = a.x + a.w / 2, ex = b.x + b.w / 2;
+    d = `M${sx} ${a.y + a.h}C${sx} ${bottom} ${ex} ${bottom} ${ex} ${b.y + b.h}`;
+    lx = (sx + ex) / 2; ly = bottom - 4;
+  } else if (b.x > a.x + 1) {
+    const dx = Math.max(40, (bx - ax) / 2);
+    d = `M${ax} ${ay}C${ax + dx} ${ay} ${bx - dx} ${by} ${bx} ${by}`;
+    const t = (inCount[e.to] || 0) > 1 ? 0.28 : 0.72;
+    lx = bez(t, ax, ax + dx, bx - dx, bx); ly = bez(t, ay, ay, by, by);
+  } else if (Math.abs(b.x - a.x) <= 1) {
+    const down = b.y > a.y;
+    const sx = a.x + a.w / 2, sy = down ? a.y + a.h : a.y;
+    const ey = down ? b.y : b.y + b.h;
+    d = `M${sx} ${sy}L${sx} ${ey}`;
+    lx = sx + 6; ly = (sy + ey) / 2;
+  } else {
+    const top = Math.min(...Object.values(posTop())) - 44 - backIndex * 22;
+    const sx = a.x + a.w / 2, ex = b.x + b.w / 2;
+    d = `M${sx} ${a.y}C${sx} ${top} ${ex} ${top} ${ex} ${b.y}`;
+    lx = (sx + ex) / 2; ly = top + 8; isBack = 1;
+  }
+  const attrs = {d, fill: "none", stroke: "var(--edge)", "stroke-width": 1.8,
+    "marker-end": "url(#arr)"};
+  if (e.dashed) attrs["stroke-dasharray"] = "6 4";
+  world.append(s("path", attrs));
+  if (e.label) {
+    world.append(s("text", {x: lx, y: ly - 5, "text-anchor": "middle", "font-size": 11.5,
+      fill: "var(--text)", stroke: "var(--bg)", "stroke-width": 4, "paint-order": "stroke"},
+      clip(e.label, 30)));
+  }
+  return isBack;
+}
+function posTop() {
+  const out = {};
+  (M.scopes[state.scope] || {nodes: []}).nodes.forEach((n) => { out[n.id] = n.y; });
+  (M.scopes[state.scope] || {groups: []}).groups.forEach((g, i) => { out["g" + i] = g.y; });
+  return out;
+}
+
+function drawNode(n) {
+  const b = M.boxes[n.id];
+  const col = colorOf(n.id);
+  const g = s("g", {class: "node", transform: `translate(${n.x},${n.y})`, "data-id": n.id});
+  g.append(s("rect", {width: n.w, height: n.h, rx: 10, fill: col.fill, stroke: col.stroke,
+    "stroke-width": 2}));
+  if (state.sel === n.id) {
+    g.append(s("rect", {x: -4, y: -4, width: n.w + 8, height: n.h + 8, rx: 13, fill: "none",
+      stroke: "var(--accent)", "stroke-width": 3}));
+  }
+  g.append(s("text", {x: 14, y: 30, fill: "#fff", "font-size": 15, "font-weight": 700},
+    clip(`${b.id} ${b.name}`, 17)));
+  g.append(s("text", {x: 14, y: 54, fill: "#fff", "fill-opacity": 0.92, "font-size": 11.5},
+    clip(b.tagline || b.fields.output, 17.5)));
+  if (hasScope(n.id) || hasPaths(n.id)) {
+    g.append(s("text", {x: n.w - 16, y: n.h - 12, fill: "#fff", "font-size": 12,
+      "text-anchor": "end", opacity: 0.85}, hasScope(n.id) ? "▸ L2" : "▸ L3"));
+  }
+  g.addEventListener("click", (ev) => { ev.stopPropagation(); select(n.id); });
+  g.addEventListener("dblclick", (ev) => { ev.stopPropagation(); drill(n.id); });
+  world.append(g);
+}
+
+/* ---------- 縮放與平移 ---------- */
+function fit() {
+  if (!world) return;
+  const bb = world.getBBox();
+  view = {x: bb.x - 30, y: bb.y - 30, w: bb.width + 60, h: bb.height + 60};
+  applyView();
+}
+function applyView() {
+  if (!svg || !view) return;
+  const r = svg.getBoundingClientRect();
+  const k = Math.max(view.w / r.width, view.h / r.height);
+  const w = r.width * k, hh = r.height * k;
+  svg.setAttribute("viewBox",
+    `${view.x - (w - view.w) / 2} ${view.y - (hh - view.h) / 2} ${w} ${hh}`);
+}
+function attachPanZoom() {
+  let drag = null;
+  svg.addEventListener("pointerdown", (ev) => {
+    if (ev.target.closest(".node")) return;
+    drag = {x: ev.clientX, y: ev.clientY, v: {...view}};
+    svg.classList.add("drag");
+    svg.setPointerCapture(ev.pointerId);
+  });
+  svg.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    const r = svg.getBoundingClientRect();
+    const k = Math.max(drag.v.w / r.width, drag.v.h / r.height);
+    view = {...drag.v, x: drag.v.x - (ev.clientX - drag.x) * k, y: drag.v.y - (ev.clientY - drag.y) * k};
+    applyView();
+  });
+  const end = () => { drag = null; svg.classList.remove("drag"); };
+  svg.addEventListener("pointerup", end);
+  svg.addEventListener("pointercancel", end);
+  svg.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const f = ev.deltaY < 0 ? 0.88 : 1.14;
+    const vb = svg.viewBox.baseVal;
+    const nw = vb.width * f, nh = vb.height * f;
+    view = {x: p.x - (p.x - vb.x) * f, y: p.y - (p.y - vb.y) * f, w: nw, h: nh};
+    svg.setAttribute("viewBox", `${view.x} ${view.y} ${nw} ${nh}`);
+  }, {passive: false});
+}
+
+/* ---------- 側欄 ---------- */
+function neighbors(id) {
+  const b = M.boxes[id];
+  const sc = M.scopes[b.parent || ""];
+  const ins = [], outs = [];
+  if (sc) for (const e of sc.edges) {
+    if (e.to === id && M.boxes[e.from]) ins.push(e);
+    if (e.from === id && M.boxes[e.to]) outs.push(e);
+  }
+  return {ins, outs};
+}
+function boxLink(id, label) {
+  return h("span", {class: "link", onclick: () => select(id)}, label);
+}
+function renderSide() {
+  const side = $("#side");
+  side.replaceChildren();
+  const id = state.sel;
+  if (!id) {
+    side.append(h("h2", {}, state.scope === "L0" ? "L0" : "點選盒子看契約"),
+      h("p", {class: "meta"}, "單擊選取，雙擊（或「進入」）往下一層；滾輪縮放，拖曳平移。"));
+    if (M.warnings.length) {
+      side.append(h("h3", {}, `對照現況（${M.warnings.length}）`),
+        h("ul", {}, M.warnings.map((w) => h("li", {}, inline(w)))));
+    }
+    return;
+  }
+  const b = M.boxes[id];
+  const col = colorOf(id);
+  const chip = h("span", {class: "chip"}, (M.legend[b.cls] || {}).label || "");
+  chip.style.background = col.fill;
+  side.append(h("h2", {}, `${b.id} ${b.name}`, chip));
+  const labels = {input: "Input", output: "Output", guarantee: "保證", inside: "內部"};
+  for (const k of ["input", "output", "guarantee", "inside"]) {
+    if (b.fields[k]) side.append(h("h3", {}, labels[k]), h("p", {}, inline(b.fields[k])));
+  }
+  for (const x of b.extras) side.append(h("h3", {}, x.label), h("p", {}, inline(x.value)));
+  const nb = neighbors(id);
+  if (nb.ins.length || nb.outs.length) {
+    side.append(h("h3", {}, "連線"));
+    const ul = h("ul");
+    for (const e of nb.ins) ul.append(h("li", {}, "← ", boxLink(e.from, `${e.from} ${M.boxes[e.from].name}`), e.label ? `（${e.label}）` : ""));
+    for (const e of nb.outs) ul.append(h("li", {}, "→ ", boxLink(e.to, `${e.to} ${M.boxes[e.to].name}`), e.label ? `（${e.label}）` : ""));
+    side.append(ul);
+  }
+  if (b.paths.length) {
+    side.append(h("h3", {}, "程式（L3）"));
+    const ul = h("ul");
+    for (const p of topPaths(id)) {
+      const keys = keyNames(id, p.path);
+      ul.append(h("li", {}, h("span", {class: p.exists ? "ok" : "bad"}, p.exists ? "✓ " : "✗ "),
+        h("code", {}, p.path), keys.length ? `（★ ${keys.join("、")}）` : ""));
+    }
+    side.append(ul);
+  }
+  if (hasScope(id) || hasPaths(id)) {
+    side.append(h("p", {}, h("button", {class: "btn", onclick: () => drill(id)},
+      hasScope(id) ? "進入 L2 ▸" : "進入 L3 ▸")));
+  }
+}
+
+/* ---------- 導覽 ---------- */
+function go(scope) { state.scope = scope; state.sel = null; view = null; sync(); render(); }
+function select(id) { state.sel = id; sync(); render(); }
+function drill(id) { state.scope = id; state.sel = null; view = null; sync(); render(); }
+function up() {
+  if (state.scope === "L0") return go("");
+  if (state.sel) return select(null);
+  if (state.scope) return go(M.boxes[state.scope].parent || "");
+}
+function sync() {
+  const hash = state.scope === "L0" ? "L0" : state.sel ? state.sel : state.scope ? `scope=${state.scope}` : "";
+  try {
+    history.replaceState(null, "", hash ? `#${hash}` : location.pathname + location.search);
+  } catch (err) { /* 面板的 data: 網址不允許改網址列，略過 */ }
+}
+function fromHash() {
+  const raw = decodeURIComponent(location.hash.slice(1));
+  if (raw === "L0") { state.scope = "L0"; state.sel = null; }
+  else if (raw.startsWith("scope=") && M.boxes[raw.slice(6)]) { state.scope = raw.slice(6); state.sel = null; }
+  else if (M.boxes[raw]) { state.scope = M.boxes[raw].parent || ""; state.sel = raw; }
+  else { state.scope = ""; state.sel = null; }
+  view = null;
+  render();
+}
+
+$("#fit").addEventListener("click", () => { view = null; fit(); });
+$("#up").addEventListener("click", up);
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") up();
+  if (ev.key === "Enter" && state.sel && (hasScope(state.sel) || hasPaths(state.sel))) drill(state.sel);
+});
+window.addEventListener("resize", () => { if (view) applyView(); });
+window.addEventListener("hashchange", fromHash);
+fromHash();
+</script>
+</body>
+</html>

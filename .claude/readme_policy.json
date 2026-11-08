@@ -1,0 +1,6 @@
+{
+  "exempt_globs": [
+    "Tests/*/data",
+    "Tests/*/data/*"
+  ]
+}

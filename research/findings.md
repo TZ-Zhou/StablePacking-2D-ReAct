@@ -12,7 +12,7 @@ into Observation V2.
 - Arm ranks unchanged for all four metrics; paired counts move by at most one seed. v1 stays formal.
 - Low F_SF in v1: 13 walls from 02's leave-out, 4 walls from unplaced stones (5 stones).
 
-## P0: single-step preview (preview.py, preview_study.py)
+## P0: single-step preview (placement_preview.py, placement_preview_study.py)
 - Partial-wall F_AV correlates with final F_AV late in the wall (rho 0.61 / 0.71 after 12 / 15 of
   18 stones), mostly because the wall is mostly built. Density does not predict F_SF; nothing local
   predicts F_LR. Band variants are mostly undefined.

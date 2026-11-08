@@ -22,9 +22,9 @@ from Stonepacker2D.stack.selection import (ALL_ORDERS, PAPER_ORDER, filter_log, 
                                            footprint, select, tie_count, to_world, write_trace)
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'research'))
-import run_case  # noqa: E402
-import sensitivity  # noqa: E402
+sys.path.insert(0, str(REPO))
+from research.walls import run_wall  # noqa: E402
+from research.analysis import order_sensitivity  # noqa: E402
 
 
 def original_cascade():
@@ -247,7 +247,7 @@ class OfflineReplay(unittest.TestCase):
             for p in patches:
                 p.start()
             try:
-                summary = sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
+                summary = order_sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
             finally:
                 for p in patches:
                     p.stop()
@@ -256,7 +256,7 @@ class OfflineReplay(unittest.TestCase):
             orders = (Path(tmp) / 'out' / 'orders.csv').read_text(encoding='utf-8').splitlines()
             self.assertEqual(len(orders), 1 + 6 * 120)
             with self.assertRaises(FileExistsError):  # an existing analysis is never overwritten
-                sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
+                order_sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
 
 
 def read_csv(path):
@@ -278,13 +278,13 @@ class InfeasibleEvents(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for event in range(2):
                 infeasible_trace(Path(tmp) / 'trace', event)
-            summary = sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
+            summary = order_sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
             events = list(read_csv(Path(tmp) / 'out' / 'events.csv'))
             for e in events:
                 self.assertEqual((e['n_feasible'], e['n_distinct_pose'], e['n_distinct_stone']), ('0', '0', '0'))
                 self.assertEqual((e['orders_same_as_paper'], e['orders_without_selection']), ('120', '120'))
             self.assertEqual((Path(tmp) / 'out' / 'candidates.csv').read_text(encoding='utf-8').strip(),
-                             ','.join(sensitivity.CANDIDATE_FIELDS))
+                             ','.join(order_sensitivity.CANDIDATE_FIELDS))
             self.assertTrue(summary['live_replay_consistent'])
 
     def test_mixed_trace_counts_match_order_rows(self):
@@ -293,7 +293,7 @@ class InfeasibleEvents(unittest.TestCase):
             infeasible_trace(Path(tmp) / 'trace', 0)
             for event in range(1, 5):
                 synthetic_trace(Path(tmp) / 'trace', event, rng)
-            sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
+            order_sensitivity.main([str(Path(tmp) / 'trace'), str(Path(tmp) / 'out')])
             orders = list(read_csv(Path(tmp) / 'out' / 'orders.csv'))
             for e in read_csv(Path(tmp) / 'out' / 'events.csv'):
                 mine = [o for o in orders if o['event'] == e['event']]
@@ -309,10 +309,10 @@ class LauncherSafety(unittest.TestCase):
         parent = subprocess.Popen([sys.executable, '-c', code])
         try:
             deadline = time.monotonic() + 30
-            while len(run_case.process_tree(run_case.process_table(), parent.pid)) < 2:
+            while len(run_wall.process_tree(run_wall.process_table(), parent.pid)) < 2:
                 self.assertLess(time.monotonic(), deadline, 'grandchild did not start')
                 time.sleep(0.5)
-            record = run_case.terminate(parent.pid)
+            record = run_wall.terminate(parent.pid)
             self.assertTrue(record['verified'], record)
             self.assertEqual(len(record['tree']), 2)
             self.assertEqual(record['alive_after'], [])
@@ -322,31 +322,31 @@ class LauncherSafety(unittest.TestCase):
     def test_unverified_termination_is_a_failure(self):
         # taskkill "succeeds" but a member stays alive: never reported as a successful stop.
         table = {100: (1, 'a'), 101: (100, 'b')}
-        with mock.patch.object(run_case, 'process_table', return_value=table), \
-                mock.patch.object(run_case.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='', stderr='')):
-            record = run_case.terminate(100, settle_seconds=0)
+        with mock.patch.object(run_wall, 'process_table', return_value=table), \
+                mock.patch.object(run_wall.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='', stderr='')):
+            record = run_wall.terminate(100, settle_seconds=0)
         self.assertFalse(record['verified'])
         self.assertEqual(record['alive_after'], [100, 101])
         ok_trace = {'ok': True}
-        self.assertEqual(run_case.final_status('STOPPED_AFTER_PLACEMENTS', ok_trace, record), 'TERMINATION_FAILED')
-        self.assertEqual(run_case.final_status('TIMEOUT', ok_trace, record), 'TERMINATION_FAILED')
+        self.assertEqual(run_wall.final_status('STOPPED_AFTER_PLACEMENTS', ok_trace, record), 'TERMINATION_FAILED')
+        self.assertEqual(run_wall.final_status('TIMEOUT', ok_trace, record), 'TERMINATION_FAILED')
 
     def test_incomplete_trace_is_never_success(self):
         rng = np.random.default_rng(9)
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / 'result' / 'trace'
-            self.assertFalse(run_case.check_trace(Path(tmp))['ok'])            # no trace at all
+            self.assertFalse(run_wall.check_trace(Path(tmp))['ok'])            # no trace at all
             for event in (0, 1, 3):                                            # gap at 2
                 synthetic_trace(trace, event, rng)
-            self.assertIn('not contiguous', run_case.check_trace(Path(tmp))['problems'][0])
+            self.assertIn('not contiguous', run_wall.check_trace(Path(tmp))['problems'][0])
             synthetic_trace(trace, 2, rng)
-            self.assertTrue(run_case.check_trace(Path(tmp))['ok'])
+            self.assertTrue(run_wall.check_trace(Path(tmp))['ok'])
             (trace / 'e00004.npz').write_bytes(b'truncated')                   # unreadable file
-            check = run_case.check_trace(Path(tmp))
+            check = run_wall.check_trace(Path(tmp))
             self.assertFalse(check['ok'])
             for status in ('PROCESS_PASS', 'STOPPED_AFTER_PLACEMENTS'):
-                self.assertEqual(run_case.final_status(status, check, None), 'INCOMPLETE_TRACE')
-            self.assertEqual(run_case.final_status('FAILED', check, None), 'FAILED')
+                self.assertEqual(run_wall.final_status(status, check, None), 'INCOMPLETE_TRACE')
+            self.assertEqual(run_wall.final_status('FAILED', check, None), 'FAILED')
 
     def test_trace_write_failure_raises(self):
         # Construction must stop rather than continue with a missing event.
@@ -362,29 +362,29 @@ class LauncherSafety(unittest.TestCase):
             selector = Path(tmp) / 'Stonepacker2D' / 'stack' / 'selection.py'
             selector.parent.mkdir(parents=True)
             selector.write_text('A = 1\n')
-            before = run_case.code_fingerprint(tmp)
+            before = run_wall.code_fingerprint(tmp)
             selector.write_text('A = 2\n')
-            after = run_case.code_fingerprint(tmp)
+            after = run_wall.code_fingerprint(tmp)
             self.assertIn('Stonepacker2D/stack/selection.py', before)
             self.assertNotEqual(before, after)
-        real = run_case.code_fingerprint()
+        real = run_wall.code_fingerprint()
         self.assertIn('Stonepacker2D/stack/selection.py', real)
-        self.assertIn('research/run_case.py', real)
+        self.assertIn('research/walls/run_wall.py', real)
         self.assertIn('research/validation/windows_case_runtime.py', real)
 
     def test_launcher_tools_reach_a_clone_and_need_no_baseline(self):
-        # A fresh clone has no baseline/: everything run_case executes or reads lives in research/validation.
-        self.assertEqual(run_case.VALIDATION, REPO / 'research' / 'validation')
+        # A fresh clone has no baseline/: everything run_wall executes or reads lives in research/validation.
+        self.assertEqual(run_wall.VALIDATION, REPO / 'research' / 'validation')
         tools = ('windows_case_runtime.py', 'verify_environment.py', 'environment-manifest.json')
         for tool in tools:
-            self.assertTrue((run_case.VALIDATION / tool).is_file(), tool)
+            self.assertTrue((run_wall.VALIDATION / tool).is_file(), tool)
             ignored = subprocess.run(['git', 'check-ignore', '--no-index', '-q', f'research/validation/{tool}'], cwd=REPO)
             self.assertEqual(ignored.returncode, 1, f'{tool} would not reach a clone')
-        for source in ('research/run_case.py', 'research/validation/verify_environment.py'):
+        for source in ('research/walls/run_wall.py', 'research/validation/verify_environment.py'):
             code = (REPO / source).read_text(encoding='utf-8')
             self.assertNotRegex(code, r"['\"]baseline['\"]|baseline[/\\]validation|Users[/\\]", source)
-        manifest = json.loads((run_case.VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(run_case.ENV_PREFIX, Path(manifest['prefix']))
+        manifest = json.loads((run_wall.VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(run_wall.ENV_PREFIX, Path(manifest['prefix']))
         self.assertTrue({'python', 'platform', 'packages', 'conda_records'} <= set(manifest))
 
 
@@ -499,7 +499,7 @@ class Geometry(unittest.TestCase):
                       x_world=np.array([1, 1, 1]), rotation_world=np.array([0, 180, 0]),
                       footprint=np.array(['a', 'a', 'b']), cluster=np.array([0, 0, 1]),
                       selected=np.array(select(raw, np.ones(6)).index))
-        rows, event, _, _ = sensitivity.analyze_event(meta, arrays, 1e-9)
+        rows, event, _, _ = order_sensitivity.analyze_event(meta, arrays, 1e-9)
         self.assertEqual(event['live_final_ties'], 2)
         self.assertEqual(event['live_final_tie_placements'], 1)
         self.assertEqual(len({r['placement_id'] for r in rows}), 1)
@@ -514,12 +514,12 @@ class Geometry(unittest.TestCase):
                           rotation=np.zeros(2, int), x=np.array([3, 4]), y=np.array([2, 2]),
                           x_world=np.array([3, 4]), rotation_world=np.zeros(2, int),
                           footprint=np.array(['f', 'g']), cluster=np.array([e, 9]), selected=np.array(0))
-            return sensitivity.analyze_event(meta, arrays, 1e-9)[3]
+            return order_sensitivity.analyze_event(meta, arrays, 1e-9)[3]
         for right_gds, side, stone in ((0.8, 'right', 11), (0.5, 'left', 10)):
             decisions = {0: event(0, 'left', 0.5), 1: event(1, 'right', right_gds)}
             commit = {'step': 1, 'phase': 'place', 'outcome': 'placed', 'chosen_side': side, 'stone_id': stone,
                       'sides': {'left': {'event': 0}, 'right': {'event': 1}}}
-            row, = sensitivity.analyze_commits([commit], decisions)
+            row, = order_sensitivity.analyze_commits([commit], decisions)
             self.assertTrue(row['live_reproduced'], (right_gds, row))
             self.assertEqual((row['n_distinct_side'], row['orders_same_placement_as_live']), (1, 120))
 
@@ -528,20 +528,20 @@ class OutputProtection(unittest.TestCase):
     def test_launcher_refuses_baseline_and_existing_directories(self):
         for name in ['../../baseline/cross-case/runs/almeida-pr-20261106-01', '..', '../../baseline']:
             with self.assertRaises((ValueError, FileExistsError)):
-                run_case.prepare_output(name)
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_case, 'RUNS', Path(tmp)):
-            run_case.prepare_output('x')
+                run_wall.prepare_output(name)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(run_wall, 'RUNS', Path(tmp)):
+            run_wall.prepare_output('x')
             with self.assertRaises(FileExistsError):
-                run_case.prepare_output('x')
+                run_wall.prepare_output('x')
 
     def test_staged_cleanup_never_deletes(self):
         # Every original rm -rf line is staged as a guard: empty target passes, files raise.
-        for case, (script, _) in run_case.CASES.items():
+        for case, (script, _) in run_wall.CASES.items():
             source = (REPO / script).read_text(encoding='utf-8')
-            staged = run_case.stage(source, {'filter': {'policy': 'code_original'}, 'run_id': 'x'})
+            staged = run_wall.stage(source, {'filter': {'policy': 'code_original'}, 'run_id': 'x'})
             live = [l for l in staged.splitlines() if not l.lstrip().startswith('#')]
             self.assertFalse([l for l in live if 'rm -rf' in l and 'glob' not in l], case)
-        line = run_case.stage("os.system('rm -rf '+d+'/*')\nseed_everything()\n",
+        line = run_wall.stage("os.system('rm -rf '+d+'/*')\nseed_everything()\n",
                               {'filter': {}, 'run_id': 'x'}).splitlines()[0]
         with tempfile.TemporaryDirectory() as d:
             exec(line, {'d': d})                       # empty: proceeds
