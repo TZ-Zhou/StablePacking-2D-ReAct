@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/git_commit_guard.py\"",
+            "if": "Bash(git commit*)",
+            "timeout": 15,
+            "statusMessage": "檢查 commit message 語言"
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/ps_utf8_guard.py\" || true",
+            "timeout": 10,
+            "statusMessage": "檢查新視窗的 UTF-8 設定"
+          }
+        ]
+      }
+    ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  }
+}
