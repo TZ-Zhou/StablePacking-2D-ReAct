@@ -57,15 +57,20 @@ def _run_task(constants, function, arguments):
     return function(*arguments)
 
 
-def _run_shared_task(constants, function, name, size, pose):
-    """Unpickled once per task, so that every task owns its objects, as when each task carried its own copy."""
-    block = SharedMemory(name=name)
-    try:
-        with block.buf[:size] as payload:
-            shared = pickle.loads(payload)
-    finally:
-        block.close()
-    return _run_task(constants, function, (pose, *shared))
+_step_arguments = (None, None)  # (step number, the step's shared arguments) this worker unpickled last
+
+
+def _run_shared_task(constants, function, step, name, size, pose):
+    """The arguments are unpickled once per step in each worker: place_one_stone only reads them."""
+    global _step_arguments
+    if _step_arguments[0] != step:
+        block = SharedMemory(name=name)
+        try:
+            with block.buf[:size] as payload:
+                _step_arguments = step, pickle.loads(payload)
+        finally:
+            block.close()
+    return _run_task(constants, function, (pose, *_step_arguments[1]))
 
 
 def _exit_with_parent():
@@ -95,6 +100,7 @@ class SharedPool:
     futures = None
     block = None
     waiting = None
+    step = 0  # numbers the steps, so that a worker can tell its arguments are those of the task's step
 
     def __init__(self, processes):
         if SharedPool.executor is None:
@@ -141,8 +147,11 @@ class SharedPool:
         block.buf[: len(payload)] = payload
         poses = range(len(shared[1]))
         SharedPool.block, SharedPool.shared, SharedPool.waiting = block, shared, set(poses)
+        SharedPool.step += 1
         SharedPool.futures = [
-            SharedPool.executor.submit(_run_shared_task, constants, function, block.name, len(payload), pose)
+            SharedPool.executor.submit(
+                _run_shared_task, constants, function, SharedPool.step, block.name, len(payload), pose
+            )
             for pose in poses
         ]
 

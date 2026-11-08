@@ -144,16 +144,17 @@ class SharedPool(unittest.TestCase):
             self.assertTrue(np.array_equal(stones[0], task[1][0]))
             self.assertEqual(poses, task[2])
 
-    def test_two_tasks_of_one_step_get_different_objects(self):
+    def test_a_worker_unpickles_the_arguments_of_a_step_once(self):
         payload = pickle.dumps(step_with_arrays(2)[0][1:], 5)
         block = SharedMemory(create=True, size=len(payload))
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
         block.buf[: len(payload)] = payload
-        first, second = (runtime._run_shared_task({}, arguments_seen, block.name, len(payload), j) for j in (0, 1))
-        self.assertIsNot(first[1], second[1])
-        self.assertIsNot(first[1][0], second[1][0])
-        self.assertTrue(np.array_equal(first[1][0], second[1][0]))
+        first, second = (runtime._run_shared_task({}, arguments_seen, 7, block.name, len(payload), j) for j in (0, 1))
+        next_step = runtime._run_shared_task({}, arguments_seen, 8, block.name, len(payload), 0)
+        self.assertIs(first[1], second[1])
+        self.assertIsNot(first[1], next_step[1])
+        self.assertTrue(np.array_equal(first[1][0], next_step[1][0]))
 
     def test_the_shared_memory_is_released_after_a_step(self):
         tasks = one_step(4)
@@ -235,7 +236,7 @@ class RealStepPayload(unittest.TestCase):
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
         block.buf[: len(payload)] = payload
-        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, block.name, len(payload), 0)))
+        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, 9, block.name, len(payload), 0)))
 
     def test_it_equals_what_a_per_task_pickle_delivers(self):
         expected = list(leaves(pickle.loads(pickle.dumps(self.shared, 4))))
