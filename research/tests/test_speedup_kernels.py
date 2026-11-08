@@ -16,7 +16,7 @@ from Stonepacker2D.evaluate import local_void, tilting_angle
 from Stonepacker2D.entity import transform
 from Stonepacker2D.entity.base import Base
 from Stonepacker2D.utils import region_memo
-from Stonepacker2D.utils.kine_2d import Element
+from Stonepacker2D.utils.kine_2d import Element, cal_Aglobal
 from Stonepacker2D.utils.region_memo import stone_region
 
 RNG = np.random.default_rng(20)
@@ -265,6 +265,14 @@ class ContactsOfImage(unittest.TestCase):
         }
         slow = tilting_angle.clear_contps(elems, tilting_angle.pixel_to_mesh(image))
         self.assertEqual(contact_summary(tilting_angle.contps_of_image(elems, image, wall)), contact_summary(slow))
+        for key, element in elems.items():
+            element.center = [key * 1.5, key * 0.25]
+        contacts, matrix = tilting_angle.contact_matrix(elems, image, wall)
+        self.assertEqual(matrix.tobytes(), cal_Aglobal(elems, slow).tobytes())
+        self.assertEqual(matrix.shape, cal_Aglobal(elems, slow).shape)
+        self.assertEqual(
+            [contact.cont_type.mu for contact in contacts.values()], [c.cont_type.mu for c in slow.values()]
+        )
 
     def test_a_stone_added_to_a_wall_equals_the_whole_image(self):
         image = blocks_image()

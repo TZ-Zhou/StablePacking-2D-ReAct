@@ -152,7 +152,10 @@ def evaluate_kine(final_base, save_failure=False, load='linear_acceleration', wa
     img = _contact_image(final_base.matrix)
     # print(img.shape)
     elems = base_to_elements(final_base)
-    contps = contps_of_image(elems, img, None if wall is None else _contact_image(wall))
+    if wall is None:
+        contps, Aglobal = contps_of_image(elems, img), None
+    else:
+        contps, Aglobal = contact_matrix(elems, img, _contact_image(wall))
     # ****************************************************************
     # ******** Tilting Table Load********************************
     # ****************************************************************
@@ -191,7 +194,8 @@ def evaluate_kine(final_base, save_failure=False, load='linear_acceleration', wa
             element.dl = [0, -element.mass, 0]
             element.ll = [element.mass, 0, 0]
 
-    Aglobal = cal_Aglobal(elems, contps)
+    if Aglobal is None:
+        Aglobal = cal_Aglobal(elems, contps)
     #plot_elem_contp(elems, contps)
     one_direction_solution = solve_force_rigid(elems, contps, Aglobal)
     one_direction = one_direction_solution['limit_force']
@@ -538,6 +542,44 @@ def contps_of_image(elems, img, wall=None):
         if elems[cand].id != elems[anta].id:
             maxPointID = _add_pair(cleaned_contps, maxPointID, elems[cand], elems[anta], geometries[(cand, anta)])
     return cleaned_contps
+
+
+def contact_matrix(elems, img, wall):
+    """(contacts, matrix): what solve_force_rigid reads of contps_of_image, and cal_Aglobal of it, built from arrays.
+
+    Every contact is alike for solve_force_rigid, which reads only their number and contact type, so they are one object.
+    """
+    parameters.mu = get_mu()
+    geometries = _contact_geometries(img, wall)
+    element_order = {key: position for position, key in enumerate(elems)}
+    cand_rows, anta_rows, ends, tangents, normals = [], [], [], [], []
+    for cand, anta in sorted(geometries, key=lambda pair: (element_order[pair[0]], element_order[pair[1]])):
+        geometry = geometries[(cand, anta)]
+        if geometry is not None and elems[cand].id != elems[anta].id:
+            cand_rows.append(element_order[cand])
+            anta_rows.append(element_order[anta])
+            ends.extend(geometry[:2])
+            tangents.append(geometry[2])
+            normals.append(geometry[3])
+    Aglobal = np.zeros((3 * len(elems), 4 * len(cand_rows)))
+    if not cand_rows:
+        return {}, Aglobal
+    centers = np.array([element.center for element in elems.values()])
+    coors = np.array(ends)
+    t_axes, n_axes = np.repeat(tangents, 2, axis=0), np.repeat(normals, 2, axis=0)
+    cols = np.arange(coors.shape[0]) * 2
+    for element_rows, sign in ((np.repeat(cand_rows, 2), 1), (np.repeat(anta_rows, 2), -1)):
+        rows = element_rows * 3
+        t, n = t_axes * sign, n_axes * sign
+        R = -coors + centers[element_rows]
+        Aglobal[rows, cols] = -1 * t[:, 0]
+        Aglobal[rows + 1, cols] = -1 * t[:, 1]
+        Aglobal[rows + 2, cols] = -1 * (R[:, 0] * t[:, 1] - R[:, 1] * t[:, 0])
+        Aglobal[rows, cols + 1] = -1 * n[:, 0]
+        Aglobal[rows + 1, cols + 1] = -1 * n[:, 1]
+        Aglobal[rows + 2, cols + 1] = -1 * (R[:, 0] * n[:, 1] - R[:, 1] * n[:, 0])
+    contact = ContPoint(0, [0, 0], 0, 0, [0, 0], [0, 0], ContType("friction", parameters))
+    return dict.fromkeys(range(coors.shape[0]), contact), Aglobal
 
 
 def clear_contps(elems, contps):
