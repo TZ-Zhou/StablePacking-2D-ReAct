@@ -36,3 +36,19 @@ into Observation V2.
   rank 1, 6, 1, 3, 4 of 6 when 6 remain. At the branch points the stone whose placement improved
   completion ranks easy at decision time (it had poses then), so the signal would not pick it.
 - Cost: Pareto 0.17 ms, hardness 0.02 ms per event.
+
+## Run time of one case (research/perf)
+- `fft-d2-0` (100 stones, 41 placed, `paper` order 3,0,2,1,4, seed 20), one run on a 16-logical-core
+  machine: with the per-batch Pool of `build_wall` 406 s, of which 359 s is the build loop; about 98% of
+  that loop is Pool creation and worker start-up (52 batches, about 6 s each), while the workers compute
+  about 48 s of CPU in total. With one persistent Pool 55 s.
+- Worker CPU is 88% `evaluate_kine`; MOSEK's `optimize` is about 14% of worker CPU, the rest is Python
+  model assembly (`cal_Aglobal`, `clear_contps`, the loops in `solve_force_rigid`). Not touched.
+- After the persistent Pool the largest items are stone preparation (`rotate_min_shape_factor`, 21 s of
+  55 s), the build loop (24 s) and the figure output (`draw_assembly`, final mechanism plot, about 9 s).
+- Equivalence: one persistent run against one per-batch run of the same case, policy, order and seed, and
+  four simultaneous persistent runs against that persistent run, gave identical `decisions.txt`,
+  `filter.txt`, `transformation.txt` and `base.pkl`. Not verified: other cases (`bricks`,
+  `thangavelu-noise80`, `almeida-pr` with `two_sides` and `sample_twice`), other policies and seeds
+  beyond one comparison of two seeds, and persistent-worker state across calls (not audited).
+  A broader check was started and stopped unfinished.
