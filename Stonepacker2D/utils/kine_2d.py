@@ -76,35 +76,41 @@ def update_elem_disp(elems, disps):
 
 
 def cal_Aglobal(elems, contps):
-
-    def cal_A_local(element, point, reverse=False):
-        t = np.array(point.orientation[0])
-        n = np.array(point.orientation[1])
-        if reverse:
-            t = t*(-1)
-            n = n*(-1)
-
-        R = - np.array(point.coor) + np.array(element.center)
-        Alocal = np.matrix([
-            [-1*t[0], -1*n[0]],
-            [-1*t[1], -1*n[1]],
-            [-1*float(np.cross(R, t)), -1*float(np.cross(R, n))]
-        ])
-        return Alocal
-
     Aglobal = np.zeros((3*len(elems), 2*len(contps)))
-    row = 0
-    for element in elems.values():
-        col = 0
-        for p_c in contps.values():
-            if p_c.cand == element.id:
-                Alocal = cal_A_local(element, p_c)
-                Aglobal[row:row+3, col:col+2] = Alocal
-            elif p_c.anta == element.id:
-                Alocal = cal_A_local(element, p_c, reverse=True)
-                Aglobal[row:row+3, col:col+2] = Alocal
-            col += 2
-        row += 3
+
+    element_rows = dict()
+    for row, element in enumerate(elems.values()):
+        element_rows.setdefault(element.id, []).append((row, element.center))
+
+    # one entry per (contact point, element it touches)
+    rows, cols, signs, centers, coors, ts, ns = [], [], [], [], [], [], []
+    for col, p_c in enumerate(contps.values()):
+        touched = [(entry, 1) for entry in element_rows.get(p_c.cand, [])]
+        if p_c.anta != p_c.cand:
+            touched += [(entry, -1) for entry in element_rows.get(p_c.anta, [])]
+        for (row, center), sign in touched:
+            rows.append(row)
+            cols.append(col*2)
+            signs.append(sign)
+            centers.append(center)
+            coors.append(p_c.coor)
+            ts.append(p_c.orientation[0])
+            ns.append(p_c.orientation[1])
+    if not rows:
+        return Aglobal
+
+    rows = np.array(rows)*3
+    cols = np.array(cols)
+    signs = np.array(signs).reshape(-1, 1)
+    t = np.array(ts)*signs
+    n = np.array(ns)*signs
+    R = - np.array(coors) + np.array(centers)
+    Aglobal[rows, cols] = -1*t[:, 0]
+    Aglobal[rows+1, cols] = -1*t[:, 1]
+    Aglobal[rows+2, cols] = -1*(R[:, 0]*t[:, 1] - R[:, 1]*t[:, 0])
+    Aglobal[rows, cols+1] = -1*n[:, 0]
+    Aglobal[rows+1, cols+1] = -1*n[:, 1]
+    Aglobal[rows+2, cols+1] = -1*(R[:, 0]*n[:, 1] - R[:, 1]*n[:, 0])
     return Aglobal
 
 
@@ -395,26 +401,18 @@ def solve_force_rigid(elems, contps, Aglobal):
             # The variables will initially be fixed at zero (x=0).
             task.appendvars(numvar)
 
-            for j in range(numvar):
-                # Set the linear term c_j in the objective.
-
-                task.putcj(j, c[j])
-
-                # Set the bounds on variable j
-                # blx[j] <= x_j <= bux[j]
-                task.putvarbound(j, bkx[j], blx[j], bux[j])
-
-                # Input column j of A
-                task.putacol(j,                  # Variable (column) index.
-                             # Row index of non-zeros in column j.
-                             asub[j],
-                             aval[j])            # Non-zero Values of column j.
+            # Set the objective, the variable bounds and the columns of A in one call each.
+            task.putcslice(0, numvar, c)
+            task.putvarboundslice(0, numvar, bkx, blx, bux)
+            col_lengths = np.array([len(col_index) for col_index in asub], dtype=np.int64)
+            col_ends = np.cumsum(col_lengths)
+            task.putacolslice(0, numvar, col_ends-col_lengths, col_ends,
+                              [k for col_index in asub for k in col_index],
+                              [v for col_value in aval for v in col_value])
 
             # Set the bounds on constraints.
              # blc[i] <= constraint_i <= buc[i]
-
-            for i in range(numcon):
-                task.putconbound(i, bkc[i], blc[i], buc[i])
+            task.putconboundslice(0, numcon, bkc, blc, buc)
 
             # Input the objective sense (minimize/maximize)
             task.putobjsense(mosek.objsense.maximize)

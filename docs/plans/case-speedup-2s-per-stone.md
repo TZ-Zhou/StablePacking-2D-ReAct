@@ -145,7 +145,7 @@
 | 檔案 | 改動 |
 | --- | --- |
 | `research/validation/windows_case_runtime.py` | 新增 `SharedPool`、`_run_task`；`configure` 依 `BASELINE_PERSISTENT_POOL` 選 `SharedPool` 或 `_pool` |
-| `research/walls/run_wall.py` | 新增 `--fresh-pool`；環境變數預設 `1`；receipt 加 `worker_pool`（不進 `case_id.spec`，因為不決定牆） |
+| `research/runner/run_wall.py` | 新增 `--fresh-pool`；環境變數預設 `1`；receipt 加 `worker_pool`（不進 `case_id.spec`，因為不決定牆） |
 | `research/perf/perf_runtime.py` | `PersistentPool` 改成繼承 `SharedPool` 再加計時 |
 | `research/perf/README.md`、`readme.md` | 更新說明 |
 | `research/tests/test_worker_pool.py` | 新增 |
@@ -160,8 +160,9 @@ class SharedPool:
 
     def __init__(self, processes):
         if SharedPool.executor is None:
+            state = _worker_state()
             SharedPool.executor = ProcessPoolExecutor(
-                _constants()["NUMBER_CPU"], initializer=_restore_worker, initargs=_worker_state())
+                state[0]["NUMBER_CPU"], initializer=_start_worker, initargs=(_restore_worker, *state))
 
     def __enter__(self):
         return self
@@ -181,7 +182,8 @@ class SharedPool:
 | 常數 | 每個 task 前同步大寫常數 | `set_dump` 等會在 Pool 建立後改變 |
 | RNG | 不重送 | `place_stone.py:60` 每個 task 都先 `seed_everything()` |
 | Pool 大小 | 首次建立時的 `NUMBER_CPU` | `build_wall` 傳入的 `min(cpu, nb_poses)` 只影響批次大小 |
-| 結束 | `atexit` 呼叫 `shutdown(wait=False, cancel_futures=True)` | `raise SystemExit(0)` 選牆與中途錯誤都不等待未完成的 task |
+| 結束 | 交給 `concurrent.futures` 的退出流程；`starmap` 出錯時先取消同一步未開始的 task | 正常結束時沒有未完成的 task，中途錯誤最多等正在跑的 pose |
+| 父行程被單獨砍掉 | worker 內一條執行緒等父行程結束後 `os._exit` | executor 的 worker 自己也握著佇列的寫入端，讀不到 EOF，不會自行結束 |
 
 worker 跨 task 的狀態已靜態稽核，結果在 `.claude/plans/verify-perf-core-report.md` §5。
 
@@ -378,13 +380,15 @@ class StepWriter:
 | 層級 | 內容 | 通過標準 | 機器時間（估計） |
 | --- | --- | --- | --- |
 | L1 | `research.tests` 全套 | 全過 | 約 25 分鐘 |
-| L2 | 8 場景 × 2 政策，`--placements 3`，與同 commit 的 `--fresh-pool` 比 | `compare_runs` 零差異；`check_run` 為 ok | 約 15 分鐘（基準只跑一次，約 25 分鐘） |
+| L2 | 8 場景 × 2 政策，`--placements 3`，與同 commit 的 `--fresh-pool` 比 | 共同的前幾顆石頭零差異（被停的牆可能多放幾顆，比 `decisions.txt`、`filter.txt`、`trace/commits.jsonl` 的共同前綴）；`check_run` 為 ok | 約 15 分鐘（基準只跑一次，約 25 分鐘） |
 | L3 | T80、FFT、bricks、PR 完整牆，2 政策，與同 commit 的 `--fresh-pool` 比；code_original 再與封存牆比 | 同上；`mechanism.csv` 相對差 < 1e-12 | 每階段約 30 分鐘（基準只跑一次，約 1.5 小時） |
 | L4 | 時間成對量 | 每場景依序「舊、新、舊、新」；報告每一次；主機無其他 CPU 票；10 workers | 約 1 小時 |
 
 - `mechanism.csv` 不要求逐位元：`kine_2d.py:290` 的 MOSEK 預設求解路徑在重跑間有末位差，基準對基準也會出現。
 - `--placements 3` 的牆只驗決策，不驗速度：牆矮時成本低，`bricks` 的成本隨牆變大而增加。
-- 驗證牆輸出到 `runs/speedup/<階段>/`（已被排除版控）；由 `research/perf/verify_speedup.py` 跑矩陣、比對、寫結果 JSON，邏輯取自 `runs/_smoke/smoke_matrix.py` 與 `verify_io.py`。階段 0 新增。
+- 驗證牆輸出到 `runs/speedup/<階段>/`（已被排除版控）；由 `research/runner/verify_speedup.py` 跑矩陣、寫結果 JSON，比對的定義在 `research/perf/verify_speedup.py`，邏輯取自 `runs/_smoke/smoke_matrix.py` 與 `verify_io.py`。階段 0 新增。
+- 階段 0–2 的驗收不分 L1–L4，只跑一次比較：T80、FFT、bricks、PR 完整牆，2 政策，每批新 Pool 與持久 worker 各建一次，10 workers，輸出到 `runs/speedup/final/`。硬體調度員下線，直接執行，不送票。
+- 階段 3、4b–4f、`rotate_min_shape_factor` 與階段 6 已實作，完整牆比較尚未跑；未做的項目與待驗證事項見 `docs/TODO.md`。
 
 ## 送票
 

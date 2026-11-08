@@ -6,7 +6,7 @@ import numpy as np
 
 from ..evaluate.tilting_angle import evaluate_kine
 from ..evaluate.ksteps import build_kstones
-from ..evaluate.local_void import evaluate,evaluate_convolve,get_void_to_left
+from ..evaluate.local_void import evaluate,evaluate_convolve,get_void_to_left,convolve_nonzero
 from ..utils.constant import get_record_detail,get_record_time,get_local_width,get_partial_enumeration_ratio,get_placement_optimization,get_mu,get_width_weight, get_ignore_pixel_value, get_ksteps, get_selection_weights, get_world_size, get_dir
 from ..utils.logger import get_main_logger
 from scipy.spatial import KDTree
@@ -66,13 +66,13 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
         brick_bounding_box_matrix = regionprops(brick.matrix.astype(np.uint8))[0].image
         brick_bounding_box_matrix_mirrow = np.flip(np.flip(brick_bounding_box_matrix,axis = 0),axis=1)
         shift_to = [(brick_bounding_box_matrix_mirrow.shape[0]-1) // 2,(brick_bounding_box_matrix_mirrow.shape[1]-1) // 2]
-        non_overlap_mask = np.where(ndimage.convolve(a, brick_bounding_box_matrix_mirrow, mode='constant', cval=1.0,origin = shift_to)==0,1,0)
+        non_overlap_mask = np.where(convolve_nonzero(a, brick_bounding_box_matrix_mirrow, cval=1.0)==0,1,0)
         #region_non_overlap = np.multiply(region, non_overlap_mask)
         
         #dilate the region to filter out floating positions
         kernel_dilation_y = np.ones((2, 1), np.uint8)
         contour_up = cv2.dilate(a, kernel_dilation_y, anchor=(0,1),iterations=1)
-        overlap_contour_mask = np.where(ndimage.convolve(contour_up, brick_bounding_box_matrix_mirrow, mode='constant', cval=0.0,origin = shift_to)!=0,1,0)
+        overlap_contour_mask = np.where(convolve_nonzero(contour_up, brick_bounding_box_matrix_mirrow, cval=0.0)!=0,1,0)
         
         #intersection of two constraints
         region_potential = np.multiply(non_overlap_mask, overlap_contour_mask)

@@ -238,6 +238,17 @@ def evaluate_kine(final_base, save_failure=False, load='linear_acceleration'):
     return round(min(one_direction, another_direction), get_kine_precision())
 
 
+def _append_contps(contps, maxPointID, img, index, coords, anta_rows, anta_cols, tangent, normal, conttype, ignore_zero):
+    # one boundary direction, in the order of `index`; ContPoints are built last
+    cand_ids = img[index[:, 0], index[:, 1]]
+    anta_ids = img[anta_rows, anta_cols]
+    keep = (cand_ids != 0) & (anta_ids != 0) if ignore_zero else np.ones(len(index), dtype=bool)
+    for x, y, cand_id, anta_id in zip(coords[keep, 0], coords[keep, 1], cand_ids[keep], anta_ids[keep]):
+        contps[maxPointID] = ContPoint(maxPointID, [x, y], cand_id, anta_id, tangent, normal, conttype)
+        maxPointID += 1
+    return maxPointID
+
+
 def pixel_to_mesh(img,ignore_zero = True):
     contps = dict()
     maxPointID = 0
@@ -263,15 +274,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     index_x_right = np.argwhere(matrix_x_right > 0)
     coords = np.flip(np.sum([index_x_right, [[0, 0.5]]], axis=0), axis=1)
     # print(maxPointID)
-    for i, coord in enumerate(coords):
-        if ignore_zero:
-            if img[index_x_right[i][0], index_x_right[i][1]] == 0 or img[index_x_right[i][0], min(index_x_right[i][1]+1, img.shape[1])] == 0:
-                continue
-        anta_id = img[index_x_right[i][0], min(
-            index_x_right[i][1]+1, img.shape[1])]
-        contps[maxPointID] = ContPoint(maxPointID, [
-            coord[0], coord[1]], img[index_x_right[i][0], index_x_right[i][1]], anta_id, tangent, normal, _conttype_head)
-        maxPointID += 1
+    maxPointID = _append_contps(contps, maxPointID, img, index_x_right, coords, index_x_right[:, 0], np.minimum(
+        index_x_right[:, 1]+1, img.shape[1]), tangent, normal, _conttype_head, ignore_zero)
 
     # pixels whose value is different from pixel on the left
     normal = [1, 0]
@@ -285,14 +289,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     index_x_left = np.argwhere(matrix_x_left > 0)
     coords = np.flip(np.sum([index_x_left, [[0, -0.5]]], axis=0), axis=1)
     # print(maxPointID)
-    for i, coord in enumerate(coords):
-        if ignore_zero:
-            if img[index_x_left[i][0], index_x_left[i][1]] == 0 or img[index_x_left[i][0], max(index_x_left[i][1]-1, 0)] == 0:
-                continue
-        anta_id = img[index_x_left[i][0], max(index_x_left[i][1]-1, 0)]
-        contps[maxPointID] = ContPoint(maxPointID, [
-            coord[0], coord[1]], img[index_x_left[i][0], index_x_left[i][1]], anta_id, tangent, normal, _conttype_head)
-        maxPointID += 1
+    maxPointID = _append_contps(contps, maxPointID, img, index_x_left, coords, index_x_left[:, 0], np.maximum(
+        index_x_left[:, 1]-1, 0), tangent, normal, _conttype_head, ignore_zero)
 
     # pixels whose value is different from pixel below
     normal = [0, -1]
@@ -306,15 +304,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     index_y_below = np.argwhere(matrix_y_below > 0)
     coords = np.flip(np.sum([index_y_below, [[+0.5, 0]]], axis=0), axis=1)
     # print(maxPointID)
-    for i, coord in enumerate(coords):
-        if ignore_zero:
-            if img[index_y_below[i][0], index_y_below[i][1]] == 0 or img[min(index_y_below[i][0]+1, img.shape[0]), index_y_below[i][1]] == 0:
-                continue
-        anta_id = img[min(index_y_below[i][0]+1, img.shape[0]),
-                      index_y_below[i][1]]
-        contps[maxPointID] = ContPoint(maxPointID, [
-                                       coord[0], coord[1]], img[index_y_below[i][0], index_y_below[i][1]], anta_id, tangent, normal, _conttype)
-        maxPointID += 1
+    maxPointID = _append_contps(contps, maxPointID, img, index_y_below, coords, np.minimum(
+        index_y_below[:, 0]+1, img.shape[0]), index_y_below[:, 1], tangent, normal, _conttype, ignore_zero)
 
     # pixels whose value is different from pixel above
     normal = [0, 1]
@@ -328,14 +319,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     index_y_above = np.argwhere(matrix_y_above > 0)
     coords = np.flip(np.sum([index_y_above, [[-0.5, 0]]], axis=0), axis=1)
     # print(maxPointID)
-    for i, coord in enumerate(coords):
-        if ignore_zero:
-            if img[index_y_above[i][0], index_y_above[i][1]] == 0 or img[max(index_y_above[i][0]-1, 0), index_y_above[i][1]] == 0:
-                continue
-        anta_id = img[max(index_y_above[i][0]-1, 0), index_y_above[i][1]]
-        contps[maxPointID] = ContPoint(maxPointID, [
-                                       coord[0], coord[1]], img[index_y_above[i][0], index_y_above[i][1]], anta_id, tangent, normal, _conttype)
-        maxPointID += 1
+    maxPointID = _append_contps(contps, maxPointID, img, index_y_above, coords, np.maximum(
+        index_y_above[:, 0]-1, 0), index_y_above[:, 1], tangent, normal, _conttype, ignore_zero)
 
     ####################################################################################################
     # print(len(contps))
@@ -419,27 +404,28 @@ def clear_contps(elems, contps):
     parameters.mu = get_mu()
     _conttype = ContType("friction", parameters)
     # make a loop up table for cand, anta -> contact point
-    element_keys = list(elems.keys())
-    contps_table = {(i, j): [] for i in element_keys
-                    for j in element_keys}
+    element_order = {key: position for position, key in enumerate(elems)}
+    contps_table = dict()
+    antas_in_contact = dict()
     for key, value in contps.items():
-        if value.anta not in element_keys or value.cand not in element_keys:
+        if value.anta not in element_order or value.cand not in element_order:
             print(value.coor)
             print(value.orientation)
-        contps_table[(value.cand, value.anta)].append(value)
+            raise KeyError((value.cand, value.anta))
+        contps_table.setdefault((value.cand, value.anta), []).append(value)
+        antas_in_contact.setdefault(value.cand, set()).add(value.anta)
 
     cleaned_contps = dict()
     maxPointID = 0
     for key_cand, value_cand in elems.items():
-        for key_anta, value_anta in elems.items():
+        # only pairs with contacts, in elems order: contact order decides the LP columns
+        for key_anta in sorted(antas_in_contact.get(key_cand, ()), key=element_order.get):
+            value_anta = elems[key_anta]
             if value_cand.id != value_anta.id:
                 all_contps = contps_table[(value_cand.id, value_anta.id)]
                 if len(all_contps) != 0:
-                    normals = np.zeros((len(all_contps), 2))
-                    coordinates = np.zeros((len(all_contps), 2))
-                    for i, pixel_point in enumerate(all_contps):
-                        normals[i, :] = np.asarray(pixel_point.orientation[1])
-                        coordinates[i, :] = np.asarray(pixel_point.coor)
+                    normals = np.array([pixel_point.orientation[1] for pixel_point in all_contps], dtype=np.float64)
+                    coordinates = np.array([pixel_point.coor for pixel_point in all_contps], dtype=np.float64)
                     averaged_normal = np.average(normals, axis=0)
                     if np.linalg.norm(averaged_normal) == 0:
                         continue

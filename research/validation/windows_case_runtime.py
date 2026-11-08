@@ -1,10 +1,14 @@
 """Process-local Windows compatibility and observation for original test scripts."""
+from concurrent.futures import ProcessPoolExecutor
 import importlib
 import json
 import multiprocessing
+from multiprocessing.shared_memory import SharedMemory
 import os
 from pathlib import Path
+import pickle
 import random
+import threading
 import time
 
 import cv2
@@ -33,17 +37,121 @@ def _restore_worker(constants, numpy_state, random_state):
     random.setstate(random_state)
 
 
-def _pool(processes):
+def _constants():
+    """The uppercase settings of Stonepacker2D.utils.constant: what a worker has to see."""
     module = importlib.import_module("Stonepacker2D.utils.constant")
-    constants = {key: value for key, value in vars(module).items() if key.isupper()}
-    return multiprocessing.Pool(processes, initializer=_restore_worker,
-                                initargs=(constants, np.random.get_state(), random.getstate()))
+    return {key: value for key, value in vars(module).items() if key.isupper()}
+
+
+def _worker_state():
+    return _constants(), np.random.get_state(), random.getstate()
+
+
+def _pool(processes):
+    return multiprocessing.Pool(processes, initializer=_restore_worker, initargs=_worker_state())
+
+
+def _run_task(constants, function, arguments):
+    """A long-lived worker gets the settings before each task: a case changes them after the workers have started."""
+    importlib.import_module("Stonepacker2D.utils.constant").__dict__.update(constants)
+    return function(*arguments)
+
+
+def _run_shared_task(constants, function, name, size, pose):
+    """Unpickled once per task, so that every task owns its objects, as when each task carried its own copy."""
+    block = SharedMemory(name=name)
+    try:
+        with block.buf[:size] as payload:
+            shared = pickle.loads(payload)
+    finally:
+        block.close()
+    return _run_task(constants, function, (pose, *shared))
+
+
+def _exit_with_parent():
+    """A worker blocked on its task queue would otherwise outlive a case process that was killed alone."""
+    multiprocessing.parent_process().join()
+    os._exit(1)
+
+
+def _start_worker(initializer, *state):
+    threading.Thread(target=_exit_with_parent, daemon=True).start()
+    initializer(*state)
+
+
+class SharedPool:
+    """build_wall's `with Pool(n) as p: p.starmap(...)` over workers that live until the case process exits.
+
+    A task is (pose index, *arguments shared by the step). The first batch of a step submits every pose of the step,
+    so a free worker never waits for the slowest pose of a batch. place_one_stone reseeds both RNGs when it starts,
+    so neither the order of the poses nor the worker that runs one can change a result. build_wall changes none of the
+    shared arguments until it holds every result, so the background pickling sees what the step was given.
+    """
+
+    initializer = staticmethod(_restore_worker)
+    size = 0  # 0: the case's NUMBER_CPU
+    executor = None
+    shared = None
+    futures = None
+    block = None
+    waiting = None
+
+    def __init__(self, processes):
+        if SharedPool.executor is None:
+            state = _worker_state()
+            SharedPool.executor = ProcessPoolExecutor(
+                self.size or state[0]["NUMBER_CPU"], initializer=_start_worker, initargs=(self.initializer, *state)
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return None
+
+    def starmap(self, function, inputs):
+        if inputs[0][0] == 0:
+            self._submit_step(function, inputs[0][1:])
+        assert all(a is b for task in inputs for a, b in zip(task[1:], SharedPool.shared)), "not the poses of one step"
+        try:
+            results = [SharedPool.futures[task[0]].result() for task in inputs]
+        except BaseException:
+            for future in SharedPool.futures:
+                future.cancel()
+            SharedPool.release()
+            raise
+        SharedPool.waiting -= {task[0] for task in inputs}
+        if not SharedPool.waiting:
+            SharedPool.release()
+        return results
+
+    @staticmethod
+    def release():
+        """Windows frees the block when its last handle closes; a worker holds one only while it unpickles."""
+        if SharedPool.block is not None:
+            SharedPool.block.close()
+            SharedPool.block.unlink()
+            SharedPool.block = None
+
+    def _submit_step(self, function, shared):
+        SharedPool.release()
+        constants = _constants()
+        payload = pickle.dumps(shared, 5)
+        block = SharedMemory(create=True, size=len(payload))
+        block.buf[: len(payload)] = payload
+        poses = range(len(shared[1]))
+        SharedPool.block, SharedPool.shared, SharedPool.waiting = block, shared, set(poses)
+        SharedPool.futures = [
+            SharedPool.executor.submit(_run_shared_task, constants, function, block.name, len(payload), pose)
+            for pose in poses
+        ]
 
 
 def configure(namespace):
     """Preserve original decisions; inherit parent settings in spawned workers."""
     _skip_figures()
-    importlib.import_module("Stonepacker2D.stack.build_wall").Pool = _pool
+    persistent = os.environ.get("BASELINE_PERSISTENT_POOL") == "1"
+    importlib.import_module("Stonepacker2D.stack.build_wall").Pool = SharedPool if persistent else _pool
     events = Path(os.environ["BASELINE_CASE_EVENTS"])
     start = time.monotonic()
 
@@ -54,6 +162,11 @@ def configure(namespace):
         print("BASELINE_EVENT " + json.dumps(record), flush=True)
 
     build_wall = importlib.import_module("Stonepacker2D.stack.build_wall")
+    writer = None
+    if multiprocessing.parent_process() is None and os.environ.get("BASELINE_SYNC_OUTPUT") != "1":
+        import step_writer  # staged beside this file
+
+        writer = step_writer.install(build_wall)
     original_commit = build_wall.trace_commit
     original_build = namespace["build_wall_vendor"]
     original_evaluate = namespace["evaluate_kine"]
@@ -71,6 +184,8 @@ def configure(namespace):
              candidates_per_iteration=args[2], build_options=kwargs,
              constants={key: value for key, value in vars(constants).items() if key.isupper()})
         result = original_build(*args, **kwargs)
+        if writer is not None:
+            writer.flush()
         emit("build_return", placed_rocks=len(result.placed_rocks), output_dir=constants.get_dir())
         return result
 

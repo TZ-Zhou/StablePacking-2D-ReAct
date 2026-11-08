@@ -8,6 +8,37 @@ from ..utils.constant import get_world_size, get_plot_stone_id
 from ..utils.logger import get_main_logger
 import skimage.transform as transform
 from skimage.morphology import square,closing,convex_hull_image,opening
+import sys
+
+
+def _persistent_executor():
+    """The case's long-lived workers (windows_case_runtime.SharedPool) if they exist, else None."""
+    pool = getattr(sys.modules.get('Stonepacker2D.stack.build_wall'), 'Pool', None)
+    return getattr(pool, 'executor', None)
+
+
+def _shape_factors_at(stone, angles):
+    """(angle, rotated pixel count, shape factor) in order; the last shape factor is None if the stone is too big."""
+    stone_matrix = stone.matrix
+    results = []
+    for angle in angles:
+        rot_mat = cv2.getRotationMatrix2D(
+            [int(stone_matrix.shape[1]/2), int(stone_matrix.shape[0]/2)], angle, 1.0)
+        img_rotated = cv2.warpAffine(
+            stone_matrix, rot_mat, stone_matrix.shape[1::-1], flags=cv2.WARP_FILL_OUTLIERS)
+        img_rotated = cv2.medianBlur(img_rotated.astype(np.uint8), 3)
+        rotated_size = np.count_nonzero(img_rotated)
+        # check if the stone too big for rotation
+        if rotated_size / np.count_nonzero(stone_matrix)<0.8:
+            results.append((angle, rotated_size, None))
+            return results
+        try_stone = stone.transformed([0, 0])
+        try_stone.matrix = img_rotated
+        try_stone.cal_shape_factor()
+        results.append((angle, rotated_size, try_stone.shape_factor))
+    return results
+
+
 def _cal_center(points):
     """
     Calculate the averaged center of a list of points
@@ -415,16 +446,18 @@ class Stone():
         min_angle = 0
         self.cal_shape_factor()
         min_sf = self.shape_factor
-        for angle in range(-45, 45):
-            rot_mat = cv2.getRotationMatrix2D(
-                [int(self.matrix.shape[1]/2), int(self.matrix.shape[0]/2)], angle, 1.0)
-            img_rotated = cv2.warpAffine(
-                stone_matrix, rot_mat, stone_matrix.shape[1::-1], flags=cv2.WARP_FILL_OUTLIERS)
-            img_rotated = cv2.medianBlur(img_rotated.astype(np.uint8), 3)
+        angles = list(range(-45, 45))
+        executor = _persistent_executor()
+        if executor is None:
+            batches = [_shape_factors_at(new_stone, angles)]
+        else:
+            futures = [executor.submit(_shape_factors_at, new_stone, angles[i:i+9]) for i in range(0, 90, 9)]
+            batches = (future.result() for future in futures)  # read in angle order: the first failure decides
+        for angle, rotated_size, shape_factor in (result for batch in batches for result in batch):
             # check if the stone too big for rotation
-            if np.count_nonzero(img_rotated) / np.count_nonzero(stone_matrix)<0.8:
+            if shape_factor is None:
                 print("Original size", np.count_nonzero(stone_matrix))
-                print("Rotated size", np.count_nonzero(img_rotated))
+                print("Rotated size", rotated_size)
                 # plt.imshow(stone_matrix)
                 # plt.title("Original matirx")
                 # plt.show()
@@ -432,12 +465,9 @@ class Stone():
                 # plt.title("Rotated matirx")
                 # plt.show()
                 return {"stone":None,"center":None,"angle":None,"success":False}
-            try_stone = new_stone.transformed([0, 0])
-            try_stone.matrix = img_rotated
-            try_stone.cal_shape_factor()
-            if try_stone.shape_factor < min_sf:
+            if shape_factor < min_sf:
                 min_angle = angle
-                min_sf = try_stone.shape_factor
+                min_sf = shape_factor
         #Angle is positive for anti-clockwise and negative for clockwise.
         rot_mat = cv2.getRotationMatrix2D(
             [int(self.matrix.shape[1]/2), int(self.matrix.shape[0]/2)], min_angle, 1.0)

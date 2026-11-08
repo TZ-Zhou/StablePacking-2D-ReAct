@@ -7,6 +7,7 @@
 | `worker-venv.json` | 登記的 controller worker venv（Python 與 SDK 版本、檔案雜湊）；內含登記時那台電腦的路徑 |
 | `verify_environment.py` | 實驗前檢查目前環境與清單完全一致 |
 | `windows_case_runtime.py` | 案例行程內的 Windows 相容與觀測層：略過繪圖輸出、換掉 `build_wall` 的 Pool、把進度事件寫進 `events.jsonl`；建牆時複製進案例資料夾再匯入，所以不能 import `research` 套件 |
+| `step_writer.py` | 用一條執行緒依序寫出每步輸出，砌牆迴圈不等磁碟；隨 `windows_case_runtime.py` 複製進案例資料夾，`run_wall --sync-output` 或 `--controller` 時不啟用 |
 | `local_setup.py` | 讀取本機覆寫：讓每台電腦用自己的環境路徑，不必改上面兩個已追蹤的清單 |
 | `local-setup.example.json` | 本機覆寫檔的範本 |
 

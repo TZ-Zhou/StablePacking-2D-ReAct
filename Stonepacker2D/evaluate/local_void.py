@@ -235,6 +235,18 @@ def get_convolution_metric(base_phi, brick_bounding_box_matrix_mirrow):
     #proximity_metric = np.multiply(base_phi, stone)
     return proximity_metric
 
+def convolve_nonzero(matrix, mirrored_kernel, cval):
+    """Where ndimage.convolve with origin (size-1)//2 is nonzero, for non-negative float matrix and binary kernel.
+
+    The kernel then sits with its unmirrored top-left at each pixel, so only the bottom and right can leave the image.
+    """
+    kernel = np.flip(mirrored_kernel).astype(np.float64)
+    occupied = (matrix != 0).astype(np.uint8)
+    if cval != 0:
+        occupied = cv2.copyMakeBorder(occupied, 0, kernel.shape[0] - 1, 0, kernel.shape[1] - 1, cv2.BORDER_CONSTANT, value=1)
+    overlap = cv2.filter2D(occupied, cv2.CV_64F, kernel, anchor=(0, 0), borderType=cv2.BORDER_CONSTANT)
+    return overlap[:matrix.shape[0], :matrix.shape[1]] > 0.5
+
 def evaluate_convolve(base,brick,brick_bounding_box_matrix_mirrow=None,region_potential=None):
     stone_width = brick.width
     stone_height = brick.height
@@ -258,14 +270,14 @@ def evaluate_convolve(base,brick,brick_bounding_box_matrix_mirrow=None,region_po
     # print(math.floor(stone_center[0]))
     left_mask[:,0:math.floor(stone_center[0])-2] = 1
     left_brick_bounding_box_matrix_mirrow = brick_bounding_box_matrix_mirrow*left_mask
-    left_overlap_contour_mask = np.where(ndimage.convolve(
-        contour_dilated, left_brick_bounding_box_matrix_mirrow, mode='constant', cval=0.0, origin=shift_to) != 0, 1, 0)
+    left_overlap_contour_mask = np.where(convolve_nonzero(
+        contour_dilated, left_brick_bounding_box_matrix_mirrow, cval=0.0) != 0, 1, 0)
     #right contact
     right_mask = np.zeros_like(brick_bounding_box_matrix_mirrow)
     right_mask[:,math.ceil(stone_center[0])+2:] = 1
     right_brick_bounding_box_matrix_mirrow = brick_bounding_box_matrix_mirrow*right_mask
-    right_overlap_contour_mask = np.where(ndimage.convolve(
-        contour_dilated, right_brick_bounding_box_matrix_mirrow, mode='constant', cval=0.0, origin=shift_to) != 0, 1, 0)
+    right_overlap_contour_mask = np.where(convolve_nonzero(
+        contour_dilated, right_brick_bounding_box_matrix_mirrow, cval=0.0) != 0, 1, 0)
     
     stable_potential = np.multiply(right_overlap_contour_mask, left_overlap_contour_mask)
     if len(np.argwhere(np.multiply(region_potential,stable_potential)!=0))==0:
