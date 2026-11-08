@@ -30,8 +30,8 @@ SCENES = {  # run_wall case -> scene code
     'fft-d2-0': 'FF_D20',
     'rubble': 'RB',
 }
-PCS = {  # host name (upper case) -> pc code; pc2 is added on that computer before it builds a wall
-    'GIAAIL-STRIX': 'pc1',
+PCS = {  # host name (upper case) -> pc code; pc1 is added on that computer before it builds a wall
+    'GIAAIL-STRIX': 'pc2',
 }
 SUFFIXES = ('',) + tuple(string.ascii_lowercase[1:])  # '', 'b', ..., 'z'
 PATTERN = re.compile(r'(?P<minute>\d{8}-\d{4})(?P<suffix>[b-z]?)-(?P<scene>[A-Z][A-Z0-9_]*)-(?P<pc>pc\d+)')

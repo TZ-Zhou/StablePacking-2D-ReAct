@@ -111,7 +111,7 @@ receipt.json 在現有欄位之外新增：`schema_version`、`case_id`、`scene
 `TH_T20` 與 `TH_T80` 共用 `Tests/Thangavelu/00_run.py`：該檔寫死 noise 80 的資料檔名，`run_wall.SOURCE_EDITS` 在 staging 時換成 noise 20，並記在 receipt 的 `source_edits`；牆寬由資料算出。
 
 - 同一台機器、同一場景、同一分鐘撞名時，在分鐘後依序加 `b`、`c`…，例如 `20261108-1254b-TH_T80-pc1`。
-- pc 代碼由程式依主機名判斷，對照表只在 `storage/case_id.py`：`GIAAIL-STRIX` 是 pc1；另一台（舊紀錄的 `C:\Users\user`）是 pc2，主機名在該機第一次建牆前填入。主機名不在對照表就拒絕建牆。
+- pc 代碼由程式依主機名判斷，對照表只在 `storage/case_id.py`：`GIAAIL-STRIX` 是 pc2；另一台（舊紀錄的 `C:\Users\user`）是 pc1，主機名在該機第一次建牆前填入。主機名不在對照表就拒絕建牆。
 
 id 只表達何時、哪個場景、哪台機器。政策與順序在建牆中途可能改變，所以和種子、控制器、`placements_limit` 一樣，一律記在 metadata：
 

@@ -42,7 +42,7 @@ class Ids(unittest.TestCase):
 
     def test_scene_and_pc_codes(self):
         self.assertEqual(cid.scene_code('thangavelu-noise20'), 'TH_T20')
-        self.assertEqual(cid.pc_code('giaail-strix'), 'pc1')
+        self.assertEqual(cid.pc_code('giaail-strix'), 'pc2')
         with self.assertRaises(ValueError):
             cid.pc_code('unknown-host')
         with self.assertRaises(ValueError):
@@ -66,7 +66,7 @@ class Allocate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             first = cid.allocate('bricks', START, 'GIAAIL-STRIX', tmp)
             second = cid.allocate('bricks', START, 'GIAAIL-STRIX', tmp)
-            self.assertEqual((first[0], second[0]), ('20261108-1254-BR-pc1', '20261108-1254b-BR-pc1'))
+            self.assertEqual((first[0], second[0]), ('20261108-1254-BR-pc2', '20261108-1254b-BR-pc2'))
             self.assertTrue(second[1].is_dir())
 
     def test_refuses_the_archive(self):
