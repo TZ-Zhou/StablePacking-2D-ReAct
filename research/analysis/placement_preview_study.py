@@ -1,6 +1,6 @@
-"""P0 study of the Observation V3 layer A preview (research/preview.py) on recorded walls only.
+"""P0 study of the Observation V3 layer A preview (research/analysis/placement_preview.py) on recorded walls only.
 
-  python -B research/preview_study.py --out DIR
+  python -B -m research.analysis.placement_preview_study --out DIR
 
 Reads the 50 walls of campaign thangavelu-5arms-10seeds, their wang-quality-v1 values, and the
 branch walls of paper-hardstone-01 and smoke-001-cf (neutral branches left out: they rebuild the
@@ -17,24 +17,21 @@ import argparse
 import csv
 import json
 import pickle
-import sys
 from collections import Counter
 from pathlib import Path
 
 import numpy as np
 from scipy.stats import spearmanr
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import controllers  # noqa: E402
-import metrics  # noqa: E402
-import preview  # noqa: E402
+from research.paths import QUALITY_DIR, RUNS
+from research.controller import order_controller
+from research.walls import wall_metrics
+from research.analysis import placement_preview
 from Stonepacker2D.stack.selection import PAPER_ORDER, footprint, select  # noqa: E402
 from Stonepacker2D.utils.constant import get_wedge_id  # noqa: E402
 
-RUNS = REPO / 'research' / 'runs'
 CAMPAIGN = 'thangavelu-5arms-10seeds'
-QUALITY = REPO / 'research' / 'quality' / 'wang-quality-v1' / 'quality.csv'
+QUALITY = QUALITY_DIR / 'wang-quality-v1' / 'quality.csv'
 BRANCH_PLANS = ['paper-hardstone-01', 'smoke-001-cf']
 TOL = 1e-9
 FINAL = ('F_SF', 'F_AH', 'F_AV', 'F_LR', 'placed_ratio')
@@ -80,34 +77,34 @@ def change(after, now):
 
 def decisions(run, lib, wedges):
     """One row per selection event, Observer version 2 run over the trace with Paper as the base."""
-    observer, rule, rows = controllers.Observer(version=2), controllers.RulePolicy(), []
+    observer, rule, rows = order_controller.Observer(version=2), order_controller.RulePolicy(), []
     policy = {'policy': 'paper', 'order': PAPER_ORDER, 'tol': TOL}
     for meta, a in events_of(run):
-        obs, info = observer(policy, controllers.context_from_trace(meta, a))
+        obs, info = observer(policy, order_controller.context_from_trace(meta, a))
         wall = np.asarray(a['wall'])
         world = np.fliplr(wall) if meta['side'] == 'right' else wall
-        now = preview.quality(world, wedges)
+        now = placement_preview.quality(world, wedges)
         classes, raw = info['classes'], np.asarray(a['features_raw'])
         outcomes = []
         for k, i in enumerate(classes):
             crop = lib.get(str(a['footprint'][i]))
-            px = None if crop is None else preview.candidate_pixels(crop, int(a['x_world'][i]), int(a['y'][i]), world.shape)
-            p = None if px is None else preview.preview(world, px, wedges)
+            px = None if crop is None else placement_preview.candidate_pixels(crop, int(a['x_world'][i]), int(a['y'][i]), world.shape)
+            p = None if px is None else placement_preview.preview(world, px, wedges)
             outcomes.append({'id': k, 'index': int(i), 'stone': int(a['stone_id'][i]), 'llc': float(raw[i, 3]),
                              'preview': p, 'preview_change': None if p is None else change(p['after'], now),
                              'n_supports': None if p is None else p['n_supports']})
         paper = classes.index(info['paper']) if info['paper'] in classes else None
         selected = int(a['selected'])
         row = {'run': str(Path(run).relative_to(RUNS).as_posix()), 'event': int(meta['event']), 'step': int(meta['step']),
-               'side': meta['side'], 'n_rocks': int(np.count_nonzero(np.unique(preview.rock_labels(world, wedges)))),
+               'side': meta['side'], 'n_rocks': int(np.count_nonzero(np.unique(placement_preview.rock_labels(world, wedges)))),
                'now': now, 'n_outcomes': len(classes), 'outcomes': outcomes, 'paper': paper,
                'recorded': classes.index(selected) if selected in classes else None}
         if len(classes) >= 2 and paper is not None and all(o['preview'] is not None for o in outcomes):
-            order = controllers.parse_order(rule.decide({'observation': obs, 'base_order': controllers.key(PAPER_ORDER)})['order'])
+            order = order_controller.parse_order(rule.decide({'observation': obs, 'base_order': order_controller.key(PAPER_ORDER)})['order'])
             pick = select(raw, np.asarray(a['weights']), 'paper', tuple(order), TOL).index
             row['rule'] = classes.index(int(pick)) if pick is not None and int(pick) in classes else None
-            row['greedy_full'] = preview.greedy_preview(outcomes, paper, 'full')
-            row['greedy_band'] = preview.greedy_preview(outcomes, paper, 'band')
+            row['greedy_full'] = placement_preview.greedy_preview(outcomes, paper, 'full')
+            row['greedy_band'] = placement_preview.greedy_preview(outcomes, paper, 'band')
         rows.append(row)
     return rows
 
@@ -146,7 +143,7 @@ def main(argv=None):
         at = {run: next((r['now'] for r in rs if r['n_rocks'] == k), None) for run, rs in by_run.items()}
         checkpoints[k] = {f: {m: spearman([None if at[run] is None else at[run][f] for run in final],
                                           [float(final[run][m]) for run in final]) for m in FINAL} for f in CHANGE}
-    end = {run: preview.quality(pickle.load(open(result_of(RUNS / run) / 'base.pkl', 'rb')).matrix, wedge_values(RUNS / run))
+    end = {run: placement_preview.quality(pickle.load(open(result_of(RUNS / run) / 'base.pkl', 'rb')).matrix, wedge_values(RUNS / run))
            for run in final}
     at_end = {f: {m: spearman([end[run][f] for run in final], [float(final[run][m]) for run in final]) for m in FINAL}
               for f in CHANGE}
@@ -166,8 +163,8 @@ def main(argv=None):
         stone, rot, x, y = b['pose']
         hit = np.flatnonzero((a['stone_id'] == stone) & (a['rotation_world'] == rot) & (a['x_world'] == x) & (a['y'] == y))
         branch_run = RUNS / 'branches' / pid / b['name']
-        q = metrics.wall_quality(branch_run, result_of(branch_run), 'corrected')
-        wm = metrics.wall_metrics(branch_run, result_of(branch_run))
+        q = wall_metrics.wall_quality(branch_run, result_of(branch_run), 'corrected')
+        wm = wall_metrics.wall_metrics(branch_run, result_of(branch_run))
         point = points.setdefault(f"{b['run']}@{b['step']}", {'row': row, 'alternatives': {}})
         rec = final[b['run']]
         point['alternatives'].setdefault('recorded', {'class': row['recorded'], **{m: float(rec[m]) for m in FINAL}})

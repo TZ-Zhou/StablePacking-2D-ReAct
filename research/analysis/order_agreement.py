@@ -1,8 +1,8 @@
 """Which filter orders choose the same stone in the same wall state (offline, no wall is built).
 
-Usage: python -B research/order_agreement.py <output dir> <sensitivity dir> [<sensitivity dir> ...]
+Usage: python -B -m research.analysis.order_agreement <output dir> <sensitivity dir> [<sensitivity dir> ...]
 
-Inputs are sensitivity.py outputs (orders.csv, events.csv): for every recorded filter event,
+Inputs are order_sensitivity.py outputs (orders.csv, events.csv): for every recorded filter event,
 the choice each of the 120 paper-cascade orders makes on the identical candidate matrix, plus
 the code_original choice. Events where no order can choose (no feasible candidate) are dropped.
 Each event counts once; states come from the walls that were built, so they over-represent

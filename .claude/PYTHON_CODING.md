@@ -11,6 +11,7 @@
 
 ## 1. Pythonic
 
+- `research/` 是套件：模組之間一律絕對匯入（`from research.walls import run_wall`），不改 `sys.path`；路徑常數只從 `research/paths.py` 取。例外只有兩處：`controller/worker.py`（在 venv 以 `python -I` 直接執行）與 staged case 的開頭（`run_wall.stage`）。
 - 用語言既有機制：`with` 管資源、`enumerate`／`zip` 取代索引算術、comprehension 取代累加迴圈、`pathlib` 取代字串拼路徑。
 - numpy 能向量化就不寫 Python 迴圈。
 - 標準庫先於第三方，第三方先於自己重寫。
@@ -29,19 +30,19 @@
 ## 3. DRY
 
 - 同一個概念只能有一份實作。看到第二份就抽共用。
-- **牆品質指標、篩選順序、追蹤格式尤其嚴格：一個定義一份程式碼**（指標在 `research/metrics.py`，篩選在 `Stonepacker2D/stack/selection.py`）。兩份實作＝數字遲早對不起來。
+- **牆品質指標、篩選順序、追蹤格式尤其嚴格：一個定義一份程式碼**（指標在 `research/walls/wall_metrics.py`，篩選在 `Stonepacker2D/stack/selection.py`）。兩份實作＝數字遲早對不起來。
 - 抽象等到真的重複才做。
 
 ## 4. 職責分離
 
-- 控制器只拿唯讀副本、只回 JSON（`research/controller_worker.py`），不碰 Wang 的物件與 RNG。
-- 離線分析只讀追蹤與記錄，不重建牆；要建牆就經 `run_case.py`。
+- 控制器只拿唯讀副本、只回 JSON（`research/controller/worker.py`），不碰 Wang 的物件與 RNG。
+- 離線分析只讀追蹤與記錄，不重建牆；要建牆就經 `research/walls/run_wall.py`。
 - 有狀態的才用 class；無狀態計算寫成函式。繼承深度以一層為度，其餘用組合。
 
 ## 5. docstring 與註解
 
 - **一律英文。**
-- 模組 docstring：這個檔案做什麼、用法（`python -B research/<script>.py ...`）、輸入與輸出寫到哪裡。讀完就知道要不要往下看。
+- 模組 docstring：這個檔案做什麼、用法（`python -B -m research.<資料夾>.<模組> ...`）、輸入與輸出寫到哪裡。讀完就知道要不要往下看。
 - 函式 docstring：一句或一小段，寫做什麼與不明顯的約束（座標系、單位、哪些資料只讀）。
 - 註解寫**為什麼**，不寫**做什麼**；只在非顯而易見處出現。不寫沿革——那是 commit message 的事。
 

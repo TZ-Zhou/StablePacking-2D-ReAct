@@ -1,6 +1,6 @@
 """The controller policy in its own process (multiprocessing spawn), spoken to in JSON bytes.
 
-The main process (controllers.ControllerClient) sends a request (observation, base order, tool
+The main process (order_controller.ControllerClient) sends a request (observation, base order, tool
 table) and waits for the reply; only JSON crosses the pipe, so the worker holds no Wang object,
 score matrix, global setting or RNG of the main process, and the main process receives nothing but
 parsed JSON. Every stage runs in a supervised I/O thread the main process waits for with a
@@ -25,7 +25,7 @@ close (pid, reason, exit code, whether it was still alive after the reap timeout
 as evidence that no worker outlived its decision; the last worker is closed when the main process
 exits normally.
 
-python (optional): the worker runs as `<python> -I -B controller_worker.py --serve` (subprocess,
+python (optional): the worker runs as `<python> -I -B worker.py --serve` (subprocess,
 4-byte length-prefixed JSON frames over its stdin/stdout) instead of a multiprocessing child of
 this interpreter. multiprocessing's spawn executable is process-wide (Wang's Pool reads it too),
 so it is never changed. The worker's environment is built, not inherited: WORKER_ENV, the key
@@ -49,7 +49,9 @@ import weakref
 from pathlib import Path
 
 MAX_BYTES = 1 << 20
-REPO = Path(__file__).resolve().parents[1]
+# venv_main runs this file under `python -I`, whose sys.path holds neither the script's directory
+# nor the working directory: the research package is found from here, not from an import
+REPO = Path(__file__).resolve().parents[2]
 VENV_MANIFEST = REPO / 'research' / 'validation' / 'worker-venv.json'
 # Windows needs these to start Python and load its DLLs, matplotlib (imported with Stonepacker2D) a
 # home or config directory; nothing else of this process reaches the worker
@@ -127,11 +129,11 @@ def worker_env(spec, environ=None):
     llm = spec.get('llm') or {}
     if spec['kind'] == 'react' and llm.get('kind') == 'api' and llm.get('provider') in ('openai', 'anthropic'):
         from urllib.parse import urlparse
-        import llm_adapter
-        for k in (llm_adapter.KEY_ENV[llm['provider']], llm_adapter.PAID_GATE):
+        from research.controller import llm_api
+        for k in (llm_api.KEY_ENV[llm['provider']], llm_api.PAID_GATE):
             if k in environ:
                 env[k] = environ[k]
-        if llm['provider'] == 'openai' and urlparse(environ.get('OPENAI_BASE_URL', '')).hostname in llm_adapter.LOOPBACK:
+        if llm['provider'] == 'openai' and urlparse(environ.get('OPENAI_BASE_URL', '')).hostname in llm_api.LOOPBACK:
             env['OPENAI_BASE_URL'] = environ['OPENAI_BASE_URL']
     return env
 
@@ -234,12 +236,12 @@ class StdioConn:
 
 
 def venv_main(argv):
-    """`controller_worker.py --serve <module> <function> <directory>`: the target from its module
+    """`worker.py --serve <module> <function> <directory>`: the target from its module
     (found in directory), the spec as the first frame, then target(conn, spec)."""
     _, module, name, directory = argv
     out = os.fdopen(os.dup(sys.stdout.fileno()), 'wb')
     sys.stdout = sys.stderr  # nothing printed can corrupt a frame
-    for p in (directory, str(REPO / 'research'), str(REPO)):
+    for p in (directory, str(REPO)):
         if p not in sys.path:
             sys.path.insert(0, p)
     import importlib
@@ -256,13 +258,12 @@ def summary(data):
 def serve(conn, spec):
     """Worker main: build the policy of `spec` (JSON text), say ready, answer requests until EOF.
     Replies are {'ok': reply} or {'error': 'Type: message'}; every message is masked
-    (controllers.masked) before it leaves the worker, so no API key it read can reach a record."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import controllers
+    (order_controller.masked) before it leaves the worker, so no API key it read can reach a record."""
+    from research.controller import order_controller
     try:
-        policy = controllers.make_policy(json.loads(spec))
+        policy = order_controller.make_policy(json.loads(spec))
     except Exception as error:  # an SDK that fails to build its client included
-        conn.send_bytes(controllers.masked(json.dumps({'error': controllers.error_text(error)})).encode())
+        conn.send_bytes(order_controller.masked(json.dumps({'error': order_controller.error_text(error)})).encode())
         return
     conn.send_bytes(b'{"ready": true}')
     while True:
@@ -273,8 +274,8 @@ def serve(conn, spec):
         try:
             out = json.dumps({'ok': policy.decide(request)}, allow_nan=False)
         except Exception as error:  # reported, not raised: the main process records the fallback
-            out = json.dumps({'error': controllers.error_text(error)})
-        conn.send_bytes(controllers.masked(out).encode())
+            out = json.dumps({'error': order_controller.error_text(error)})
+        conn.send_bytes(order_controller.masked(out).encode())
 
 
 def close_at_exit(ref):
@@ -284,7 +285,7 @@ def close_at_exit(ref):
 
 
 def error_text(error):
-    from controllers import error_text
+    from research.controller.order_controller import error_text
     return error_text(error)
 
 
@@ -353,7 +354,7 @@ class ProcessTransport:
 
         def launch_venv():  # the same slot discipline as launch(), a subprocess of self.python
             module = sys.modules[self.target.__module__]
-            name = 'controller_worker' if self.target.__module__ == '__main__' else self.target.__module__
+            name = 'research.controller.worker' if self.target.__module__ == '__main__' else self.target.__module__
             cmd = [self.python, '-I', '-B', str(Path(__file__).resolve()), '--serve', name, self.target.__name__,
                    str(Path(module.__file__).resolve().parent)]
             try:

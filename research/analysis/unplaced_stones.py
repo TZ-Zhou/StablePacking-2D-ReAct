@@ -1,6 +1,6 @@
 """Why walls end with stones unplaced: per-attempt candidate sets, per-stone filter fate and wall state (offline).
 
-Usage: python -B research/failure_analysis.py <campaign id> <output dir> [--hard 8,9,13]
+Usage: python -B -m research.analysis.unplaced_stones <campaign id> <output dir> [--hard 8,9,13]
 
 Reads the recorded trace of every wall in the campaign manifest (campaign.py summarize); no
 wall is built. Writes
@@ -21,15 +21,13 @@ Everything here is association; nothing tests what caused a wall to stop.
 """
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import campaign  # noqa: E402
-import run_case  # noqa: E402
+from research.walls import campaign
+from research.walls import run_wall
 
 from Stonepacker2D.stack.selection import load_trace  # noqa: E402
 
@@ -109,7 +107,7 @@ def wall_summary(attempts, stones, hard=()):
 def analyze(manifest, hard=()):
     attempts, stones, walls = [], [], []
     for w in manifest.itertuples():
-        result = next((run_case.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
+        result = next((run_wall.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
         a, s = attempt_rows(result)
         tag = {'arm': w.arm, 'seed': w.seed, 'complete': w.n_placed == w.n_input}
         a, s = pd.DataFrame(a).assign(**tag), pd.DataFrame(s).assign(**tag)

@@ -42,7 +42,7 @@ APILLM is built by make_policy, i.e. in the controller worker for live walls: th
 only validates the spec (identity, enabled), so the API client and the API key exist only in the
 worker. The key is read there from the provider's fixed environment variable KEY_ENV (a spec
 cannot name another source; never from the spec, the trace or a transcript) and registered in
-controllers.SECRETS before the client is built, so error_text masks it (and any sk- key pattern)
+order_controller.SECRETS before the client is built, so error_text masks it (and any sk- key pattern)
 before it shortens a text, and the worker masks everything it sends. Providers:
 - 'fake': a deterministic local stand-in (fake_mode '<MockLLM mode>[+transient@N|+fatal@N]':
   MockLLM's scripted replies, token counts estimated from text lengths, optionally a failure of
@@ -73,7 +73,7 @@ import os
 import re
 import time
 
-from controllers import SECRETS, LLMFailure, MockLLM, error_text
+from research.controller.order_controller import SECRETS, LLMFailure, MockLLM, error_text
 
 COMMON = {'max_tokens': 1024, 'max_retries': 2, 'retry_backoff_s': 1.0}
 PAID_DEFAULTS = {'temperature': None, 'effort': None, 'request_timeout_s': 60.0, 'price_per_mtok': None}

@@ -2,15 +2,15 @@
 
 ## 環境
 
-- **建牆只在登記的 baseline conda 環境（`stablepacking-baseline`）裡跑。** 路徑、Python 版本與套件清單只記在 `research/validation/environment-manifest.json`；`run_case.py` 每面牆開跑前都會用 `research/validation/verify_environment.py` 比對，不符就停。
-- **控制器 worker 跑在登記的 venv**（`research/validation/worker-venv.json`，含檔案 SHA256），由 `run_case.py --worker-venv` 啟動。
+- **建牆只在登記的 baseline conda 環境（`stablepacking-baseline`）裡跑。** 路徑、Python 版本與套件清單只記在 `research/validation/environment-manifest.json`；`run_wall.py` 每面牆開跑前都會用 `research/validation/verify_environment.py` 比對，不符就停。
+- **控制器 worker 跑在登記的 venv**（`research/validation/worker-venv.json`，含檔案 SHA256），由 `run_wall.py --worker-venv` 啟動。
 - 本機找不到登記的環境時，先回報使用者；不得自行重建環境或改寫 manifest。
-- 環境比對只在 `run_case.py` 建牆時執行；純離線分析（`sensitivity.py`、`order_agreement.py`、`arm_comparison.py` 等）不建牆，也不做這項比對。
+- 環境比對只在 `run_wall.py` 建牆時執行；純離線分析（`order_sensitivity.py`、`order_agreement.py`、`arm_comparison.py` 等）不建牆，也不做這項比對。
 
 ## 執行方式
 
-- 一律從 repo 根目錄執行：`python -B research/<script>.py <子指令與參數>`（`-B` 不寫 bytecode）。各腳本的子指令寫在檔案開頭的 docstring。
-- 輸出寫進 `research/runs/`（不進版控）；評估結果用 `quality_batch.py` 寫到 `research/quality/<方法>/`。
+- 一律從 repo 根目錄執行：`python -B -m research.<資料夾>.<模組> <子指令與參數>`，例如 `python -B -m research.walls.run_wall ...`（`-B` 不寫 bytecode；`research` 是套件，不能用檔案路徑跑）。各模組的子指令寫在檔案開頭的 docstring。
+- 輸出寫進 `research/runs/`（不進版控）；評估結果用 `campaign_quality.py` 寫到 `research/quality/<方法>/`。
 - 測試：`python -m pytest research/tests`（unittest 寫法）；缺 baseline 環境、openai SDK 或記錄牆的測試會自動 skip。
 
 ## 付費 API
@@ -21,14 +21,14 @@
 
 ## 長時間指令
 
-**整批建牆（`campaign.py run`、`counterfactual.py run`、`lookahead_study.py run`、`dev_walls.py run`、`gpt_wall.py run`）一律開獨立視窗，除非使用者說「背景執行」。**
+**整批建牆（`campaign.py run`、`counterfactual_branches.py run`、`lookahead_study.py run`、`dev_walls.py run`、`gpt_wall.py run`）一律開獨立視窗，除非使用者說「背景執行」。**
 python 加 `-u` 關掉輸出緩衝，並用 `Tee-Object` 同時寫 log，才讀得到進度。
 
 ```powershell
 $pyExe = "<environment-manifest.json 的 prefix>\python.exe"
 $workDir = "C:\Users\GAI\Desktop\Scott\StablePacking-2D-ReAct"
 $log = "$workDir\research\runs\<name>.log"
-$cmd = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; `$env:PYTHONIOENCODING = 'utf-8'; Set-Location '$workDir'; & '$pyExe' -u -B research\<script>.py <args> 2>&1 | Tee-Object -FilePath '$log'; pause"
+$cmd = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; `$env:PYTHONIOENCODING = 'utf-8'; Set-Location '$workDir'; & '$pyExe' -u -B -m research.<資料夾>.<模組> <args> 2>&1 | Tee-Object -FilePath '$log'; pause"
 Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $cmd
 ```
 

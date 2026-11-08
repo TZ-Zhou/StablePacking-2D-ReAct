@@ -1,12 +1,12 @@
 """P1 (exploratory): limited lookahead at the 6 counterfactual branch points with known final walls.
 
-  python -B research/lookahead_study.py run [--max-runs N]   builds the lookahead walls
-  python -B research/lookahead_study.py evaluate --out DIR    compares them with the final walls
+  python -B -m research.analysis.lookahead_study run [--max-runs N]   builds the lookahead walls
+  python -B -m research.analysis.lookahead_study evaluate --out DIR    compares them with the final walls
 
 A branch point is a step of a recorded paper-order wall (3-0-2-1-4) where branches of the plans
 paper-hardstone-01 and smoke-001-cf (neutral ones left out: they rebuild the recorded wall) took
 another candidate. Its alternatives: the recorded candidate and each branch's. The lookahead of an
-alternative is run_case.py as counterfactual.py runs its branch (same case, seed, recorded order,
+alternative is run_wall.py as counterfactual_branches.py runs its branch (same case, seed, recorded order,
 --switch for a branch), stopped by its own --placements once the wall holds the decision's P
 placements + K + 1 (K = 4): the alternative, then K placements by the Paper order, all with the
 experiment's code, RNG, stones and settings. Its inputs are the seed, the order and the switch;
@@ -44,12 +44,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import preview  # noqa: E402
-import run_case  # noqa: E402
+from research.paths import QUALITY_DIR
+from research.analysis import placement_preview
+from research.walls import run_wall
 
-RUNS = run_case.RUNS
+RUNS = run_wall.RUNS
 OUT = 'lookahead-p1'
 PLANS = ['paper-hardstone-01', 'smoke-001-cf']
 K = 4
@@ -113,7 +112,7 @@ def run(max_runs=None):
                 return True
             args = ['thangavelu-noise80', name, '--policy', 'paper', '--order', ORDER, '--seed', str(alt['seed']),
                     '--timeout', '2400', '--placements', str(n)] + (['--switch', alt['switch']] if alt['switch'] else [])
-            run_case.main(args)
+            run_wall.main(args)
             started += 1
             status = json.loads((RUNS / name / 'receipt.json').read_text(encoding='utf-8'))['status']
             bad = same_events(RUNS / name, RUNS / alt['wall'])
@@ -165,11 +164,11 @@ def states(look, p):
             a = np.load(f)
             world = np.fliplr(a['wall']) if json.loads(str(a['meta']))['side'] == 'right' else np.asarray(a['wall'])
             remaining = len(a['inventory_ids']) + len(a['sampled_ids'])
-        labels = preview.rock_labels(world, wedges)
+        labels = placement_preview.rock_labels(world, wedges)
         H, W = world.shape
         out[k] = {'end': end, 'lost': n_input - len(np.unique(labels[labels > 0])) - remaining,
                   'sf': float(np.count_nonzero(labels) / ((W - 2) * (H - 3))),
-                  'ah': preview.paths_metric(labels, False), 'av': preview.paths_metric(labels, True),
+                  'ah': placement_preview.paths_metric(labels, False), 'av': placement_preview.paths_metric(labels, True),
                   'lr': float(kine_lr(world)), 'mtime': os.stat(f).st_mtime}
     t0 = os.stat(first(placed[p - 1]['step'])).st_mtime  # the decision's event
     for k in DEPTHS:
@@ -179,13 +178,13 @@ def states(look, p):
 
 def finals(alt):
     """The alternative's final values (evaluation only, never a lookahead input)."""
-    import metrics
-    q = {r['run']: r for r in csv.DictReader(open(REPO / 'research' / 'quality' / 'wang-quality-v1' / 'quality.csv', encoding='utf-8'))}
+    from research.walls import wall_metrics
+    q = {r['run']: r for r in csv.DictReader(open(QUALITY_DIR / 'wang-quality-v1' / 'quality.csv', encoding='utf-8'))}
     if alt['wall'] in q:
         return {v[0]: float(q[alt['wall']][v[0]]) for v in VALUES.values()}
     wall = RUNS / alt['wall']
-    v = metrics.wall_quality(wall, result_of(wall), 'corrected')
-    return {**{m: v[m] for m in ('F_SF', 'F_AH', 'F_AV', 'F_LR')}, 'placed_ratio': metrics.wall_metrics(wall, result_of(wall))['placed_ratio']}
+    v = wall_metrics.wall_quality(wall, result_of(wall), 'corrected')
+    return {**{m: v[m] for m in ('F_SF', 'F_AH', 'F_AV', 'F_LR')}, 'placed_ratio': wall_metrics.wall_metrics(wall, result_of(wall))['placed_ratio']}
 
 
 def rho(x, y):

@@ -1,9 +1,9 @@
 """One-step filter-order branches of a recorded paper-order wall.
 
-  python -B research/counterfactual.py options <run> <target stone> [...]
-  python -B research/counterfactual.py init <plan id> --wall <run>:<seed>:<target> [...] [--timeout 2400]
-  python -B research/counterfactual.py run <plan id> [--max-runs N]
-  python -B research/counterfactual.py summarize <plan id>
+  python -B -m research.analysis.counterfactual_branches options <run> <target stone> [...]
+  python -B -m research.analysis.counterfactual_branches init <plan id> --wall <run>:<seed>:<target> [...] [--timeout 2400]
+  python -B -m research.analysis.counterfactual_branches run <plan id> [--max-runs N]
+  python -B -m research.analysis.counterfactual_branches summarize <plan id>
 (<run> is a run directory under research/runs.)
 
 options (offline): for every construction step of the recorded wall that was decided in a
@@ -13,7 +13,7 @@ with the LLC > 0 gate) on the recorded candidate matrix. Per step:
 - neutral: orders other than the recorded one that pick the recorded candidate (identity checks:
   the switch is active but nothing may change);
 - control: orders that pick a non-target stone other than the recorded one.
-A branch is 'run_case.py --policy paper --order <recorded> --seed <seed> --switch STEP=<order>':
+A branch is 'run_wall.py --policy paper --order <recorded> --seed <seed> --switch STEP=<order>':
 the same seed and code re-execute every earlier decision, so the candidate matrix at STEP is
 the recorded one and the branch's choice there is the offline one; later steps use the
 recorded order again but see a different wall and inventory (and the sampling draws that
@@ -23,7 +23,7 @@ init registers research/runs/branches/<plan id>/plan.json once (never overwritte
 step where some order picks a target, one 'target' branch per distinct target pose and one
 'control' branch per distinct non-target pose other than the recorded one, each with the
 lexicographically first order reaching that pose (orders reaching the same pose build the same
-wall). run builds them one at a time; after each wall it requires PROCESS_PASS, check_case
+wall). run builds them one at a time; after each wall it requires PROCESS_PASS, check_run
 check_run ok and check_branch ok (identical prefix, same candidates at the switched step, the
 planned pose chosen, recorded order everywhere else) and stops at the first failure.
 summarize writes branches.csv: each branch next to its original wall.
@@ -31,13 +31,11 @@ summarize writes branches.csv: each branch next to its original wall.
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import run_case  # noqa: E402
+from research.walls import run_wall
 
 from Stonepacker2D.stack.selection import ALL_ORDERS, load_trace, select  # noqa: E402
 
@@ -87,7 +85,7 @@ def summarize(options):
 
 
 def check_branch(original, branch, switch):
-    """Branch result dir vs the recorded one. switch: {step: order tuple} as given to run_case.
+    """Branch result dir vs the recorded one. switch: {step: order tuple} as given to run_wall.
     Every attempt before the first switched step must be byte-identical (commits line, trace
     arrays, trace meta except run_id); at a switched step the trace meta policy must carry the
     switched order and the choice must be the offline replay's; every other step must carry
@@ -132,14 +130,14 @@ def check_branch(original, branch, switch):
     return {'ok': not problems, 'problems': problems, 'identical_prefix_attempts': n_prefix, 'switched_choices': choices}
 
 
-PLANS = run_case.RUNS / 'branches'
+PLANS = run_wall.RUNS / 'branches'
 
 
 def make_plan(plan_id, walls, timeout):
     """walls: [(run, seed, target stone)]."""
     branches = []
     for run, seed, target in walls:
-        result = next((run_case.RUNS / run).rglob('trace/commits.jsonl')).parent.parent
+        result = next((run_wall.RUNS / run).rglob('trace/commits.jsonl')).parent.parent
         options = step_options(result, {target})
         for step in sorted(options[options.target].step.unique()):
             g = options[(options.step == step) & (options.order != options.recorded_order)]
@@ -151,26 +149,26 @@ def make_plan(plan_id, walls, timeout):
                                      'n_remaining': int(h.n_remaining.iloc[0]), 'pose': [int(v) for v in pose],
                                      'order': order, 'orders_reaching_pose': len(h),
                                      'recorded_order': h.recorded_order.iloc[0]})
-    git = lambda *a: subprocess.run(['git', *a], cwd=run_case.REPO, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(['git', *a], cwd=run_wall.REPO, capture_output=True, text=True).stdout.strip()
     return {'id': plan_id, 'case': 'thangavelu-noise80', 'timeout_seconds': timeout, 'branches': branches,
             'git_head': git('rev-parse', 'HEAD'), 'git_status': git('status', '--porcelain').splitlines(),
-            'code_sha256': run_case.code_fingerprint()}
+            'code_sha256': run_wall.code_fingerprint()}
 
 
 def branch_dir(plan, b):
     return f"branches/{plan['id']}/{b['name']}"
 
 
-def run_plan(plan, max_runs=None, launch=run_case.main):
+def run_plan(plan, max_runs=None, launch=run_wall.main):
     """True when every branch built so far passed; stops at the first failure."""
-    import check_case
-    if run_case.code_fingerprint() != plan['code_sha256']:
+    from research.walls import check_run
+    if run_wall.code_fingerprint() != plan['code_sha256']:
         raise RuntimeError('executed code differs from the code registered in plan.json')
     log = PLANS / plan['id'] / 'runs.jsonl'
     started = 0
     for b in plan['branches']:
         name = branch_dir(plan, b)
-        if (run_case.RUNS / name).exists():
+        if (run_wall.RUNS / name).exists():
             continue
         if max_runs is not None and started >= max_runs:
             break
@@ -178,11 +176,11 @@ def run_plan(plan, max_runs=None, launch=run_case.main):
                 '--seed', str(b['seed']), '--timeout', str(plan['timeout_seconds']),
                 '--switch', f"{b['step']}={b['order'].replace('-', ',')}"])  # TERMINATION_FAILED raises
         started += 1
-        status = json.loads((run_case.RUNS / name / 'receipt.json').read_text(encoding='utf-8'))['status']
+        status = json.loads((run_wall.RUNS / name / 'receipt.json').read_text(encoding='utf-8'))['status']
         record = {'branch': b['name'], 'status': status, 'check_run_ok': False, 'check_branch_ok': False}
         if status == 'PROCESS_PASS':
-            original, branch = (check_case.result_dirs(run_case.RUNS / r)[0] for r in (b['run'], name))
-            run_check = check_case.check_run(run_case.RUNS / name)
+            original, branch = (check_run.result_dirs(run_wall.RUNS / r)[0] for r in (b['run'], name))
+            run_check = check_run.check_run(run_wall.RUNS / name)
             bc = check_branch(original, branch, {b['step']: tuple(int(c) for c in b['order'].split('-'))})
             chosen = bc['switched_choices'].get(b['step'])
             if chosen is None or list(chosen) != b['pose']:
@@ -200,19 +198,19 @@ def run_plan(plan, max_runs=None, launch=run_case.main):
 
 
 def summarize_plan(plan):
-    import check_case
-    import metrics
+    from research.walls import check_run
+    from research.walls import wall_metrics
     rows = []
     for b in plan['branches']:
         name = branch_dir(plan, b)
-        if not (run_case.RUNS / name / 'receipt.json').exists():
+        if not (run_wall.RUNS / name / 'receipt.json').exists():
             continue
         row = {k: b[k] for k in ('name', 'run', 'seed', 'target', 'step', 'n_remaining', 'kind', 'order')}
         row['pose'] = ' '.join(map(str, b['pose']))
         after = {}
         for tag, run in (('orig', b['run']), ('branch', name)):
-            result = check_case.result_dirs(run_case.RUNS / run)[0]
-            m = metrics.wall_metrics(run_case.RUNS / run, result)
+            result = check_run.result_dirs(run_wall.RUNS / run)[0]
+            m = wall_metrics.wall_metrics(run_wall.RUNS / run, result)
             for k in ('status', 'n_placed', 'wall_density', 'wall_height', 'lambda_min', 'stone_filling', 'termination'):
                 row[f'{k}_{tag}'] = m[k]
             commits = [json.loads(l) for l in (result / 'trace' / 'commits.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -250,7 +248,7 @@ def main(argv=None):
     pd.set_option('display.width', 250)
     pd.set_option('display.max_colwidth', 80)
     if args.command == 'options':
-        result = next((run_case.RUNS / args.run).rglob('trace/commits.jsonl')).parent.parent
+        result = next((run_wall.RUNS / args.run).rglob('trace/commits.jsonl')).parent.parent
         print(summarize(step_options(result, set(args.targets))).to_string(index=False))
         return 0
     if args.command == 'init':

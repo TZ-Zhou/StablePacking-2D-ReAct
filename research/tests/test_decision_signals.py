@@ -1,4 +1,4 @@
-"""research/decision_signals.py: the Pareto front on a known matrix, every paper-cascade pick on
+"""research/analysis/decision_signals.py: the Pareto front on a known matrix, every paper-cascade pick on
 the front of a recorded wall, and the hardness order."""
 import sys
 import unittest
@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(REPO), str(REPO / 'research'), str(REPO / 'research' / 'tests')]
-import decision_signals as d  # noqa: E402
-from test_controllers import WALL  # noqa: E402
+sys.path[:0] = [str(REPO), str(REPO / 'research' / 'tests')]
+from research.analysis import decision_signals as d  # noqa: E402
+from test_order_controller import WALL  # noqa: E402
 
 
 class Signals(unittest.TestCase):

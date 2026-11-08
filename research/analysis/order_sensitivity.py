@@ -1,6 +1,6 @@
 """Offline 120-order sensitivity test on traced candidate score matrices.
 
-Usage: python -B research/sensitivity.py <trace dir> <new output dir> [--tol 1e-9]
+Usage: python -B -m research.analysis.order_sensitivity <trace dir> <new output dir> [--tol 1e-9]
 
 Reads only trace/*.npz written during construction (no convolution, placement or kinematics
 is re-run) and replays every permutation of the five filters with the paper-style cascade on

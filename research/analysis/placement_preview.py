@@ -1,4 +1,4 @@
-"""Observation version 3, layer A (P0 draft, not wired into controllers.Observer): a local quality
+"""Observation version 3, layer A (P0 draft, not wired into order_controller.Observer): a local quality
 preview of each candidate placement, and the Greedy-Preview rule that uses it.
 
 Inputs are only what the controller has at the decision: the wall matrix (world frame, row 0 at
@@ -9,7 +9,7 @@ metric, no physics.
 quality(wall, wedges) of a partial wall, on the simulation grid:
   density   rock px / ((W - 2) * built height): wall_metrics' wall_density of the partial wall
             (the local counterpart of F_SF; F_SF itself divides by the whole wall area);
-  ah, av    03's F_AH / F_AV (metrics.joint_image, joint_paths, path_metric) of its rock label
+  ah, av    03's F_AH / F_AV (wall_metrics.joint_image, joint_paths, path_metric) of its rock label
             image as it is; above the skyline these paths run through the air; None while the
             image is too small for 03;
   ah_band, av_band  the same on the rows below the lowest skyline column, the band every column
@@ -22,9 +22,9 @@ Rocks only: ground, frame and wedges are left out of every label image, as in th
 """
 import numpy as np
 
-import metrics
+from research.walls import wall_metrics
 
-GROUND_TOP = 2  # rows 0-1 are ground (failure_analysis.wall_state)
+GROUND_TOP = 2  # rows 0-1 are ground (unplaced_stones.wall_state)
 KEYS = ('density', 'ah', 'av', 'ah_band', 'av_band', 'height')
 # Greedy-Preview objectives, fixed before any validation: (field, +1 higher is better / -1 lower);
 # ah, av: 03 on the partial wall as it is (band variants: the secondary rule); llc: the
@@ -43,10 +43,10 @@ def paths_metric(labels, vertical):
     if not labels.any():
         return None
     try:
-        img = metrics.joint_image(labels)
+        img = wall_metrics.joint_image(labels)
     except ValueError:  # nothing left after the erosion
         return None
-    return metrics.path_metric(metrics.joint_paths(img, vertical))
+    return wall_metrics.path_metric(wall_metrics.joint_paths(img, vertical))
 
 
 def quality(wall, wedges=()):

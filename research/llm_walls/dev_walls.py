@@ -1,16 +1,16 @@
 """Development walls before any GPT wall: on 2 development seeds (not the formal campaign's), the
 Paper wall and the same wall under the non-LLM controllers and the fake-provider ReAct controller,
-each through the registered venv worker (run_case --controller --worker-venv), one wall at a time.
+each through the registered venv worker (run_wall --controller --worker-venv), one wall at a time.
 
-  python -B research/dev_walls.py init      # research/runs/campaigns/dev-2seeds/campaign.json, once
-  python -B research/dev_walls.py run       # builds the walls not built yet, then check
-  python -B research/dev_walls.py check     # check every wall, Null == Paper, writes manifest.csv
-  python -B research/quality_batch.py dev-2seeds --out research/quality/dev-2seeds   # Wang's metrics
+  python -B -m research.llm_walls.dev_walls init      # research/runs/campaigns/dev-2seeds/campaign.json, once
+  python -B -m research.llm_walls.dev_walls run       # builds the walls not built yet, then check
+  python -B -m research.llm_walls.dev_walls check     # check every wall, Null == Paper, writes manifest.csv
+  python -B -m research.walls.campaign_quality dev-2seeds --out research/quality/dev-2seeds   # Wang's metrics
 
 The seeds are drawn by a fixed rule (SEED_RULE) and the arms fixed here before any wall is built.
-check: check_case.check_run of every wall, controllers.check of every controller wall (PASS), and
-the Null wall identical to the Paper wall of its seed (check_case.compare_runs: decisions, filter,
-commits, base.pkl matrices, every trace event); it writes manifest.csv (quality_batch's input).
+check: check_run.check_run of every wall, order_controller.check of every controller wall (PASS), and
+the Null wall identical to the Paper wall of its seed (check_run.compare_runs: decisions, filter,
+commits, base.pkl matrices, every trace event); it writes manifest.csv (campaign_quality's input).
 Pre-registered for the GPT walls that follow: a GPT wall with any decision point not decided by
 the LLM (a skip or a fallback) is 'GPT incomplete' and stays out of any quality comparison.
 """
@@ -21,10 +21,10 @@ from datetime import datetime
 
 import numpy as np
 
-import campaign as camp
-import check_case
-import controllers
-import run_case
+from research.walls import campaign as camp
+from research.walls import check_run
+from research.controller import order_controller
+from research.walls import run_wall
 
 ID = 'dev-2seeds'
 MASTER_SEED = 20261108
@@ -56,9 +56,9 @@ def init():
         raise SystemExit(f'{path} exists: a campaign is registered once')
     for arm in ARMS:
         if arm['controller']:
-            controllers.validate_spec(arm['controller'])
+            order_controller.validate_spec(arm['controller'])
     data = {**camp.make_campaign(ID, 'thangavelu-noise80', ['paper=3,0,2,1,4'], 1, MASTER_SEED, TIMEOUT),
-            'arms': ARMS, 'seeds': seeds(), 'seed_rule': SEED_RULE, 'worker_venv': run_case.worker_venv_identity(),
+            'arms': ARMS, 'seeds': seeds(), 'seed_rule': SEED_RULE, 'worker_venv': run_wall.worker_venv_identity(),
             'notes': ['development walls; not the formal campaign; no metric of them chooses anything of the GPT walls',
                       'GPT walls: a wall with a skip or a fallback at any decision point is GPT incomplete, kept but not compared']}
     path.parent.mkdir(parents=True)
@@ -72,9 +72,9 @@ def argv_of(c, seed, arm, name):
     return argv + (['--controller', json.dumps(arm['controller']), '--worker-venv'] if arm['controller'] else [])
 
 
-def run(launch=run_case.main):
+def run(launch=run_wall.main):
     c = camp.load(ID)
-    if run_case.code_fingerprint() != c['code_sha256']:
+    if run_wall.code_fingerprint() != c['code_sha256']:
         raise SystemExit('executed code differs from the code registered in campaign.json')
     for seed, arm, name in camp.planned_runs(c):
         status = camp.run_status(name)
@@ -96,13 +96,13 @@ def check():
     rows, problems = [], []
     runs = {(seed, arm['name']): name for seed, arm, name in camp.planned_runs(c)}
     for seed, arm, name in camp.planned_runs(c):
-        run = run_case.RUNS / name
+        run = run_wall.RUNS / name
         row = {'campaign': ID, 'arm': arm['name'], 'policy': arm['policy'], 'order': '-'.join(map(str, arm['order'])),
                'seed': seed, 'run': name, 'status': camp.run_status(name) or 'NOT_RUN'}
         if row['status'] == 'PROCESS_PASS':
-            found = check_case.check_run(run)['problems']
+            found = check_run.check_run(run)['problems']
             if arm['controller']:
-                report = controllers.check(check_case.result_dirs(run)[0])
+                report = order_controller.check(check_run.result_dirs(run)[0])
                 found += [f"controller check {report['verdict']}: {p}" for p in report['problems'] or report.get('incomplete') or []] \
                     if report['verdict'] != 'PASS' else []
                 row.update(decision_points=report['decision_points'], switches=report['switches'], controller_check=report['verdict'])
@@ -112,9 +112,9 @@ def check():
             problems.append(f"{name}: {row['status']}")
         rows.append(row)
     for seed in c['seeds']:
-        a, b = (run_case.RUNS / runs[(seed, k)] for k in ('paper', 'null'))
+        a, b = (run_wall.RUNS / runs[(seed, k)] for k in ('paper', 'null'))
         if a.exists() and b.exists():
-            diffs = check_case.compare_runs(a, b)
+            diffs = check_run.compare_runs(a, b)
             problems += [f'seed {seed} null vs paper: {d}' for d in diffs]
             print(f'seed {seed}: null vs paper', 'IDENTICAL' if not diffs else diffs[:5])
     camp.write_rows(camp.CAMPAIGNS / ID / 'manifest.csv', rows)

@@ -1,4 +1,4 @@
-"""research/metrics.wall_quality, the four formal wall metrics by the author's method: the
+"""research/walls/wall_metrics.wall_quality, the four formal wall metrics by the author's method: the
 original-resolution rendering of Tests/Thangavelu/02_view_transformation_ori_reso.py
 (render_original) then 03 (wang_metrics). Checked against a live run of the author's 02 -> 03, the
 values of five recorded walls, the refusals on inconsistent data, and that no recorded run,
@@ -17,10 +17,10 @@ import cv2
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'research'))
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
-import metrics  # noqa: E402
-from test_controllers import WALL  # noqa: E402
+from research.walls import wall_metrics  # noqa: E402
+from test_order_controller import WALL  # noqa: E402
 
 AUTHOR = REPO / 'Tests' / 'Thangavelu'
 RUNS = REPO / 'research' / 'runs'
@@ -79,7 +79,7 @@ def author_02_03(wall, work):
     level and loop lines; returns 02's label image and 03's F_SF, F_AV, F_AH, lambda_min."""
     result = next(wall.glob('result_*'))
     (work / 'data').mkdir()
-    shutil.copy(metrics.stone_source(wall), work / 'data')
+    shutil.copy(wall_metrics.stone_source(wall), work / 'data')
     shutil.copy(AUTHOR / 'graph.py', work)
     config = 'data_dir_prefix = "./result_x_wall"\nnoise_level = 80\n'
     for name, subs in (('02_view_transformation_ori_reso.py', [
@@ -113,8 +113,8 @@ class AgainstTheAuthor(unittest.TestCase):
         before = digest(WALL)
         with tempfile.TemporaryDirectory() as d:
             image, (sf, av, ah, lam) = author_02_03(WALL, Path(d))
-        labels, render = metrics.render_original(WALL, result)
-        q = metrics.wall_quality(WALL, result)
+        labels, render = wall_metrics.render_original(WALL, result)
+        q = wall_metrics.wall_quality(WALL, result)
         self.assertTrue(np.array_equal(image, labels))
         self.assertEqual((q['F_SF'], q['F_AV'], q['F_AH'], q['lambda_min']), (sf, av, ah, lam))
         self.assertEqual(q['F_LR'], lam / 0.58)
@@ -128,8 +128,8 @@ class FiveWalls(unittest.TestCase):
                 continue
             with self.subTest(wall.name):
                 result = next(wall.glob('result_*'))
-                labels, render = metrics.render_original(wall, result)
-                q = metrics.wall_quality(wall, result)
+                labels, render = wall_metrics.render_original(wall, result)
+                q = wall_metrics.wall_quality(wall, result)
                 self.assertEqual(hashlib.sha256(labels.tobytes()).hexdigest(), sha)
                 self.assertEqual((q['F_SF'], q['F_AH'], q['F_AV'], q['lambda_min']), (sf, ah, av, lam))
                 self.assertEqual(render['size'], [559, 810])
@@ -160,24 +160,24 @@ class Refusals(unittest.TestCase):
         p = self.run_dir / '00_run.py'
         p.write_text(p.read_text(encoding='utf-8').replace('_rescale = 0.5', '_rescale = 0.25'), encoding='utf-8')
         with self.assertRaises(ValueError):
-            metrics.render_original(self.run_dir, self.result)
+            wall_metrics.render_original(self.run_dir, self.result)
 
     def test_a_repeated_or_unknown_stone(self):
         for extra in (self.lines[1], '1' + self.lines[1], '999;1;1;0'):
             (self.result / 'transformation.txt').write_text('\n'.join(self.lines + [extra]))
             with self.subTest(extra), self.assertRaises(ValueError):
-                metrics.render_original(self.run_dir, self.result)
+                wall_metrics.render_original(self.run_dir, self.result)
 
     def test_transformation_and_base_disagree(self):
         (self.result / 'transformation.txt').write_text('\n'.join(self.lines[:-1]))
-        metrics.render_original(self.run_dir, self.result)  # renders, but is not this wall
+        wall_metrics.render_original(self.run_dir, self.result)  # renders, but is not this wall
         with self.assertRaises(ValueError):
-            metrics.wall_quality(self.run_dir, self.result)
+            wall_metrics.wall_quality(self.run_dir, self.result)
 
     def test_missing_transformation(self):
         (self.result / 'transformation.txt').unlink()
         with self.assertRaises(FileNotFoundError):
-            metrics.wall_quality(self.run_dir, self.result)
+            wall_metrics.wall_quality(self.run_dir, self.result)
 
     def test_an_overlapping_stone_is_left_out(self):
         """The last stone drawn next to the first, shifted right by dx: 02 leaves it out from an
@@ -187,16 +187,16 @@ class Refusals(unittest.TestCase):
         for dx, overlap, out in ((168, 343, True), (176, 148, False)):
             moved = ';'.join([str(last), str(float(first[1]) + dx)] + first[2:])
             (self.result / 'transformation.txt').write_text('\n'.join(self.lines[:2] + [moved]))
-            labels, render = metrics.render_original(self.run_dir, self.result)
+            labels, render = wall_metrics.render_original(self.run_dir, self.result)
             with self.subTest(dx):
                 self.assertEqual((render['stones'][1]['overlap'], render['stones'][1]['left_out']), (overlap, out))
                 self.assertEqual(2 in labels, not out)
         # wang-quality-s1: every stone drawn; the 343 contested pixels go to the later or the earlier one
         moved = ';'.join([str(last), str(float(first[1]) + 168)] + first[2:])
         (self.result / 'transformation.txt').write_text('\n'.join(self.lines[:2] + [moved]))
-        v1, _ = metrics.render_original(self.run_dir, self.result, 'corrected')
-        later, r = metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False)
-        earlier, _ = metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False, overlap='earlier')
+        v1, _ = wall_metrics.render_original(self.run_dir, self.result, 'corrected')
+        later, r = wall_metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False)
+        earlier, _ = wall_metrics.render_original(self.run_dir, self.result, 'corrected', leave_out=False, overlap='earlier')
         a, b = r['stones'][0]['pixels'], r['stones'][1]['pixels']
         self.assertFalse(r['stones'][1]['left_out'])
         self.assertEqual([np.count_nonzero(later == k) for k in (1, 2)], [a - 343, b])
@@ -204,7 +204,7 @@ class Refusals(unittest.TestCase):
         self.assertEqual([np.count_nonzero(v1 == k) for k in (1, 2)], [a, 0])
         self.assertTrue(np.array_equal(later != 0, earlier != 0))  # the same union, only the owner differs
         with self.assertRaises(ValueError):  # 02's leave-out with contested pixels to the earlier stone is no method
-            metrics.render_original(self.run_dir, self.result, leave_out=True, overlap='earlier')
+            wall_metrics.render_original(self.run_dir, self.result, leave_out=True, overlap='earlier')
 
 
 class CorrectedCanvas(unittest.TestCase):
@@ -225,9 +225,9 @@ class CorrectedCanvas(unittest.TestCase):
                 continue
             with self.subTest(wall.name):
                 result = next(wall.glob('result_*'))
-                a_img, a = metrics.render_original(wall, result)
-                c_img, c = metrics.render_original(wall, result, 'corrected')
-                q, qa = metrics.wall_quality(wall, result, 'corrected'), metrics.wall_quality(wall, result)
+                a_img, a = wall_metrics.render_original(wall, result)
+                c_img, c = wall_metrics.render_original(wall, result, 'corrected')
+                q, qa = wall_metrics.wall_quality(wall, result, 'corrected'), wall_metrics.wall_quality(wall, result)
                 self.assertEqual((q['F_SF'], q['F_AH'], q['F_AV'], q['F_LR']), (sf, ah, av, qa['F_LR']))
                 self.assertEqual(c_img.shape, a_img.shape)
                 self.assertTrue(np.array_equal(c_img[:400], a_img[:400]))
@@ -261,8 +261,8 @@ class CorrectedCanvas(unittest.TestCase):
             for (x, y), (a_px, c_px, out) in {(400, 500): (0, 15850, 0), (400, 545): (0, 10420, 5430),
                                               (800, 200): (8647, 8647, 7203), (830, 500): (0, 5643, 10207)}.items():
                 (result / 'transformation.txt').write_text('\n'.join([lines[0], ';'.join([first[0], str(x), str(y), first[3]])]))
-                a_img, a = metrics.render_original(run_dir, result)
-                c_img, c = metrics.render_original(run_dir, result, 'corrected')
+                a_img, a = wall_metrics.render_original(run_dir, result)
+                c_img, c = wall_metrics.render_original(run_dir, result, 'corrected')
                 with self.subTest((x, y)):
                     self.assertEqual((a['stones'][0]['pixels'], c['stones'][0]['pixels'], c['stones'][0]['outside_wall']),
                                      (a_px, c_px, out))
@@ -271,7 +271,7 @@ class CorrectedCanvas(unittest.TestCase):
                     if a_px:
                         self.assertTrue(np.array_equal(a_img, c_img))
             with self.assertRaises(ValueError):
-                metrics.render_original(run_dir, result, 'wider')
+                wall_metrics.render_original(run_dir, result, 'wider')
 
 
 class RecordsUnchanged(unittest.TestCase):
@@ -283,8 +283,8 @@ class RecordsUnchanged(unittest.TestCase):
         self.assertTrue((RUNS / 'never-created').exists())
 
     def test_v2_prompt_is_smoke_002s(self):
-        import controllers
-        self.assertEqual(controllers.ReActPolicy(None, observation_version=2).prompt_sha256, V2_PROMPT_SHA256)
+        from research.controller import order_controller
+        self.assertEqual(order_controller.ReActPolicy(None, observation_version=2).prompt_sha256, V2_PROMPT_SHA256)
 
 
 if __name__ == '__main__':

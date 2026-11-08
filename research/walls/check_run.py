@@ -1,6 +1,6 @@
 """Read-only consistency checks of traced runs, and byte comparison of two runs.
 
-Usage: python -B research/check_case.py <run dir> [--compare <other run dir>]
+Usage: python -B -m research.walls.check_run <run dir> [--compare <other run dir>]
 
 check_run: trace replay, commits vs chosen candidates, placed rocks in base.pkl vs recorded
 world poses (unstabilized rocks must match pixel for pixel), right-side rotations against the
@@ -12,13 +12,11 @@ import argparse
 import hashlib
 import json
 import pickle
-import sys
 from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from Stonepacker2D.stack.selection import footprint, load_trace, published_events, select, to_world  # noqa: E402
 
 

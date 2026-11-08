@@ -1,6 +1,6 @@
 """Exploratory arm x seed comparison of a summarized campaign (read-only).
 
-Usage: python -B research/arm_comparison.py <campaign id> [--reference code_original]
+Usage: python -B -m research.analysis.arm_comparison <campaign id> [--reference code_original]
 
 Reads research/runs/campaigns/<id>/manifest.csv (campaign.py summarize). One wall per
 (arm, seed) cell. Per metric, each reported separately (never merged into one score):
@@ -12,15 +12,12 @@ Wilcoxon signed-rank p. p values are uncorrected for multiple comparisons; with 
 treat everything as exploratory. 'complete' = all input stones placed (n_placed == n_input).
 """
 import argparse
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import campaign  # noqa: E402
+from research.walls import campaign
 
 METRICS = (('wall_density', 'higher'), ('wall_height', 'lower'), ('lambda_min', 'higher'), ('complete', 'higher'),
            ('stone_filling', 'higher'), ('n_placed', 'higher'))

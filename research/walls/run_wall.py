@@ -1,6 +1,6 @@
 """Run an original test case with a chosen filter policy and candidate tracing.
 
-Usage: python -B research/run_case.py <case> <run name> [--policy code_original|paper]
+Usage: python -B -m research.walls.run_wall <case> <run name> [--policy code_original|paper]
                                       [--order 3,0,2,1,4] [--tol 1e-9] [--placements N]
                                       [--seed S] [--switch STEP=a,b,c,d,e ...] [--controller JSON]
 
@@ -10,9 +10,9 @@ research/validation/ holds tracked copies of the two baseline tools used here an
 environment manifest; baseline/ itself is never read. Output goes to a new research/runs/<name>.
 With --placements N the case is stopped once decisions.txt has N committed placements.
 --switch makes a one-step counterfactual branch: same seed and code, so every decision before
-STEP should repeat the run without it; verify that with check_case.py --compare.
---controller '{"kind": "null"}' (research/controllers.py) picks the order at each selection;
-verify its records with controllers.py check <run>.
+STEP should repeat the run without it; verify that with check_run.py --compare.
+--controller '{"kind": "null"}' (research/controller/order_controller.py) picks the order at each selection;
+verify its records with order_controller.py check <run>.
 """
 import argparse
 import hashlib
@@ -24,9 +24,7 @@ import subprocess
 import sys
 import time
 
-REPO = Path(__file__).resolve().parents[1]
-RUNS = REPO / 'research' / 'runs'
-VALIDATION = REPO / 'research' / 'validation'
+from research.paths import REPO, RUNS, VALIDATION
 ENV_PREFIX = Path(json.loads((VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix'])
 CASES = {  # case -> (entry script, original number of walls in its batch)
     'bricks': ('Tests/Bricks/run.py', 1),
@@ -73,8 +71,8 @@ def stage(source, policy, seed=None):
               f"    set_filter_policy(**{policy['filter']!r})\n"
               f"    set_trace({policy['run_id']!r})\n")
     if policy.get('controller') is not None:
-        header += (f"    __import__('sys').path.insert(0, {str(REPO / 'research')!r})\n"
-                   "    from controllers import make_controller\n"
+        header += (f"    __import__('sys').path.insert(0, {str(REPO)!r})\n"
+                   "    from research.controller.order_controller import make_controller\n"
                    "    from Stonepacker2D.utils.constant import set_filter_controller\n"
                    f"    set_filter_controller(make_controller({policy['controller']!r}"
                    f"{', worker_venv=True' if policy.get('worker_venv') else ''}))\n")
@@ -98,7 +96,7 @@ def parse_switch(texts):
 
 
 def worker_venv_identity():
-    import controller_worker
+    from research.controller import worker as controller_worker
     m = json.loads(controller_worker.VENV_MANIFEST.read_text(encoding='utf-8'))
     return {'manifest': controller_worker.VENV_MANIFEST.relative_to(REPO).as_posix(), 'manifest_sha256': digest(controller_worker.VENV_MANIFEST),
             **{k: m[k] for k in ('path', 'version', 'sdks', 'files_sha256')}}
@@ -111,8 +109,9 @@ def committed_placements(output):
 def code_fingerprint(root=REPO):
     """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
     files = sorted(Path(root).glob('Stonepacker2D/**/*.py')) + [
-        Path(root) / 'research' / name for name in ('run_case.py', 'controllers.py', 'controller_worker.py', 'llm_adapter.py',
-                                                    'check_case.py', 'failure_analysis.py', 'campaign.py')] + [
+        Path(root) / 'research' / name for name in ('paths.py', 'walls/run_wall.py', 'controller/order_controller.py',
+                                                    'controller/worker.py', 'controller/llm_api.py', 'walls/check_run.py',
+                                                    'analysis/unplaced_stones.py', 'walls/campaign.py')] + [
         Path(root) / 'research' / 'validation' / 'windows_case_runtime.py']
     return {f.relative_to(root).as_posix(): digest(f) for f in files if f.exists()}
 
@@ -120,9 +119,9 @@ def code_fingerprint(root=REPO):
 def quiet_env():
     """This process's environment without the API key variables: for every child but the case itself
     (the environment guard, git, powershell, taskkill), so the key reaches only the case, which hands
-    it to the controller worker and drops it (controllers.make_controller worker_venv)."""
-    import llm_adapter
-    return {k: v for k, v in os.environ.items() if k.upper() not in llm_adapter.KEY_ENV.values()}
+    it to the controller worker and drops it (order_controller.make_controller worker_venv)."""
+    from research.controller import llm_api
+    return {k: v for k, v in os.environ.items() if k.upper() not in llm_api.KEY_ENV.values()}
 
 
 def process_table():
@@ -175,19 +174,19 @@ def terminate(pid, settle_seconds=30):
 
 
 def check_commits(output, stopped=False):
-    """Every result directory's trace chain (check_case.chain_problems): events, commits.jsonl and
+    """Every result directory's trace chain (check_run.chain_problems): events, commits.jsonl and
     decisions.txt agree selection by selection; a run stopped by the launcher may end in a prefix
     of build_wall's write order."""
-    import check_case
+    from research.walls import check_run
     from Stonepacker2D.stack.selection import load_trace, published_events
     problems = []
-    for result in check_case.result_dirs(output):
+    for result in check_run.result_dirs(output):
         trace = result / 'trace'
         if not (trace / 'commits.jsonl').exists() and not stopped:
             problems.append(f'{trace}: no commits.jsonl')
             continue
         events = [load_trace(p) for p in published_events(trace)]
-        problems += [f'{result}: {p}' for p in check_case.chain_problems(result, events, stopped)]
+        problems += [f'{result}: {p}' for p in check_run.chain_problems(result, events, stopped)]
     return problems
 
 
@@ -213,26 +212,26 @@ def check_trace(output, stopped=False):
 
 def manifest(output):
     """sha256 of every trace and result file of the run, taken when the case process has ended."""
-    import check_case
-    return {p.relative_to(output).as_posix(): check_case.sha256_file(p)
-            for r in check_case.result_dirs(output) for p in check_case.artifact_files(r)}
+    from research.walls import check_run
+    return {p.relative_to(output).as_posix(): check_run.sha256_file(p)
+            for r in check_run.result_dirs(output) for p in check_run.artifact_files(r)}
 
 
 def check_controller(output, trace, stopped=False):
     """A controller run is complete only if every result's controller check gives the verdict PASS
-    (controllers.check: records, transcripts and ledger equal the receipt's controller re-executed
+    (order_controller.check: records, transcripts and ledger equal the receipt's controller re-executed
     on the trace, every outcome geometry verified, ledger and run manifest present and matching)
-    and the ledgers show every worker reaped (controllers.worker_problems)."""
-    import check_case
-    import controllers
+    and the ledgers show every worker reaped (order_controller.worker_problems)."""
+    from research.walls import check_run
+    from research.controller import order_controller
     try:
-        results = check_case.result_dirs(output)
-        reports = [controllers.check(r, stopped=stopped) for r in results]
+        results = check_run.result_dirs(output)
+        reports = [order_controller.check(r, stopped=stopped) for r in results]
         problems = [p for r in reports for p in r['problems'][:5]] + ([] if reports else ['no result directory'])
         problems += [f"not fully verified: {p}" for r in reports for p in r.get('incomplete', [])]
         entries = [json.loads(l) for r in results if (r / 'trace' / 'transport.jsonl').exists()
                    for l in (r / 'trace' / 'transport.jsonl').read_text(encoding='utf-8').splitlines()]
-        workers, counts = controllers.worker_problems(entries, stopped)
+        workers, counts = order_controller.worker_problems(entries, stopped)
         problems += workers
     except Exception as error:  # an unreadable record or trace leaves the run unverified
         reports, problems, counts = [], [f'controller check failed: {error!r}'], None
@@ -276,7 +275,7 @@ def main(argv=None):
     parser.add_argument('--worker-venv', action='store_true',
                         help='with --controller: the controller worker runs in the registered venv (research/validation/worker-venv.json)')
     parser.add_argument('--controller', type=json.loads, metavar='JSON',
-                        help='paper policy only: research/controllers.py spec, e.g. {"kind": "random", "seed": 7}')
+                        help='paper policy only: research/controller/order_controller.py spec, e.g. {"kind": "random", "seed": 7}')
     args = parser.parse_args(argv)
     if args.worker_venv and args.controller is None:
         parser.error('--worker-venv needs --controller')
@@ -284,13 +283,13 @@ def main(argv=None):
         if args.policy != 'paper' or args.switch or args.no_trace:
             parser.error('--controller needs --policy paper, tracing and no --switch')
         if args.worker_venv:
-            import controller_worker
+            from research.controller import worker as controller_worker
             problems = controller_worker.venv_problems()
             if problems:
                 parser.error('--worker-venv: ' + '; '.join(problems))
-        import controllers
+        from research.controller import order_controller
         try:
-            controllers.make_controller(args.controller, sink=lambda record: None)
+            order_controller.make_controller(args.controller, sink=lambda record: None)
         except (ValueError, TypeError, NotImplementedError) as error:
             parser.error(f'--controller: {error}')
     assert Path(sys.prefix).resolve() == ENV_PREFIX, sys.prefix

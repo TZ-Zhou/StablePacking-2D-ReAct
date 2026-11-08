@@ -1,6 +1,6 @@
 """Two cheap decision signals, offline, on recorded walls only (never wired into a controller).
 
-  python -B research/decision_signals.py --out DIR
+  python -B -m research.analysis.decision_signals --out DIR
 
 Walls: the 50 of campaign thangavelu-5arms-10seeds (wang-quality-v1) and the 6 branch points of
 lookahead_study.points(). Each signal is computed from one selection event and the events before
@@ -24,20 +24,17 @@ and its final placed_ratio. Exploratory: 5 unplaced stones in 4 of the 50 walls.
 import argparse
 import csv
 import json
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import lookahead_study  # noqa: E402
-import metrics  # noqa: E402
+from research.paths import QUALITY_DIR, RUNS
+from research.analysis import lookahead_study
+from research.walls import wall_metrics
 from Stonepacker2D.stack.selection import ALL_ORDERS, select  # noqa: E402
 
-RUNS = REPO / 'research' / 'runs'
-QUALITY = REPO / 'research' / 'quality' / 'wang-quality-v1' / 'quality.csv'
+QUALITY = QUALITY_DIR / 'wang-quality-v1' / 'quality.csv'
 TOL = 1e-9
 CHECKPOINT = 6
 FINAL = (('placed_ratio', 1), ('F_SF', 1), ('F_AH', -1), ('F_AV', 1), ('F_LR', 1))
@@ -74,7 +71,7 @@ def classes(raw, weights):
 def areas(run):
     from skimage.measure import label, regionprops
     import cv2
-    image = label(cv2.imread(str(metrics.stone_source(run)), cv2.IMREAD_GRAYSCALE).astype(np.uint8))
+    image = label(cv2.imread(str(wall_metrics.stone_source(run)), cv2.IMREAD_GRAYSCALE).astype(np.uint8))
     return {r.label: int(r.area) for r in regionprops(image) if r.area >= 50}
 
 

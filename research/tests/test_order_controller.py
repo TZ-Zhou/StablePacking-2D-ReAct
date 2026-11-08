@@ -1,4 +1,4 @@
-"""Checks for the filter-order controller hook (selection.controlled_policy) and research/controllers.py.
+"""Checks for the filter-order controller hook (selection.controlled_policy) and research/controller/order_controller.py.
 
 Run from the repository root: python -B -m unittest discover -s research/tests
 Tests on a recorded wall replay its trace offline and are skipped when the run is absent.
@@ -32,12 +32,12 @@ from unittest import mock
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'research'))
-import check_case  # noqa: E402
-import controller_worker  # noqa: E402
-import controllers  # noqa: E402
-import llm_adapter  # noqa: E402
-import run_case  # noqa: E402
+sys.path.insert(0, str(REPO))
+from research.walls import check_run  # noqa: E402
+from research.controller import worker as controller_worker  # noqa: E402
+from research.controller import order_controller  # noqa: E402
+from research.controller import llm_api  # noqa: E402
+from research.walls import run_wall  # noqa: E402
 
 from Stonepacker2D.stack import selection  # noqa: E402
 from Stonepacker2D.stack.selection import controlled_policy  # noqa: E402
@@ -79,9 +79,9 @@ def two_outcomes(phase='single'):
 
 def react(llm, **params):
     """A ReAct client around a test LLM callable, its policy in this process."""
-    worker = {k: v for k, v in params.items() if k in controllers.WORKER_KEYS['react']}
-    return controllers.ControllerClient({'kind': 'react', 'llm': {'kind': 'test'}, **params},
-                                        controllers.InlineTransport(lambda: controllers.ReActPolicy(llm, **worker)))
+    worker = {k: v for k, v in params.items() if k in order_controller.WORKER_KEYS['react']}
+    return order_controller.ControllerClient({'kind': 'react', 'llm': {'kind': 'test'}, **params},
+                                        order_controller.InlineTransport(lambda: order_controller.ReActPolicy(llm, **worker)))
 
 
 def misbehaving_worker(conn, spec):
@@ -92,7 +92,7 @@ def misbehaving_worker(conn, spec):
     if bad == 'not_ready':
         conn.send_bytes(b'{"ready": false}')
         return
-    policy = controllers.make_policy(spec)
+    policy = order_controller.make_policy(spec)
     conn.send_bytes(b'{"ready": true}')
     for n in range(1, 1000):
         request = json.loads(conn.recv_bytes())
@@ -112,10 +112,10 @@ def misbehaving_worker(conn, spec):
 
 def process_client(spec, timeout=None, **bad):
     """A client whose ProcessTransport runs misbehaving_worker (bad given) or the real worker."""
-    full = controllers.full_spec(spec)
+    full = order_controller.full_spec(spec)
     transport = controller_worker.ProcessTransport({**full, **bad}, timeout=timeout, **(
         {'target': misbehaving_worker} if bad else {}))
-    return controllers.ControllerClient(spec, transport)
+    return order_controller.ControllerClient(spec, transport)
 
 
 def reaped(client):
@@ -243,12 +243,12 @@ class ControlledPolicy(unittest.TestCase):
 
 class Staging(unittest.TestCase):
     def test_controller_lines_only_when_given(self):
-        for case, (script, _) in run_case.CASES.items():
+        for case, (script, _) in run_wall.CASES.items():
             source = (REPO / script).read_text(encoding='utf-8')
             policy = {'filter': PAPER, 'run_id': 'x'}
-            self.assertEqual(run_case.stage(source, policy), run_case.stage(source, {**policy, 'controller': None}))
-            staged = run_case.stage(source, {**policy, 'controller': {'kind': 'null'}})
-            added = set(staged.splitlines()) - set(run_case.stage(source, policy).splitlines())
+            self.assertEqual(run_wall.stage(source, policy), run_wall.stage(source, {**policy, 'controller': None}))
+            staged = run_wall.stage(source, {**policy, 'controller': {'kind': 'null'}})
+            added = set(staged.splitlines()) - set(run_wall.stage(source, policy).splitlines())
             self.assertEqual(len(added), 4, case)
             self.assertIn("    set_filter_controller(make_controller({'kind': 'null'}))", added)
 
@@ -258,32 +258,32 @@ class Staging(unittest.TestCase):
                '{"kind": "react", "llm": {"kind": "api", "provider": "anthropic", "model": "m"}}',
                '{"kind": "react", "llm": {"kind": "mock", "mode": "max_llc"}, "max_total_tokens": 0}')
         # a spec that slipped through must never reach a wall: the run directory is never made
-        with mock.patch.object(run_case, 'prepare_output', side_effect=AssertionError('the launcher would build a wall')):
+        with mock.patch.object(run_wall, 'prepare_output', side_effect=AssertionError('the launcher would build a wall')):
             for spec in bad:
                 with self.assertRaises(SystemExit, msg=spec):
-                    run_case.main(['thangavelu-noise80', 'never-created', '--policy', 'paper', '--controller', spec])
+                    run_wall.main(['thangavelu-noise80', 'never-created', '--policy', 'paper', '--controller', spec])
 
 
 class SpecsAndSchema(unittest.TestCase):
     def test_r8_random_needs_a_non_negative_int_seed(self):
         for seed in (None, 1.5, True, '1', -1):
             with self.assertRaises(ValueError, msg=seed):
-                controllers.make_controller({'kind': 'random', 'seed': seed})
+                order_controller.make_controller({'kind': 'random', 'seed': seed})
         with self.assertRaises(ValueError):
-            controllers.make_controller({'kind': 'random', 'seed': 1, 'sed': 2})
-        self.assertEqual(controllers.make_controller({'kind': 'random', 'seed': 0}).spec(), {'kind': 'random', 'seed': 0})
+            order_controller.make_controller({'kind': 'random', 'seed': 1, 'sed': 2})
+        self.assertEqual(order_controller.make_controller({'kind': 'random', 'seed': 0}).spec(), {'kind': 'random', 'seed': 0})
 
     def test_r7_orders_are_never_coerced(self):
-        self.assertEqual(controllers.parse_order('3-0-2-1-4'), (3, 0, 2, 1, 4))
+        self.assertEqual(order_controller.parse_order('3-0-2-1-4'), (3, 0, 2, 1, 4))
         for bad in ([0.9, 1.9, 2.9, 3.9, 4.9], ['0', '1', '2', '3', '4'], '0.9-1.9-2.9-3.9-4.9', '3,0,2,1,4',
                     ' 3-0-2-1-4', '3-0-2-1-4-', '0-0-1-2-3', (True, 0, 2, 3, 4), None, 30214):
-            self.assertIsNone(controllers.parse_order(bad), bad)
+            self.assertIsNone(order_controller.parse_order(bad), bad)
 
     def test_r7_reply_schema_rejects_malformed_actions(self):
-        tools = controllers.TOOLS
+        tools = order_controller.TOOLS
         ok = {'thought': 't', 'tool': 'commit_order', 'arguments': {'order': '3-0-2-1-4', 'rationale': 'r'}}
-        self.assertIsNone(controllers.reply_problem(ok, tools))
-        self.assertIsNone(controllers.reply_problem({'tool': 'list_order_outcomes'}, tools))
+        self.assertIsNone(order_controller.reply_problem(ok, tools))
+        self.assertIsNone(order_controller.reply_problem({'tool': 'list_order_outcomes'}, tools))
         bad = {'not an object': None,
                'arguments must be strings': {**ok, 'arguments': {'order': [0.9, 1.9, 2.9, 3.9, 4.9], 'rationale': 'r'}},
                "order must be 'a-b-c-d-e'": {**ok, 'arguments': {'order': '0.9-1.9-2.9-3.9-4.9', 'rationale': 'r'}},
@@ -296,7 +296,7 @@ class SpecsAndSchema(unittest.TestCase):
                'unexpected reply fields': {**ok, 'stone': 'S1'},
                'thought must be a string': {**ok, 'thought': 3}}
         for reason, reply in bad.items():
-            problem = controllers.reply_problem(None if reason == 'not an object' else reply, tools)
+            problem = order_controller.reply_problem(None if reason == 'not an object' else reply, tools)
             self.assertIn('reply must be an object' if reason == 'not an object' else reason, problem or '', reason)
 
 
@@ -305,13 +305,13 @@ class PlacementGeometry(unittest.TestCase):
         on_ground, floating = np.zeros((10, 8), bool), np.zeros((10, 8), bool)
         on_ground[2:4, 2:4] = True
         floating[4:6, 2:4] = True
-        g = controllers.placement_geometry(wall(), on_ground)
+        g = order_controller.placement_geometry(wall(), on_ground)
         self.assertEqual((g['d_h_max'], g['d_void_under_skyline_px'], g['stone_px']), (2, 0, 4))
-        f = controllers.placement_geometry(wall(), floating)
+        f = order_controller.placement_geometry(wall(), floating)
         self.assertEqual((f['d_h_max'], f['d_void_under_skyline_px']), (4, 4))
 
     def test_live_observation_pastes_the_candidate(self):
-        obs, _ = controllers.Observer()(PAPER, two_outcomes())
+        obs, _ = order_controller.Observer()(PAPER, two_outcomes())
         self.assertEqual([(o['stone'], o['geometry']['d_h_max']) for o in obs['outcomes']], [('S1', 2), ('S2', 2)])
         self.assertEqual(obs['n_remaining'], 3)
 
@@ -326,7 +326,7 @@ class LiveDecisions(unittest.TestCase):
         return policy, records[-1]
 
     def test_r5_matched_random_keys_include_the_phase(self):
-        controller = controllers.make_controller({'kind': 'random', 'seed': 3, 'steps': [[1, 'place', 0, 'left']]})
+        controller = order_controller.make_controller({'kind': 'random', 'seed': 3, 'steps': [[1, 'place', 0, 'left']]})
         _, probe = self.call(controller, 'probe')
         policy, place = self.call(controller, 'place')
         self.assertEqual((probe['source'], probe['final']['switched']), ('matched_random:not_matched', False))
@@ -334,7 +334,7 @@ class LiveDecisions(unittest.TestCase):
         self.assertEqual(policy['order'], (1, 0, 2, 3, 4))  # the smallest order with GDS before NHR
         for steps in ([[1, 0, 'left']], [[1, 'place', 0, 'left'], [1, 'place', 0, 'left']]):
             with self.assertRaises(ValueError):
-                controllers.make_controller({'kind': 'random', 'seed': 3, 'steps': steps})
+                order_controller.make_controller({'kind': 'random', 'seed': 3, 'steps': steps})
 
     def test_s2_malformed_replies_of_any_json_type_fall_back_with_a_record(self):
         commit = {'order': '0-1-2-3-4', 'rationale': 'r'}
@@ -355,7 +355,7 @@ class LiveDecisions(unittest.TestCase):
             self.assertEqual([s['status'] for s in record['react']], ['rejected'] * 4, reply)
             self.assertTrue(all(s['feedback']['error'] for s in record['react']), reply)
             json.dumps(record)
-        with mock.patch.object(controllers, 'reply_problem', side_effect=KeyError('validator bug')):
+        with mock.patch.object(order_controller, 'reply_problem', side_effect=KeyError('validator bug')):
             policy, record = self.call(react(lambda m, t: {'tool': 'commit_order'}))
         self.assertEqual((record['source'], record['react'][0]['status']), ('fallback:no_valid_commit', 'rejected'))
         self.assertIn('unreadable reply', record['react'][0]['feedback']['error'])
@@ -379,7 +379,7 @@ class LiveDecisions(unittest.TestCase):
         self.assertNotIn('restart', sources[0])
 
         script = ("import sys, time; sys.path[:0] = [r'%s', r'%s']\n"
-                  "import test_controllers as t, controllers\n"
+                  "import test_order_controller as t, research.controller.order_controller\n"
                   "from Stonepacker2D.stack.selection import controlled_policy\n"
                   "c = t.react(lambda m, tools: time.sleep(30), llm_timeout=0.2)\n"
                   "c.sink = lambda r: print(r['source'])\n"
@@ -437,13 +437,13 @@ class LiveDecisions(unittest.TestCase):
 class OfflineControllers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.result = check_case.result_dirs(WALL)[0]
-        cls.null = controllers.replay(cls.result, {'kind': 'null'})
+        cls.result = check_run.result_dirs(WALL)[0]
+        cls.null = order_controller.replay(cls.result, {'kind': 'null'})
 
     def test_null_keeps_paper_and_passes_the_trace_check(self):
         self.assertFalse(any(r['final']['switched'] for r in self.null))
         self.assertEqual({r['final']['order'] for r in self.null}, {'3-0-2-1-4'})
-        report = controllers.check(self.result, self.null, {'kind': 'null'})
+        report = order_controller.check(self.result, self.null, {'kind': 'null'})
         self.assertTrue(report['ok'], report['problems'][:3])
         self.assertEqual((report['records'], report['decision_points']), (23, 14))
 
@@ -451,7 +451,7 @@ class OfflineControllers(unittest.TestCase):
         def tampered(edit):
             records = json.loads(json.dumps(self.null))
             edit(records)
-            return controllers.check(self.result, records, {'kind': 'null'})
+            return order_controller.check(self.result, records, {'kind': 'null'})
         edits = [lambda rs: rs[5]['final'].update(order='0-1-2-3-4'),
                  lambda rs: rs[5]['final'].update(switched=True),
                  lambda rs: rs[5]['final'].update(stone_id=99, outcome=1),
@@ -461,8 +461,8 @@ class OfflineControllers(unittest.TestCase):
                  lambda rs: rs.pop()]
         for edit in edits:
             self.assertFalse(tampered(edit)['ok'])
-        self.assertFalse(controllers.check(self.result, self.null, {'kind': 'random', 'seed': 1})['ok'])
-        self.assertFalse(controllers.check(self.result, self.null)['ok'])  # this wall's receipt names no controller
+        self.assertFalse(order_controller.check(self.result, self.null, {'kind': 'random', 'seed': 1})['ok'])
+        self.assertFalse(order_controller.check(self.result, self.null)['ok'])  # this wall's receipt names no controller
 
     def test_observation_holds_no_ids_rng_or_outcomes_of_the_wall(self):
         for r in self.null:
@@ -477,28 +477,28 @@ class OfflineControllers(unittest.TestCase):
         self.assertEqual(self.null[0]['observation']['memory'], {'stones': {}, 'recent': []})
 
     def test_outcome_classes_are_the_distinct_picks_of_the_120_orders(self):
-        import counterfactual
-        poses = counterfactual.step_options(self.result, set()).groupby('step').apply(
+        from research.analysis import counterfactual_branches
+        poses = counterfactual_branches.step_options(self.result, set()).groupby('step').apply(
             lambda g: len(g.groupby(['stone', 'rotation', 'x', 'y'])))
         n = {r['step']: r['n_outcomes'] for r in self.null}
         self.assertEqual({s: n[s] for s in poses.index}, poses.to_dict())
 
     def test_random_is_reproducible_and_seeded(self):
-        a, b, c = (controllers.replay(self.result, {'kind': 'random', 'seed': s}) for s in (1, 1, 2))
+        a, b, c = (order_controller.replay(self.result, {'kind': 'random', 'seed': s}) for s in (1, 1, 2))
         self.assertEqual(a, b)
         self.assertNotEqual([r['final']['order'] for r in a], [r['final']['order'] for r in c])
 
     def test_matched_random_switches_only_at_the_given_keys_and_never_to_paper(self):
-        keys = [list(controllers.decision_key(r)) for r in self.null if r['decision_point']][::3]
-        records = controllers.replay(self.result, {'kind': 'random', 'seed': 3, 'steps': keys})
+        keys = [list(order_controller.decision_key(r)) for r in self.null if r['decision_point']][::3]
+        records = order_controller.replay(self.result, {'kind': 'random', 'seed': 3, 'steps': keys})
         for r in records:
-            matched = list(controllers.decision_key(r)) in keys
+            matched = list(order_controller.decision_key(r)) in keys
             self.assertEqual(r['final']['switched'], matched)
             if matched:
                 self.assertFalse(r['observation']['outcomes'][r['final']['outcome']]['is_paper'])
 
     def test_rule_switches_follow_its_conditions(self):
-        records = controllers.replay(self.result, {'kind': 'rule'})
+        records = order_controller.replay(self.result, {'kind': 'rule'})
         for r in (r for r in records if r['final']['switched']):
             obs, pick = r['observation'], r['observation']['outcomes'][r['final']['outcome']]
             self.assertIn(r['source'], ('rule:scarcity', 'rule:llc_drop'))
@@ -507,7 +507,7 @@ class OfflineControllers(unittest.TestCase):
                 self.assertLessEqual(next(s for s in obs['sampled'] if s['stone'] == pick['stone'])['feasible_rotations'], 1)
 
     def test_react_tool_flow_is_logged_and_commits_a_legal_order(self):
-        records = controllers.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}})
+        records = order_controller.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}})
         for r in (r for r in records if r['decision_point']):
             self.assertEqual([s['tool'] for s in r['react']], ['list_order_outcomes', 'explain_order', 'commit_order'])
             self.assertTrue(all(s['status'] == 'ok' and s['thought'] and 'feedback' in s for s in r['react']))
@@ -517,14 +517,14 @@ class OfflineControllers(unittest.TestCase):
 
     def test_invalid_actions_fall_back_to_paper(self):
         for mode, error in (('invalid', 'permutation'), ('stone', 'unexpected arguments')):
-            records = controllers.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': mode}})
+            records = order_controller.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': mode}})
             for r in (r for r in records if r['decision_point']):
                 self.assertEqual((r['source'], r['final']['switched'], len(r['react'])), ('fallback:no_valid_commit', False, 4))
                 self.assertEqual(r['react'][0]['status'], 'rejected')
                 self.assertIn(error, r['react'][0]['feedback']['error'])
 
     def test_wall_budget_falls_back_to_paper(self):
-        records = controllers.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}, 'max_decisions': 2})
+        records = order_controller.replay(self.result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}, 'max_decisions': 2})
         sources = [r['source'] for r in records if r['decision_point']]
         self.assertEqual(sources[:2], ['llm', 'llm'])
         self.assertEqual(set(sources[2:]), {'skip:wall_budget'})
@@ -537,9 +537,9 @@ class OfflineControllers(unittest.TestCase):
             return {'thought': 't', 'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 't'}}
         controller = react(llm, tool_feedback=False)
         controller.sink = lambda r: None
-        for meta, a in controllers.trace_events(self.result):
+        for meta, a in order_controller.trace_events(self.result):
             if not seen:
-                controller(PAPER, controllers.context_from_trace(meta, a))
+                controller(PAPER, order_controller.context_from_trace(meta, a))
         self.assertEqual(seen[0][0], ['commit_order'])
         self.assertNotIn('outcomes', seen[0][1])
 
@@ -550,21 +550,21 @@ class InterventionTrace(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.result = check_case.result_dirs(RANDOM_WALL)[0]
-        cls.base = controllers.base_policy(RANDOM_WALL)
+        cls.result = check_run.result_dirs(RANDOM_WALL)[0]
+        cls.base = order_controller.base_policy(RANDOM_WALL)
 
     def test_r3_replay_refuses_and_rerun_starts_from_the_receipt_base(self):
         with self.assertRaisesRegex(ValueError, 'controller'):
-            controllers.replay(self.result, {'kind': 'null'})
-        null = controllers.rerun(self.result, {'kind': 'null'}, self.base)
+            order_controller.replay(self.result, {'kind': 'null'})
+        null = order_controller.rerun(self.result, {'kind': 'null'}, self.base)
         self.assertEqual({r['final']['order'] for r in null}, {'3-0-2-1-4'})
         self.assertEqual({r['observation']['base_order'] for r in null}, {'3-0-2-1-4'})
-        traced = {tuple(m['policy']['order']) for m, _ in controllers.trace_events(self.result)}
+        traced = {tuple(m['policy']['order']) for m, _ in order_controller.trace_events(self.result)}
         self.assertGreater(len(traced), 1)
 
     def test_r4_rerun_records_pass_and_tampered_ones_fail(self):
-        records = controllers.rerun(self.result, {'kind': 'random', 'seed': 1}, self.base)
-        report = controllers.check(self.result, records)
+        records = order_controller.rerun(self.result, {'kind': 'random', 'seed': 1}, self.base)
+        report = order_controller.check(self.result, records)
         self.assertTrue(report['ok'], report['problems'][:3])
         self.assertGreater(report['switches'], 0)
         for edit in (lambda r: r['final'].update(switched=False), lambda r: r['final'].update(stone_id=99),
@@ -572,16 +572,16 @@ class InterventionTrace(unittest.TestCase):
             bad = json.loads(json.dumps(records))
             for r in bad:
                 edit(r)
-            self.assertFalse(controllers.check(self.result, bad)['ok'])
-        self.assertFalse(controllers.check(self.result, controllers.rerun(self.result, {'kind': 'null'}, self.base))['ok'])
+            self.assertFalse(order_controller.check(self.result, bad)['ok'])
+        self.assertFalse(order_controller.check(self.result, order_controller.rerun(self.result, {'kind': 'null'}, self.base))['ok'])
 
     def test_s3_missing_or_inconsistent_trace_fails_the_check(self):
         spec = {'kind': 'random', 'seed': 1}
-        events = list(controllers.trace_events(self.result))
+        events = list(order_controller.trace_events(self.result))
 
         def report(evs, stopped=False):
-            with mock.patch.object(controllers, 'trace_events', lambda result: iter(copy.deepcopy(evs))):
-                return controllers.check(self.result, controllers.rerun(self.result, spec, self.base)[:len(evs)],
+            with mock.patch.object(order_controller, 'trace_events', lambda result: iter(copy.deepcopy(evs))):
+                return order_controller.check(self.result, order_controller.rerun(self.result, spec, self.base)[:len(evs)],
                                          stopped=stopped)
 
         def edit(k, **arrays):
@@ -605,26 +605,26 @@ class InterventionTrace(unittest.TestCase):
 def null_records():
     """NULL_WALL's controller records as the current code writes them (the wall predates
     tool_table_sha256), with the live outcome geometry of its own records."""
-    src = check_case.result_dirs(NULL_WALL)[0]
-    geometry = controllers.LiveGeometry(jsonl(src / 'trace' / 'controller.jsonl'), list(controllers.trace_events(src)))
-    return [json.dumps(r) for r in controllers.rerun(src, {'kind': 'null'}, controllers.base_policy(NULL_WALL), geometry=geometry)]
+    src = check_run.result_dirs(NULL_WALL)[0]
+    geometry = order_controller.LiveGeometry(jsonl(src / 'trace' / 'controller.jsonl'), list(order_controller.trace_events(src)))
+    return [json.dumps(r) for r in order_controller.rerun(src, {'kind': 'null'}, order_controller.base_policy(NULL_WALL), geometry=geometry)]
 
 
 def unverified_only(trace):
     """True if a trace check found no defect, only what walls recorded before candidate pixels,
-    the ledger and the run manifest cannot prove (run_case's 'not fully verified' notes)."""
+    the ledger and the run manifest cannot prove (run_wall's 'not fully verified' notes)."""
     return all(p.startswith('not fully verified: ') for p in trace['problems'])
 
 
 @unittest.skipUnless(NULL_WALL.exists(), 'P1-r2 Null run not present')
 class StoppedRuns(unittest.TestCase):
-    """run_case.verified_trace on copies of a Null wall, cut the way --placements N leaves a run."""
+    """run_wall.verified_trace on copies of a Null wall, cut the way --placements N leaves a run."""
 
     def copy_run(self, dst, events=None, records=None, committed=None):
         """dst: receipt, decisions, commits and the first `events` trace events of NULL_WALL; records:
         how many controller records to keep (default one per kept event), or a list of them;
         committed: only attempts whose events all come before it have their commit."""
-        src = check_case.result_dirs(NULL_WALL)[0]
+        src = check_run.result_dirs(NULL_WALL)[0]
         out = dst / src.relative_to(NULL_WALL)
         (out / 'trace').mkdir(parents=True)
         shutil.copy2(NULL_WALL / 'receipt.json', dst / 'receipt.json')
@@ -651,19 +651,19 @@ class StoppedRuns(unittest.TestCase):
         wrong['final']['switched'] = True
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            full = run_case.verified_trace(self.copy_run(tmp / 'full'), args, 'PROCESS_PASS', None)
+            full = run_wall.verified_trace(self.copy_run(tmp / 'full'), args, 'PROCESS_PASS', None)
             self.assertTrue(unverified_only(full), full['problems'])
-            stopped = run_case.verified_trace(self.copy_run(tmp / 'stopped', 10, 11), args, 'STOPPED_AFTER_PLACEMENTS', stop)
+            stopped = run_wall.verified_trace(self.copy_run(tmp / 'stopped', 10, 11), args, 'STOPPED_AFTER_PLACEMENTS', stop)
             self.assertTrue(unverified_only(stopped), stopped['problems'])
             self.assertEqual(stopped['controller'][0]['unverified_trailing_records'], 1)
             for name, records in (('a record missing', lines[:3] + lines[4:10]), ('a wrong record', lines[:3] + [json.dumps(wrong)] + lines[4:10]),
                                   ('no records', False), ('two extra records', 12)):
-                trace = run_case.verified_trace(self.copy_run(tmp / name, 10, records), args, 'STOPPED_AFTER_PLACEMENTS', stop)
+                trace = run_wall.verified_trace(self.copy_run(tmp / name, 10, records), args, 'STOPPED_AFTER_PLACEMENTS', stop)
                 self.assertFalse(unverified_only(trace), name)
-                self.assertEqual(run_case.final_status('STOPPED_AFTER_PLACEMENTS', trace, stop), 'INCOMPLETE_TRACE', name)
+                self.assertEqual(run_wall.final_status('STOPPED_AFTER_PLACEMENTS', trace, stop), 'INCOMPLETE_TRACE', name)
             unfinished = self.copy_run(tmp / 'unfinished', 10, committed=9)  # event 9 has no commit yet
-            self.assertTrue(unverified_only(run_case.verified_trace(unfinished, args, 'STOPPED_AFTER_PLACEMENTS', stop)))
-            self.assertFalse(controllers.check(check_case.result_dirs(unfinished)[0], stopped=False)['ok'])
+            self.assertTrue(unverified_only(run_wall.verified_trace(unfinished, args, 'STOPPED_AFTER_PLACEMENTS', stop)))
+            self.assertFalse(order_controller.check(check_run.result_dirs(unfinished)[0], stopped=False)['ok'])
 
     def test_t9_a_trailing_record_must_be_the_next_call_of_the_receipt_controller(self):
         args, stop = SimpleNamespace(no_trace=False, controller={'kind': 'null'}), {'verified': True}
@@ -675,7 +675,7 @@ class StoppedRuns(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for name, record in bad.items():
                 run = self.copy_run(Path(tmp) / name, 10, lines[:10] + [json.dumps(record)])
-                trace = run_case.verified_trace(run, args, 'STOPPED_AFTER_PLACEMENTS', stop)
+                trace = run_wall.verified_trace(run, args, 'STOPPED_AFTER_PLACEMENTS', stop)
                 self.assertFalse(trace['ok'], name)
                 self.assertTrue(any('trailing record' in p for p in trace['problems']), name)
 
@@ -685,7 +685,7 @@ TWO_SIDED_WALL = REPO / 'research' / 'runs' / 'validation-pr-paper-right-01'
 
 def copy_wall(run, dst):
     """receipt, decisions.txt and trace of a run's (first) result directory; returns the copy's result directory."""
-    src = check_case.result_dirs(run)[0]
+    src = check_run.result_dirs(run)[0]
     out = dst / src.relative_to(run)
     shutil.copytree(src / 'trace', out / 'trace')
     shutil.copy2(src / 'decisions.txt', out / 'decisions.txt')
@@ -735,11 +735,11 @@ def edit_event(result, k, **arrays):
 
 @unittest.skipUnless(NULL_WALL.exists() and TWO_SIDED_WALL.exists(), 'P1-r2 Null run or two-sided validation run not present')
 class TraceChain(unittest.TestCase):
-    """check_case.chain_problems (run_case.check_commits, controllers.check): the third review's
+    """check_run.chain_problems (run_wall.check_commits, order_controller.check): the third review's
     counterexamples (T1..T8; T9 is in StoppedRuns) on copies of real walls, each consistent but in one link."""
 
     def problems(self, run, stopped=False):
-        return run_case.check_commits(run, stopped)
+        return run_wall.check_commits(run, stopped)
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -763,7 +763,7 @@ class TraceChain(unittest.TestCase):
         a = selection.load_trace(result / 'trace' / f"e{side['event']:05d}.npz")[1]
         n = len(a['sampled_ids'])  # the same stone at another feasible rotation: inventory stays consistent
         other = next(k for k in range(side['index'] % n, len(a['x']), n) if k != side['index'] and a['x'][k] >= 0)
-        pose = check_case.candidate_pose(a, other)
+        pose = check_run.candidate_pose(a, other)
         side['index'] = other
         c.update(stone_id=pose[0], x_world=pose[1], y=pose[2], rotation_world=pose[3], rotation_label=pose[4])
         rows[0] = ';'.join(map(str, (c['step'], pose[0], pose[1], pose[2], pose[4])))
@@ -773,7 +773,7 @@ class TraceChain(unittest.TestCase):
 
     def test_t2_a_stopped_run_ends_only_in_a_prefix_of_the_write_order(self):
         # one event per attempt in the Null wall; attempt j is commit j and event j
-        commits = jsonl(check_case.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
+        commits = jsonl(check_run.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
         j = [i for i, c in enumerate(commits) if c['outcome'] == 'placed'][4]
         before = sum(c['outcome'] == 'placed' for c in commits[:j])
         cases = {  # (events, commits, decisions rows): ok when stopped
@@ -802,7 +802,7 @@ class TraceChain(unittest.TestCase):
                  'fewer sampled stones than nb_stones': {'sampled_ids': sampled[:-1],
                                                          'stone_id': a['stone_id'][:len(a['stone_id']) // len(sampled) * (len(sampled) - 1)]}}
         for name, arrays in cases.items():
-            shutil.copy2(check_case.result_dirs(NULL_WALL)[0] / 'trace' / 'e00003.npz', result / 'trace' / 'e00003.npz')
+            shutil.copy2(check_run.result_dirs(NULL_WALL)[0] / 'trace' / 'e00003.npz', result / 'trace' / 'e00003.npz')
             edit_event(result, 3, **arrays)
             self.assertNotEqual(self.problems(self.tmp / 'ids'), [], name)
 
@@ -810,9 +810,9 @@ class TraceChain(unittest.TestCase):
         result = self.wall('tmp')
         n = len(selection.published_events(result / 'trace'))
         shutil.copy2(result / 'trace' / 'e00000.npz', result / 'trace' / f'e{n:05d}.tmp.npz')
-        self.assertEqual(len(list(controllers.trace_events(result))), n)
-        self.assertEqual(len(check_case.load_result(result)[0]), n)
-        self.assertEqual(run_case.check_trace(self.tmp / 'tmp')['files'], n)
+        self.assertEqual(len(list(order_controller.trace_events(result))), n)
+        self.assertEqual(len(check_run.load_result(result)[0]), n)
+        self.assertEqual(run_wall.check_trace(self.tmp / 'tmp')['files'], n)
         self.assertTrue(any('unpublished' in p for p in self.problems(self.tmp / 'tmp')))
         self.assertEqual(self.problems(self.tmp / 'tmp', stopped=True), [])
         shutil.move(result / 'trace' / f'e{n:05d}.tmp.npz', result / 'trace' / 'e00001.tmp.npz')
@@ -824,7 +824,7 @@ class TraceChain(unittest.TestCase):
         j, c = next((i, c) for i, c in enumerate(commits) if not c['side_tie'] and all(s['ok'] for s in c['sides'].values()))
         flipped = {'left': 'right', 'right': 'left'}[c['chosen_side']]
         a = selection.load_trace(result / 'trace' / f"e{c['sides'][flipped]['event']:05d}.npz")[1]
-        pose = check_case.candidate_pose(a, c['sides'][flipped]['index'])
+        pose = check_run.candidate_pose(a, c['sides'][flipped]['index'])
         c.update(chosen_side=flipped, stone_id=pose[0], x_world=pose[1], y=pose[2], rotation_world=pose[3], rotation_label=pose[4])
         placed = sum(x['outcome'] == 'placed' for x in commits[:j])
         lines = (result / 'decisions.txt').read_text(encoding='utf-8').splitlines()
@@ -882,13 +882,13 @@ class ProcessIsolation(unittest.TestCase):
         return policy, records[-1]
 
     def test_inline_and_process_give_the_same_records(self):
-        result = check_case.result_dirs(WALL)[0]
-        base = controllers.base_policy(WALL)
-        llm = controllers.rerun(result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, base)
-        steps = [list(controllers.decision_key(r)) for r in llm if r['final']['switched']]
-        for spec in controllers.OFFLINE[:4] + [{'kind': 'random', 'seed': 1, 'steps': steps}]:
-            inline, process = (controllers.rerun(result, spec, base, t) for t in ('inline', 'process'))
-            self.assertEqual(controllers.comparable(inline), controllers.comparable(process), spec)
+        result = check_run.result_dirs(WALL)[0]
+        base = order_controller.base_policy(WALL)
+        llm = order_controller.rerun(result, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, base)
+        steps = [list(order_controller.decision_key(r)) for r in llm if r['final']['switched']]
+        for spec in order_controller.OFFLINE[:4] + [{'kind': 'random', 'seed': 1, 'steps': steps}]:
+            inline, process = (order_controller.rerun(result, spec, base, t) for t in ('inline', 'process'))
+            self.assertEqual(order_controller.comparable(inline), order_controller.comparable(process), spec)
             self.assertTrue(sum(r['final']['switched'] for r in process) or spec['kind'] == 'null', spec)
         self.assertFalse(multiprocessing.active_children())
 
@@ -923,7 +923,7 @@ class ProcessIsolation(unittest.TestCase):
 
     def test_llm_hangs_and_crashes_in_the_worker_fall_back_and_count_as_failures(self):
         spec = {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'hang@1'}, 'llm_timeout': 1.0, 'max_llm_failures': 2}
-        client = controllers.make_controller(spec)
+        client = order_controller.make_controller(spec)
         _, timed_out = self.call(client)
         self.assertEqual((timed_out['source'], timed_out['react'][0]['status']), ('fallback:llm_timeout', 'timeout'))
         self.assertIsNone(client.transport.process)  # killed with the abandoned call in it
@@ -937,21 +937,21 @@ class ProcessIsolation(unittest.TestCase):
         self.assertTrue(reaped(client))
 
     def test_a_worker_failure_of_a_deterministic_controller_fails_acceptance(self):
-        result = check_case.result_dirs(WALL)[0]
-        base, records = controllers.base_policy(WALL), []
+        result = check_run.result_dirs(WALL)[0]
+        base, records = order_controller.base_policy(WALL), []
         client = process_client({'kind': 'random', 'seed': 1}, bad='garbage', fail_at=4)
         client.sink = records.append
-        for meta, a in controllers.trace_events(result):
-            client(types.MappingProxyType(dict(base)), controllers.context_from_trace(meta, a))
+        for meta, a in order_controller.trace_events(result):
+            client(types.MappingProxyType(dict(base)), order_controller.context_from_trace(meta, a))
         self.assertTrue(reaped(client))
         self.assertIn('fallback:worker_protocol_error', [r['source'] for r in records])
-        report = controllers.check(result, records, {'kind': 'random', 'seed': 1})
+        report = order_controller.check(result, records, {'kind': 'random', 'seed': 1})
         self.assertFalse(report['ok'])
         self.assertTrue(any('deterministic controller failed' in p for p in report['problems']))
 
     def test_the_worker_does_not_outlive_its_main_process(self):
         script = ("import sys; sys.path[:0] = [r'%s', r'%s']\n"
-                  "import test_controllers as t\n"
+                  "import test_order_controller as t\n"
                   "from Stonepacker2D.stack.selection import controlled_policy\n"
                   "if __name__ == '__main__':\n"
                   "    idle = t.process_client({'kind': 'null'})\n"
@@ -987,23 +987,23 @@ class RecordAndReplay(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.result, cls.base = check_case.result_dirs(WALL)[0], controllers.base_policy(WALL)
-        cls.keep = controllers.rerun(cls.result, cls.KEEP, cls.base)  # keep_paper: consistent with this base wall
-        cls.max_llc = controllers.rerun(cls.result, cls.MAX_LLC, cls.base)
+        cls.result, cls.base = check_run.result_dirs(WALL)[0], order_controller.base_policy(WALL)
+        cls.keep = order_controller.rerun(cls.result, cls.KEEP, cls.base)  # keep_paper: consistent with this base wall
+        cls.max_llc = order_controller.rerun(cls.result, cls.MAX_LLC, cls.base)
 
     def replayed(self, records, spec):
-        llm = controllers.ReplayLLM(records, *controllers.llm_identity(spec['llm']))
-        worker = {k: controllers.full_spec(spec)[k] for k in controllers.WORKER_KEYS['react']}
-        transport = controllers.ReplayedFailures(lambda: controllers.ReActPolicy(llm, **worker), records)
-        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-            return controllers.rerun(self.result, spec, self.base, transport), llm.diverged
+        llm = order_controller.ReplayLLM(records, *order_controller.llm_identity(spec['llm']))
+        worker = {k: order_controller.full_spec(spec)[k] for k in order_controller.WORKER_KEYS['react']}
+        transport = order_controller.ReplayedFailures(lambda: order_controller.ReActPolicy(llm, **worker), records)
+        with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            return order_controller.rerun(self.result, spec, self.base, transport), llm.diverged
 
     def test_every_call_has_a_transcript_whose_hash_is_its_request(self):
         for r in (r for r in self.max_llc if r['decision_point']):
             self.assertEqual(len(r['transcripts']), len(r['react']))
             for k, t in enumerate(r['transcripts']):
                 self.assertEqual((t['call'], t['status'], t['request']['model']), (k, 'ok', 'mock:max_llc'))
-                self.assertEqual(t['request_sha256'], controllers.request_sha256(t['request']))
+                self.assertEqual(t['request_sha256'], order_controller.request_sha256(t['request']))
                 self.assertEqual(len(t['request']['messages']), 2 + 2 * k)
                 self.assertEqual({**r['react'][k]}, {**t['response']['parsed'], 'status': 'ok', 'feedback': r['react'][k]['feedback']})
 
@@ -1011,9 +1011,9 @@ class RecordAndReplay(unittest.TestCase):
         for records, spec in ((self.max_llc, self.MAX_LLC), (self.keep, self.KEEP)):
             replayed, diverged = self.replayed(records, spec)
             self.assertEqual(diverged, [])
-            self.assertEqual(controllers.comparable(replayed), controllers.comparable(records))
-        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-            report = controllers.check(self.result, self.keep, self.KEEP)
+            self.assertEqual(order_controller.comparable(replayed), order_controller.comparable(records))
+        with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            report = order_controller.check(self.result, self.keep, self.KEEP)
         self.assertTrue(report['ok'], report['problems'][:3])
 
     def test_tampered_transcripts_or_requests_fail_the_check(self):
@@ -1022,8 +1022,8 @@ class RecordAndReplay(unittest.TestCase):
         def tampered(edit):
             records = copy.deepcopy(self.keep)
             edit(records[k])
-            with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-                return controllers.check(self.result, records, self.KEEP)
+            with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+                return order_controller.check(self.result, records, self.KEEP)
         edits = {'request message': lambda r: r['transcripts'][0]['request']['messages'][1].update(content='{}'),
                  'request hash': lambda r: r['transcripts'][0].update(request_sha256='0' * 64),
                  'recorded reply': lambda r: r['transcripts'][0]['response']['parsed']['arguments'].update(rationale='other'),
@@ -1046,16 +1046,16 @@ class RecordAndReplay(unittest.TestCase):
             client = react(llm, llm_timeout=0.3)
             client.sink = live.append
             controlled_policy(PAPER, client, two_outcomes())
-            replay, again = controllers.ReplayLLM(live, None, {}), []  # test LLMs name no model
-            client = controllers.ControllerClient(client.spec_, controllers.ReplayedFailures(
-                lambda: controllers.ReActPolicy(replay, llm_timeout=0.3), live), again.append)
+            replay, again = order_controller.ReplayLLM(live, None, {}), []  # test LLMs name no model
+            client = order_controller.ControllerClient(client.spec_, order_controller.ReplayedFailures(
+                lambda: order_controller.ReActPolicy(replay, llm_timeout=0.3), live), again.append)
             start = time.monotonic()
             controlled_policy(PAPER, client, two_outcomes())
             self.assertLess(time.monotonic() - start, 0.25)
             self.assertEqual((live[0]['source'], replay.diverged), (source, []))
-            self.assertEqual(controllers.comparable(again), controllers.comparable(live))
+            self.assertEqual(order_controller.comparable(again), order_controller.comparable(live))
         live = [{**self.max_llc[0], 'source': 'fallback:worker_error', 'error': 'the worker exited with code 3'}]
-        transport = controllers.ReplayedFailures(lambda: self.fail('the policy ran'), live)
+        transport = order_controller.ReplayedFailures(lambda: self.fail('the policy ran'), live)
         request = {'observation': live[0]['observation'], 'base_order': '3-0-2-1-4', 'orders': {}}
         self.assertEqual(transport.decide(request), ('worker_error', 'the worker exited with code 3'))
 
@@ -1070,8 +1070,8 @@ class RecordAndReplay(unittest.TestCase):
                  'nan': ({'thought': float('nan')}, {'thought': {'__type__': 'float'}}),
                  'non-str keys': ({1: 'x'}, {'__type__': 'dict'})}
         for name, (reply, parsed) in cases.items():
-            self.assertEqual(controllers.parse_reply(reply), parsed, name)
-        flat = json.dumps(controllers.parse_reply(deep))
+            self.assertEqual(order_controller.parse_reply(reply), parsed, name)
+        flat = json.dumps(order_controller.parse_reply(deep))
         self.assertIn('__type__', flat)
         self.assertLessEqual(flat.count('['), 33)
         policy, record = LiveDecisions.call(None, react(lambda m, t: Evil()))
@@ -1108,7 +1108,7 @@ def pixels_from_base(result, records, events):
                     mask = np.zeros(wall.shape, bool)
                     mask[o['y']:o['y'] + shape.shape[0], o['x']:o['x'] + shape.shape[1]] = shape
                     break
-            pixels.append(None if mask is None else controllers.encode_pixels(mask))
+            pixels.append(None if mask is None else order_controller.encode_pixels(mask))
         r['outcome_pixels'] = pixels
     return out
 
@@ -1122,15 +1122,15 @@ class GeometryReplay(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.result = check_case.result_dirs(REACT_WALL)[0]
+        cls.result = check_run.result_dirs(REACT_WALL)[0]
         cls.records = jsonl(cls.result / 'trace' / 'controller.jsonl')
-        cls.events = list(controllers.trace_events(cls.result))
+        cls.events = list(order_controller.trace_events(cls.result))
         cls.points = [i for i, r in enumerate(cls.records) if r['decision_point'] and len(r['observation']['outcomes']) > 1]
         cls.pixeled = pixels_from_base(cls.result, cls.records, cls.events)
 
     def check(self, records, result=None):
-        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-            return controllers.check(result or self.result, records=records)
+        with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            return order_controller.check(result or self.result, records=records)
 
     def test_g1_the_live_wall_replays_without_an_llm_but_is_only_partly_verified(self):
         report = self.check(copy.deepcopy(self.records))
@@ -1211,12 +1211,12 @@ class GeometryReplay(unittest.TestCase):
 
     def test_g5_live_geometry_is_found_by_pose_not_by_position(self):
         i = self.points[0]
-        observer, base = controllers.Observer(), controllers.base_policy(REACT_WALL)
+        observer, base = order_controller.Observer(), order_controller.base_policy(REACT_WALL)
         for meta, a in self.events[:self.records[i]['event'] + 1]:
-            obs, info = observer(base, controllers.context_from_trace(meta, a))
+            obs, info = observer(base, order_controller.context_from_trace(meta, a))
         live_record = copy.deepcopy(self.records[i])
         live_record['observation']['outcomes'].reverse()
-        live = controllers.LiveGeometry([live_record], self.events)
+        live = order_controller.LiveGeometry([live_record], self.events)
         live.fill(obs, info['classes'])
         self.assertEqual(([o['geometry'] for o in obs['outcomes']], live.problems),
                          ([o['geometry'] for o in self.records[i]['observation']['outcomes']], []))
@@ -1228,7 +1228,7 @@ class GeometryReplay(unittest.TestCase):
     def test_g6_acceptance_of_a_built_wall_requires_a_full_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = copy_wall(NULL_WALL, Path(tmp))
-            accepted = run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})
+            accepted = run_wall.check_controller(Path(tmp), {'ok': True, 'problems': []})
             self.assertFalse(accepted['ok'])  # recorded before pixels, ledger and manifest
             self.assertTrue(unverified_only(accepted), accepted['problems'])
             path = out / 'trace' / 'controller.jsonl'
@@ -1237,7 +1237,7 @@ class GeometryReplay(unittest.TestCase):
                 for o in r['observation']['outcomes']:
                     o['geometry'] = None
             jsonl(path, records)
-            stripped = run_case.check_controller(Path(tmp), {'ok': True, 'problems': []})
+            stripped = run_wall.check_controller(Path(tmp), {'ok': True, 'problems': []})
         self.assertIn('not fully verified: no live outcome geometry', stripped['problems'])
 
 
@@ -1260,7 +1260,7 @@ class FourthReview(unittest.TestCase):
 
     def transport(self, bad, **kw):
         lines = []
-        t = controller_worker.ProcessTransport({**controllers.full_spec({'kind': 'null'}), 'bad': bad}, target=deaf_or_silent_worker, **kw)
+        t = controller_worker.ProcessTransport({**order_controller.full_spec({'kind': 'null'}), 'bad': bad}, target=deaf_or_silent_worker, **kw)
         t.log = lines.append
         return t, lines
 
@@ -1287,7 +1287,7 @@ class FourthReview(unittest.TestCase):
         self.assertIsNone(client.transport.process)  # before any test cleanup
         self.assertFalse(multiprocessing.active_children())
         self.assertIn(('close', 'worker_protocol_error', False), [(e.get('action'), e.get('reason'), e.get('alive')) for e in lines])
-        self.assertEqual(controllers.worker_problems(lines, False)[0], [])
+        self.assertEqual(order_controller.worker_problems(lines, False)[0], [])
 
     def test_r4_3_a_spawn_failure_is_cleaned_up_and_falls_back(self):
         client = process_client({'kind': 'null'})
@@ -1302,8 +1302,8 @@ class FourthReview(unittest.TestCase):
         self.assertTrue(reaped(client))
 
     def test_r4_4_the_fingerprint_covers_every_research_module_a_run_executes(self):
-        self.assertLessEqual({'research/controller_worker.py', 'research/llm_adapter.py', 'research/check_case.py',
-                              'research/controllers.py'}, set(run_case.code_fingerprint()))
+        self.assertLessEqual({'research/controller/worker.py', 'research/controller/llm_api.py', 'research/walls/check_run.py',
+                              'research/controller/order_controller.py'}, set(run_wall.code_fingerprint()))
 
     def test_r4_5_placed_means_added_to_the_wall(self):
         def edited(change):
@@ -1311,8 +1311,8 @@ class FourthReview(unittest.TestCase):
             self.addCleanup(shutil.rmtree, tmp)
             result = copy_wall(NULL_WALL, tmp)
             change(result)
-            return run_case.check_commits(tmp)
-        commits = jsonl(check_case.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
+            return run_wall.check_commits(tmp)
+        commits = jsonl(check_run.result_dirs(NULL_WALL)[0] / 'trace' / 'commits.jsonl')
         k = [i for i, c in enumerate(commits) if c['outcome'] == 'placed'][3]
 
         def commit(**fields):
@@ -1355,17 +1355,17 @@ class FourthReview(unittest.TestCase):
         jsonl(result / 'trace' / 'commits.jsonl', jsonl(result / 'trace' / 'commits.jsonl')[::-1])
         rows = (result / 'decisions.txt').read_text(encoding='utf-8').splitlines()[::-1]
         (result / 'decisions.txt').write_text(''.join(l + '\n' for l in rows), encoding='utf-8')
-        problems = run_case.check_commits(tmp)
+        problems = run_wall.check_commits(tmp)
         self.assertTrue(any('not in the order of their events' in p for p in problems), problems)
-        self.assertNotEqual(run_case.check_commits(tmp, stopped=True), [])
+        self.assertNotEqual(run_wall.check_commits(tmp, stopped=True), [])
 
     def test_r4_7_a_stopped_react_or_rule_tail_is_checked_against_the_full_spec(self):
-        src, base = check_case.result_dirs(NULL_WALL)[0], controllers.base_policy(NULL_WALL)
-        events = list(controllers.trace_events(src))[:10]
+        src, base = check_run.result_dirs(NULL_WALL)[0], order_controller.base_policy(NULL_WALL)
+        events = list(order_controller.trace_events(src))[:10]
         for spec in ({'kind': 'rule'}, {'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'keep'}}):
-            record = controllers.rerun(src, spec, base)[10]
-            self.assertEqual(controllers.trailing_problems(record, spec, events), [], spec)  # the receipt keeps the spec as given
-            self.assertNotEqual(controllers.trailing_problems(record, {**spec, 'kind': 'null'} if spec['kind'] == 'rule'
+            record = order_controller.rerun(src, spec, base)[10]
+            self.assertEqual(order_controller.trailing_problems(record, spec, events), [], spec)  # the receipt keeps the spec as given
+            self.assertNotEqual(order_controller.trailing_problems(record, {**spec, 'kind': 'null'} if spec['kind'] == 'rule'
                                                               else {**spec, 'max_tool_calls': 2}, events), [], spec)
 
     def test_r4_9_model_ledger_and_manifest_bind_what_the_records_say(self):
@@ -1373,15 +1373,15 @@ class FourthReview(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         result, ledger = copy_wall(WALL, tmp), []
-        records = controllers.rerun(result, keep, controllers.base_policy(WALL), ledger=ledger)
+        records = order_controller.rerun(result, keep, order_controller.base_policy(WALL), ledger=ledger)
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
 
         def check(rs=None):
-            with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-                return controllers.check(result, rs, keep)
+            with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+                return order_controller.check(result, rs, keep)
         clean = check()
         self.assertEqual((clean['ok'], clean['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), clean['problems'])
         k = next(i for i, r in enumerate(records) if r['decision_point'])
@@ -1389,7 +1389,7 @@ class FourthReview(unittest.TestCase):
         for r in renamed:
             for t in r.get('transcripts', []):
                 t['request']['model'] = 'another-model'
-                t['request_sha256'] = controllers.request_sha256(t['request'])
+                t['request_sha256'] = order_controller.request_sha256(t['request'])
         self.assertFalse(check(renamed)['ok'])
         relabelled = copy.deepcopy(records)  # Codex: an LLM decision turned into a worker failure
         relabelled[k] = {**{x: v for x, v in records[k].items() if x not in ('transcripts', 'react', 'prompt_sha256')},
@@ -1406,33 +1406,33 @@ class FourthReview(unittest.TestCase):
         self.assertNotEqual(check()['verdict'], 'PASS')
 
     def test_r4_10_usage_is_restored_by_the_replay(self):
-        records = controllers.rerun(check_case.result_dirs(WALL)[0], RecordAndReplay.KEEP, controllers.base_policy(WALL))
+        records = order_controller.rerun(check_run.result_dirs(WALL)[0], RecordAndReplay.KEEP, order_controller.base_policy(WALL))
         for r in records:
             for t in r.get('transcripts', []):
                 t['response']['usage'] = {'input_tokens': 7, 'output_tokens': 3}
-        with mock.patch.object(controllers.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
-            report = controllers.check(check_case.result_dirs(WALL)[0], records, RecordAndReplay.KEEP)
+        with mock.patch.object(order_controller.MockLLM, '__call__', side_effect=AssertionError('an LLM was called')):
+            report = order_controller.check(check_run.result_dirs(WALL)[0], records, RecordAndReplay.KEEP)
         self.assertTrue(report['ok'], report['problems'][:3])
 
     def test_worker_lifecycle_evidence(self):
         start, close = {'type': 'worker', 'action': 'start', 'pid': 1}, {'type': 'worker', 'action': 'close', 'pid': 1, 'alive': False}
         failed = {'type': 'request', 'event': 0, 'status': 'worker_timeout', 'restart': False, 'worker_pid': 1}
-        self.assertEqual(controllers.worker_problems([start, failed, close], False)[0], [])
-        self.assertNotEqual(controllers.worker_problems([start, failed], False)[0], [])  # a failed worker never closed
-        self.assertNotEqual(controllers.worker_problems([start, {**close, 'alive': True}], False)[0], [])
-        self.assertEqual(controllers.worker_problems([start], True)[0], [])  # a stopped run's last worker
-        self.assertNotEqual(controllers.worker_problems([start, close, {**start, 'pid': 2}], False)[0], [])
+        self.assertEqual(order_controller.worker_problems([start, failed, close], False)[0], [])
+        self.assertNotEqual(order_controller.worker_problems([start, failed], False)[0], [])  # a failed worker never closed
+        self.assertNotEqual(order_controller.worker_problems([start, {**close, 'alive': True}], False)[0], [])
+        self.assertEqual(order_controller.worker_problems([start], True)[0], [])  # a stopped run's last worker
+        self.assertNotEqual(order_controller.worker_problems([start, close, {**start, 'pid': 2}], False)[0], [])
 
 
 SAMPLE = {'kind': 'api', 'provider': 'fake', 'model': 'fake-1', 'retry_backoff_s': 0.0}
 
 
 class APIAdapter(unittest.TestCase):
-    """llm_adapter with the fake provider only: no real API is called anywhere."""
+    """llm_api with the fake provider only: no real API is called anywhere."""
 
     def client(self, llm=None, **params):
         spec = {'kind': 'react', 'llm': llm or SAMPLE, **params}
-        return controllers.ControllerClient(spec, controllers.InlineTransport(lambda: controllers.make_policy(spec)), ledger=[].append)
+        return order_controller.ControllerClient(spec, order_controller.InlineTransport(lambda: order_controller.make_policy(spec)), ledger=[].append)
 
     def call(self, client):
         records = []
@@ -1441,18 +1441,18 @@ class APIAdapter(unittest.TestCase):
         return records[-1]
 
     def test_specs_name_model_and_params_and_only_the_fake_provider_is_enabled(self):
-        self.assertEqual(controllers.llm_identity(SAMPLE), ('fake-1', {'temperature': 0.0, 'max_tokens': 1024}))
+        self.assertEqual(order_controller.llm_identity(SAMPLE), ('fake-1', {'temperature': 0.0, 'max_tokens': 1024}))
         for bad in ({**SAMPLE, 'provider': 'anthropic'}, {**SAMPLE, 'provider': 'openai'}):
             with self.assertRaises(NotImplementedError):
-                controllers.make_controller({'kind': 'react', 'llm': bad})
+                order_controller.make_controller({'kind': 'react', 'llm': bad})
         for bad in ({**SAMPLE, 'temperature': 3}, {**SAMPLE, 'max_tokens': 0}, {**SAMPLE, 'max_retries': -1}, {**SAMPLE, 'model': ''},
                     {**SAMPLE, 'key': 'x'}, {k: v for k, v in SAMPLE.items() if k != 'model'}):
             with self.assertRaises(ValueError, msg=bad):
-                controllers.make_controller({'kind': 'react', 'llm': bad})
+                order_controller.make_controller({'kind': 'react', 'llm': bad})
 
     def test_the_main_process_never_builds_the_client(self):
-        with mock.patch.object(llm_adapter.APILLM, '__init__', side_effect=AssertionError('built in the main process')):
-            client = controllers.make_controller({'kind': 'react', 'llm': SAMPLE})
+        with mock.patch.object(llm_api.APILLM, '__init__', side_effect=AssertionError('built in the main process')):
+            client = order_controller.make_controller({'kind': 'react', 'llm': SAMPLE})
         self.assertIsNone(client.transport.process)
         client.ledger = client.transport.log = [].append
         record = self.call(client)  # the worker builds it and answers
@@ -1473,18 +1473,18 @@ class APIAdapter(unittest.TestCase):
         self.assertEqual([a['error'] is None for a in record['transcripts'][0]['response']['attempts']], [False, True])
         record = self.call(self.client({**SAMPLE, 'fake_mode': 'max_llc+fatal@1'}))
         self.assertEqual((record['source'], record['final']['order']), ('fallback:llm_error', '3-0-2-1-4'))
-        always = mock.Mock(side_effect=llm_adapter.TransientError('overloaded'))
-        llm = llm_adapter.APILLM({**SAMPLE, 'max_retries': 1}, sender=always)
-        with self.assertRaises(controllers.LLMFailure):
+        always = mock.Mock(side_effect=llm_api.TransientError('overloaded'))
+        llm = llm_api.APILLM({**SAMPLE, 'max_retries': 1}, sender=always)
+        with self.assertRaises(order_controller.LLMFailure):
             llm([], [])
         self.assertEqual((always.call_count, len(llm.attempts)), (2, 2))
 
     def test_illegal_truncated_or_huge_replies_never_commit(self):
         for text in ('{"tool": "commit_order", "arguments": {"order": "0-0-1-2-3"', '{"tool": "commit_order", "arguments": {"order": [3,0,2,1,4]}}',
                      '"' + 'x' * 200_000 + '"', '{"tool": "commit_order", "arguments": {"order": "0-1-2-3-4", "stone": "S1"}}', ''):
-            llm = llm_adapter.APILLM(SAMPLE, sender=lambda payload, attempt, text=text: {'text': text, 'usage': {'input_tokens': 1, 'output_tokens': 1}})
-            client = controllers.ControllerClient({'kind': 'react', 'llm': SAMPLE}, controllers.InlineTransport(
-                lambda: controllers.ReActPolicy(llm, max_tool_calls=2)), ledger=[].append)
+            llm = llm_api.APILLM(SAMPLE, sender=lambda payload, attempt, text=text: {'text': text, 'usage': {'input_tokens': 1, 'output_tokens': 1}})
+            client = order_controller.ControllerClient({'kind': 'react', 'llm': SAMPLE}, order_controller.InlineTransport(
+                lambda: order_controller.ReActPolicy(llm, max_tool_calls=2)), ledger=[].append)
             record = self.call(client)
             self.assertEqual((record['source'], record['final']['order']), ('fallback:no_valid_commit', '3-0-2-1-4'), text[:40])
 
@@ -1494,13 +1494,13 @@ class APIAdapter(unittest.TestCase):
         self.assertEqual((first['source'], first['transcripts'][0]['response']['attempts'], client.tokens), ('fallback:llm_error', [], 0))
 
     def test_an_api_wall_replays_without_the_provider(self):
-        result, base = check_case.result_dirs(WALL)[0], controllers.base_policy(WALL)
-        step = next(r['step'] for r in controllers.rerun(result, {'kind': 'null'}, base) if r['decision_point'])
+        result, base = check_run.result_dirs(WALL)[0], order_controller.base_policy(WALL)
+        step = next(r['step'] for r in order_controller.rerun(result, {'kind': 'null'}, base) if r['decision_point'])
         spec = {'kind': 'react', 'llm': {**SAMPLE, 'fake_mode': f'keep+transient@{step}'}}  # keep: Paper's own wall
-        records = controllers.rerun(result, spec, base)  # inline: the fake provider answers
+        records = order_controller.rerun(result, spec, base)  # inline: the fake provider answers
         self.assertTrue(any(len(t['response']['attempts']) == 2 for r in records for t in r.get('transcripts', [])))
-        with mock.patch.object(llm_adapter.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
-            report = controllers.check(result, records, spec)
+        with mock.patch.object(llm_api.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
+            report = order_controller.check(result, records, spec)
         self.assertTrue(report['ok'], report['problems'][:3])
 
 FAKE_WALL = REPO / 'research' / 'runs' / 'controllers' / 'p2-mock' / 'react-fake-maxllc-seed20'  # first end-to-end PASS
@@ -1533,7 +1533,7 @@ class FifthReview(unittest.TestCase):
 
     def transport(self, **kw):
         lines = []
-        t = controller_worker.ProcessTransport(controllers.full_spec({'kind': 'null'}), **kw)
+        t = controller_worker.ProcessTransport(order_controller.full_spec({'kind': 'null'}), **kw)
         t.log = lines.append
         return t, lines
 
@@ -1583,7 +1583,7 @@ class FifthReview(unittest.TestCase):
         _, record = self.call(client)  # the retried reap confirms it ended: decisions resume
         self.assertEqual((record['source'], client.transport.started), ('null', 2))
         self.assertTrue(reaped(client))
-        problems = controllers.worker_problems(lines, False)[0]
+        problems = order_controller.worker_problems(lines, False)[0]
         self.assertTrue(any('not confirmed ended' in p for p in problems), problems)  # the run fails acceptance
         self.assertEqual([e.get('worker_pid') for e in lines if e.get('status') == 'worker_unreaped'], [None])
 
@@ -1615,23 +1615,23 @@ class FifthReview(unittest.TestCase):
             kinds = [e.get('action') or e['status'] for e in lines]
             self.assertEqual(kinds, ['start', status, 'close'], bad)
             self.assertEqual(lines[1]['worker_pid'], lines[0]['pid'])
-            self.assertEqual(controllers.worker_problems(lines, False)[0], [], bad)
+            self.assertEqual(order_controller.worker_problems(lines, False)[0], [], bad)
             self.assertTrue(reaped(client))
         start, close = {'type': 'worker', 'action': 'start', 'pid': 7}, {'type': 'worker', 'action': 'close', 'pid': 7, 'alive': False}
         failed = {'type': 'request', 'event': 0, 'status': 'worker_timeout', 'restart': False, 'worker_pid': 7}
-        self.assertNotEqual(controllers.worker_problems([start, close, failed], False)[0], [])  # Codex: close before the request
-        self.assertNotEqual(controllers.worker_problems([start, close, {**failed, 'status': 'ok'}], False)[0], [])
-        self.assertNotEqual(controllers.worker_problems([start, failed, {**close, 'pid': None}], False)[0], [])
+        self.assertNotEqual(order_controller.worker_problems([start, close, failed], False)[0], [])  # Codex: close before the request
+        self.assertNotEqual(order_controller.worker_problems([start, close, {**failed, 'status': 'ok'}], False)[0], [])
+        self.assertNotEqual(order_controller.worker_problems([start, failed, {**close, 'pid': None}], False)[0], [])
 
     def test_r5_4_the_token_budget_is_a_hard_limit_reserved_before_each_attempt(self):
         sends = []
-        sender = llm_adapter.FakeSender({'fake_mode': 'max_llc'})
+        sender = llm_api.FakeSender({'fake_mode': 'max_llc'})
         llm = {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}
 
         def client(**params):
             spec = {'kind': 'react', 'llm': llm, **params}
-            api = llm_adapter.APILLM(llm, sender=lambda p, a: (sends.append(a), sender(p, a))[1])
-            return controllers.ControllerClient(spec, controllers.InlineTransport(lambda: controllers.ReActPolicy(api)), ledger=[].append)
+            api = llm_api.APILLM(llm, sender=lambda p, a: (sends.append(a), sender(p, a))[1])
+            return order_controller.ControllerClient(spec, order_controller.InlineTransport(lambda: order_controller.ReActPolicy(api)), ledger=[].append)
         _, first = self.call(client(max_total_tokens=1))
         self.assertEqual((first['source'], sends), ('fallback:llm_error', []))  # Codex: no attempt sent at all
         self.assertIn('token budget', first['react'][0]['error'])
@@ -1647,26 +1647,26 @@ class FifthReview(unittest.TestCase):
         senders = {'exception': mock.Mock(side_effect=RuntimeError('connection dropped')),
                    'no usage': lambda p, a: {'text': json.dumps({'tool': 'commit_order', 'arguments': {'order': 'keep_paper', 'rationale': 'r'}}),
                                              'usage': None},
-                   'transient unknown': mock.Mock(side_effect=llm_adapter.TransientError('read timeout', 'unknown'))}
+                   'transient unknown': mock.Mock(side_effect=llm_api.TransientError('read timeout', 'unknown'))}
         for name, send in senders.items():
-            api = llm_adapter.APILLM({**llm, 'retry_backoff_s': 0.0}, sender=send)
-            c = controllers.ControllerClient({'kind': 'react', 'llm': llm}, controllers.InlineTransport(
-                lambda api=api: controllers.ReActPolicy(api)), ledger=[].append)
+            api = llm_api.APILLM({**llm, 'retry_backoff_s': 0.0}, sender=send)
+            c = order_controller.ControllerClient({'kind': 'react', 'llm': llm}, order_controller.InlineTransport(
+                lambda api=api: order_controller.ReActPolicy(api)), ledger=[].append)
             _, first = self.call(c)
             _, second = self.call(c)
             self.assertGreater(c.unknown_usage, 0, name)
             self.assertEqual(second['source'], 'skip:usage_unknown', name)
-        self.assertEqual(llm_adapter.spend(llm, [{'status': 'timeout', 'response': {'usage': None}}])['unknown'], 1)
+        self.assertEqual(llm_api.spend(llm, [{'status': 'timeout', 'response': {'usage': None}}])['unknown'], 1)
         opus = {'kind': 'api', 'provider': 'anthropic', 'model': 'claude-opus-5-5'}
-        spent = llm_adapter.spend(opus, [{'status': 'ok', 'response': {'usage': {'input_tokens': 1_000_000, 'output_tokens': 100_000,
+        spent = llm_api.spend(opus, [{'status': 'ok', 'response': {'usage': {'input_tokens': 1_000_000, 'output_tokens': 100_000,
                                                                                   'cache_read_input_tokens': 1_000_000}}}])
         self.assertEqual((spent['tokens'], round(spent['cost_usd'], 6), spent['unknown']), (2_100_000, 6.2, 0))
-        self.assertEqual(llm_adapter.spend({**opus, 'model': 'claude-unpriced'}, [{'status': 'ok', 'response': {
+        self.assertEqual(llm_api.spend({**opus, 'model': 'claude-unpriced'}, [{'status': 'ok', 'response': {
             'usage': {'input_tokens': 1, 'output_tokens': 1}}}])['unknown'], 1)
 
     def test_r5_4_a_worker_failure_of_an_api_decision_stops_the_paid_calls(self):
         spec = {'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}, 'llm_timeout': 1.0}
-        c = controllers.ControllerClient(spec, controllers.ReplayedFailures(lambda: None, [{
+        c = order_controller.ControllerClient(spec, order_controller.ReplayedFailures(lambda: None, [{
             'step': 1, 'phase': 'single', 'sample_trial': 0, 'side': 'left', 'source': 'fallback:worker_timeout', 'error': 'x'}]), ledger=[].append)
         self.assertEqual(self.call(c)[1]['source'], 'fallback:worker_timeout')
         self.assertEqual(self.call(c)[1]['source'], 'skip:usage_unknown')
@@ -1674,25 +1674,25 @@ class FifthReview(unittest.TestCase):
     def test_r5_5_candidate_pixels_must_be_canonical(self):
         mask = np.zeros((8, 8), bool)
         mask[2:4, 3:6] = True
-        p = controllers.encode_pixels(mask)
-        self.assertTrue((controllers.decode_pixels(p, mask.shape) == mask).all())
+        p = order_controller.encode_pixels(mask)
+        self.assertTrue((order_controller.decode_pixels(p, mask.shape) == mask).all())
         crop = mask[2:4, 2:6]  # Codex: a zero column in front, origin kept: the pixels sit one to the right
         padded = {'origin': p['origin'], 'shape': [2, 4], 'bits': base64.b64encode(np.packbits(crop)).decode()}
         raw = bytearray(base64.b64decode(p['bits']))
         raw[-1] |= 0x01  # a padding bit set
         for bad in (padded, {**p, 'origin': [2, 2], 'shape': [2, 4], 'bits': padded['bits']},
                     {**p, 'bits': base64.b64encode(bytes(raw)).decode()}):
-            self.assertIsNone(controllers.decode_pixels(bad, mask.shape), bad)
+            self.assertIsNone(order_controller.decode_pixels(bad, mask.shape), bad)
 
     @unittest.skipUnless(FAKE_WALL.exists(), 'P2 fake-provider wall not present')
     def test_r5_5_and_6_the_fake_wall_passes_and_a_padded_crop_fails(self):
-        result = check_case.result_dirs(FAKE_WALL)[0]
+        result = check_run.result_dirs(FAKE_WALL)[0]
         relative = os.path.relpath(result)  # Codex: a relative path crashed the check
-        with mock.patch.object(llm_adapter.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
-            report = controllers.check(relative)
+        with mock.patch.object(llm_api.FakeSender, '__call__', side_effect=AssertionError('the provider was called')):
+            report = order_controller.check(relative)
             self.assertEqual((report['verdict'], report['geometry']['verified_from_pixels']), ('PASS', 65), report['problems'][:3])
             with mock.patch('builtins.print'):
-                self.assertEqual(controllers.main(['check', os.path.relpath(FAKE_WALL)]), 0)
+                self.assertEqual(order_controller.main(['check', os.path.relpath(FAKE_WALL)]), 0)
             records = jsonl(result / 'trace' / 'controller.jsonl')
             k, j = next((i, n) for i, r in enumerate(records) for n, x in enumerate(r.get('outcome_pixels') or []) if x)
             p = records[k]['outcome_pixels'][j]
@@ -1700,7 +1700,7 @@ class FifthReview(unittest.TestCase):
             crop = np.unpackbits(np.frombuffer(base64.b64decode(p['bits']), np.uint8))[:h * w].reshape(h, w)
             wide = np.concatenate([np.zeros((h, 1), np.uint8), crop], axis=1)
             records[k]['outcome_pixels'][j] = {'origin': p['origin'], 'shape': [h, w + 1], 'bits': base64.b64encode(np.packbits(wide)).decode()}
-            self.assertFalse(controllers.check(result, records)['ok'])
+            self.assertFalse(order_controller.check(result, records)['ok'])
 
 
 class FakeSDK:
@@ -1760,9 +1760,9 @@ class AnthropicProvider(unittest.TestCase):
     """The anthropic sender against FakeSDK: no SDK, no network, no paid call anywhere."""
 
     def client(self, sdk, spec=OPUS_SPEC):
-        api = llm_adapter.APILLM(spec['llm'], sender=llm_adapter.AnthropicSender(llm_adapter.full(spec['llm']), sdk=sdk))
-        return controllers.ControllerClient(spec, controllers.InlineTransport(
-            lambda: controllers.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
+        api = llm_api.APILLM(spec['llm'], sender=llm_api.AnthropicSender(llm_api.full(spec['llm']), sdk=sdk))
+        return order_controller.ControllerClient(spec, order_controller.InlineTransport(
+            lambda: order_controller.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
 
     def call(self, client):
         records = []
@@ -1779,7 +1779,7 @@ class AnthropicProvider(unittest.TestCase):
         self.assertEqual((first['model'], first['max_tokens'], first['output_config'], first['tool_choice']),
                          ('claude-opus-5-5', 4096, {'effort': 'low'}, {'type': 'auto', 'disable_parallel_tool_use': True}))
         self.assertNotIn('temperature', first)
-        self.assertEqual(first['system'], controllers.SYSTEM)
+        self.assertEqual(first['system'], order_controller.SYSTEM)
         self.assertTrue(all(t['strict'] and t['input_schema']['additionalProperties'] is False for t in first['tools']))
         self.assertEqual(second['messages'][1]['content'][0]['signature'], 'sig1')  # the thinking block, unchanged
         self.assertEqual({k: second['messages'][2]['content'][0][k] for k in ('type', 'tool_use_id')}, {'type': 'tool_result', 'tool_use_id': 'toolu_1'})
@@ -1816,12 +1816,12 @@ class AnthropicProvider(unittest.TestCase):
 
     def test_paid_calls_need_the_gate_the_key_budgets_and_a_bounded_call(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(llm_adapter.PAID_GATE, None)
+            os.environ.pop(llm_api.PAID_GATE, None)
             with self.assertRaises(NotImplementedError):
-                controllers.make_controller(OPUS_SPEC)
-        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}):
-            with mock.patch.object(llm_adapter.AnthropicSender, '__init__', side_effect=AssertionError('built in the main process')):
-                client = controllers.make_controller(OPUS_SPEC)  # valid: and nothing of the API in this process
+                order_controller.make_controller(OPUS_SPEC)
+        with mock.patch.dict(os.environ, {llm_api.PAID_GATE: '1'}):
+            with mock.patch.object(llm_api.AnthropicSender, '__init__', side_effect=AssertionError('built in the main process')):
+                client = order_controller.make_controller(OPUS_SPEC)  # valid: and nothing of the API in this process
             self.assertIsNone(client.transport.process)
             bad = [{**OPUS_SPEC, 'max_cost_usd': None}, {k: v for k, v in OPUS_SPEC.items() if k != 'max_total_tokens'},
                    {**OPUS_SPEC, 'llm_timeout': 30.0}, {**OPUS_SPEC, 'llm': {**OPUS, 'temperature': 0.0}},
@@ -1829,32 +1829,32 @@ class AnthropicProvider(unittest.TestCase):
                    {**OPUS_SPEC, 'llm': {**OPUS, 'api_key': SECRET}}, {**OPUS_SPEC, 'llm': {**OPUS, 'effort': 'huge'}}]
             for spec in bad:
                 with self.assertRaises(ValueError, msg=spec):
-                    controllers.make_controller(spec)
+                    order_controller.make_controller(spec)
 
     @unittest.skipUnless(WALL.exists(), 'pilot wall not present')
     def test_a_recorded_api_wall_replays_without_the_api_and_its_usage_is_bound(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         result, ledger, sdk = copy_wall(WALL, tmp), [], FakeSDK()
-        records = controllers.rerun(result, OPUS_SPEC, controllers.base_policy(WALL), controllers.InlineTransport(
-            lambda: controllers.ReActPolicy(llm_adapter.APILLM(OPUS, sender=llm_adapter.AnthropicSender(llm_adapter.full(OPUS), sdk=sdk)),
+        records = order_controller.rerun(result, OPUS_SPEC, order_controller.base_policy(WALL), order_controller.InlineTransport(
+            lambda: order_controller.ReActPolicy(llm_api.APILLM(OPUS, sender=llm_api.AnthropicSender(llm_api.full(OPUS), sdk=sdk)),
                                             llm_timeout=120.0)), ledger=ledger)
         self.assertTrue(sdk.bodies)
         self.assertNotIn(SECRET, json.dumps(records) + json.dumps(ledger))
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
-        with mock.patch.object(llm_adapter.AnthropicSender, '__call__', side_effect=AssertionError('the API was called')):
-            report = controllers.check(result, None, OPUS_SPEC)
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
+        with mock.patch.object(llm_api.AnthropicSender, '__call__', side_effect=AssertionError('the API was called')):
+            report = order_controller.check(result, None, OPUS_SPEC)
             self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])
             changed = copy.deepcopy(records)  # the usage a cost is computed from, edited in the record
             k = next(i for i, r in enumerate(changed) if r.get('transcripts'))
             changed[k]['transcripts'][0]['response']['usage']['output_tokens'] -= 50
-            report = controllers.check(result, changed, OPUS_SPEC)
+            report = order_controller.check(result, changed, OPUS_SPEC)
             self.assertTrue(any(p.startswith('ledger:') for p in report['problems']), report['problems'][:3])
             jsonl(result / 'trace' / 'controller.jsonl', changed)
-            self.assertTrue(any(p.startswith('manifest:') for p in controllers.check(result, None, OPUS_SPEC)['problems']))
+            self.assertTrue(any(p.startswith('manifest:') for p in order_controller.check(result, None, OPUS_SPEC)['problems']))
 
 class FakeOpenAISDK(FakeSDK):
     """A stand-in for the openai module: FakeSDK's exceptions and a client whose responses.create
@@ -1910,9 +1910,9 @@ class OpenAIProvider(unittest.TestCase):
     """The openai sender against FakeOpenAISDK: no SDK, no network, no paid call anywhere."""
 
     def client(self, sdk, spec=GPT_SPEC):
-        api = llm_adapter.APILLM(spec['llm'], sender=llm_adapter.OpenAISender(llm_adapter.full(spec['llm']), sdk=sdk))
-        return controllers.ControllerClient(spec, controllers.InlineTransport(
-            lambda: controllers.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
+        api = llm_api.APILLM(spec['llm'], sender=llm_api.OpenAISender(llm_api.full(spec['llm']), sdk=sdk))
+        return order_controller.ControllerClient(spec, order_controller.InlineTransport(
+            lambda: order_controller.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append)
 
     call = AnthropicProvider.call
 
@@ -1925,7 +1925,7 @@ class OpenAIProvider(unittest.TestCase):
         first, second = sdk.bodies
         self.assertEqual({k: first[k] for k in ('model', 'instructions', 'max_output_tokens', 'tool_choice', 'parallel_tool_calls', 'store',
                                                 'reasoning', 'include')},
-                         {'model': 'gpt-test', 'instructions': controllers.SYSTEM, 'max_output_tokens': 4096, 'tool_choice': 'auto',
+                         {'model': 'gpt-test', 'instructions': order_controller.SYSTEM, 'max_output_tokens': 4096, 'tool_choice': 'auto',
                           'parallel_tool_calls': False, 'store': False, 'reasoning': {'effort': 'low'}, 'include': ['reasoning.encrypted_content']})
         self.assertNotIn('temperature', first)
         self.assertTrue(all(t['type'] == 'function' and t['strict'] for t in first['tools']))
@@ -1937,7 +1937,7 @@ class OpenAIProvider(unittest.TestCase):
                                       'cache_read_input_tokens': 200, 'reasoning_tokens': 50})
         self.assertEqual((t['exchange']['request_id'], t['exchange']['payload'], t['exchange']['response']['model']),
                          ('req_2', second, 'gpt-test-2026-01-01'))  # a dated snapshot of the requested model
-        spent = llm_adapter.spend(GPT, record['transcripts'])
+        spent = llm_api.spend(GPT, record['transcripts'])
         self.assertEqual((spent['tokens'], round(spent['cost_usd'], 9), spent['unknown']), (2160, 2 * (800 * 1 + 80 * 10 + 200 * 0.1) / 1e6, 0))
 
     def test_errors_are_classified_retried_and_masked(self):
@@ -1971,45 +1971,45 @@ class OpenAIProvider(unittest.TestCase):
         self.assertTrue(all(s['status'] == 'rejected' for s in record['react']))
 
     def test_specs_gate_key_price_temperature_and_the_main_process(self):
-        self.assertEqual(llm_adapter.KEY_ENV['openai'], 'OPENAI_API_KEY')  # fixed: no spec can name another source
+        self.assertEqual(llm_api.KEY_ENV['openai'], 'OPENAI_API_KEY')  # fixed: no spec can name another source
         sdk = FakeOpenAISDK()
         self.call(self.client(sdk, {**GPT_SPEC, 'llm': {**GPT, 'temperature': 0.2, 'effort': None}}))
         self.assertEqual((sdk.bodies[0]['temperature'], 'reasoning' in sdk.bodies[0]), (0.2, False))
         with mock.patch.dict(os.environ, {}):
-            os.environ.pop(llm_adapter.PAID_GATE, None)
+            os.environ.pop(llm_api.PAID_GATE, None)
             with self.assertRaises(NotImplementedError):
-                controllers.make_controller(GPT_SPEC)
-        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}):
-            with mock.patch.object(llm_adapter.OpenAISender, '__init__', side_effect=AssertionError('built in the main process')):
-                self.assertIsNone(controllers.make_controller(GPT_SPEC).transport.process)
+                order_controller.make_controller(GPT_SPEC)
+        with mock.patch.dict(os.environ, {llm_api.PAID_GATE: '1'}):
+            with mock.patch.object(llm_api.OpenAISender, '__init__', side_effect=AssertionError('built in the main process')):
+                self.assertIsNone(order_controller.make_controller(GPT_SPEC).transport.process)
             for spec in ({**GPT_SPEC, 'llm': {**GPT, 'price_per_mtok': None}}, {**GPT_SPEC, 'llm': {**GPT, 'temperature': 3}},
                          {**GPT_SPEC, 'llm': {**GPT, 'price_per_mtok': [1, 2]}}, {**GPT_SPEC, 'llm': {**GPT, 'effort': 'minimal'}},
                          {**GPT_SPEC, 'llm': {**GPT, 'api_key_env': 'NOT_SET_ANYWHERE'}}, {**GPT_SPEC, 'max_cost_usd': None},
                          {**GPT_SPEC, 'llm_timeout': 30.0}):
                 with self.assertRaises(ValueError, msg=spec):
-                    controllers.make_controller(spec)
+                    order_controller.make_controller(spec)
 
     @unittest.skipUnless(WALL.exists(), 'pilot wall not present')
     def test_a_recorded_openai_wall_replays_without_the_api_and_its_usage_is_bound(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         result, ledger, sdk = copy_wall(WALL, tmp), [], FakeOpenAISDK()
-        records = controllers.rerun(result, GPT_SPEC, controllers.base_policy(WALL), controllers.InlineTransport(
-            lambda: controllers.ReActPolicy(llm_adapter.APILLM(GPT, sender=llm_adapter.OpenAISender(llm_adapter.full(GPT), sdk=sdk)),
+        records = order_controller.rerun(result, GPT_SPEC, order_controller.base_policy(WALL), order_controller.InlineTransport(
+            lambda: order_controller.ReActPolicy(llm_api.APILLM(GPT, sender=llm_api.OpenAISender(llm_api.full(GPT), sdk=sdk)),
                                             llm_timeout=120.0)), ledger=ledger)
         self.assertTrue(sdk.bodies)
         self.assertNotIn(SECRET, json.dumps(records) + json.dumps(ledger))
         jsonl(result / 'trace' / 'controller.jsonl', records)
         jsonl(result / 'trace' / 'transport.jsonl', ledger)
         receipt = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
-        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_case.manifest(tmp)}), encoding='utf-8')
-        with mock.patch.object(llm_adapter.OpenAISender, '__call__', side_effect=AssertionError('the API was called')):
-            report = controllers.check(result, None, GPT_SPEC)
+        (tmp / 'receipt.json').write_text(json.dumps({**receipt, 'manifest': run_wall.manifest(tmp)}), encoding='utf-8')
+        with mock.patch.object(llm_api.OpenAISender, '__call__', side_effect=AssertionError('the API was called')):
+            report = order_controller.check(result, None, GPT_SPEC)
             self.assertEqual((report['ok'], report['provenance']), (True, {'ledger': 'ok', 'manifest': 'ok'}), report['problems'][:3])
             changed = copy.deepcopy(records)
             k = next(i for i, r in enumerate(changed) if r.get('transcripts'))
             changed[k]['transcripts'][0]['response']['exchange']['response']['output'][2]['name'] = 'commit_order'  # another tool call
-            self.assertTrue(any(p.startswith('ledger:') for p in controllers.check(result, changed, GPT_SPEC)['problems']))
+            self.assertTrue(any(p.startswith('ledger:') for p in order_controller.check(result, changed, GPT_SPEC)['problems']))
 
 class SixthReview(unittest.TestCase):
     """Regression tests of the sixth review (Codex R6, the SDK check) and the seventh round's
@@ -2021,9 +2021,9 @@ class SixthReview(unittest.TestCase):
 
     def openai(self, sdk, spec=None):
         spec = spec or GPT_SPEC
-        api = llm_adapter.APILLM(spec['llm'], sender=llm_adapter.OpenAISender(llm_adapter.full(spec['llm']), sdk=sdk))
-        return controllers.ControllerClient(spec, controllers.InlineTransport(
-            lambda: controllers.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append), api
+        api = llm_api.APILLM(spec['llm'], sender=llm_api.OpenAISender(llm_api.full(spec['llm']), sdk=sdk))
+        return order_controller.ControllerClient(spec, order_controller.InlineTransport(
+            lambda: order_controller.ReActPolicy(api, llm_timeout=spec['llm_timeout'])), ledger=[].append), api
 
     @mock.patch.dict(os.environ, {'OPENAI_API_KEY': SECRET})
     def test_r6_1_each_attempt_reserves_the_whole_request_it_sends(self):
@@ -2037,22 +2037,22 @@ class SixthReview(unittest.TestCase):
             self.assertGreaterEqual(tokens, sent + 4096)  # every byte sent, restored reasoning included, and the full output
             self.assertAlmostEqual(usd, ((tokens - 4096) * 1.0 + 4096 * 10.0) / 1e6)
         self.assertGreater(reserved[1][0], 60_000)  # Codex: the restored encrypted reasoning is reserved too
-        dear = llm_adapter.APILLM({**GPT, 'price_per_mtok': [1.0, 10.0, 2.5, 0.1]}, sender=lambda p, a: None)
+        dear = llm_api.APILLM({**GPT, 'price_per_mtok': [1.0, 10.0, 2.5, 0.1]}, sender=lambda p, a: None)
         tokens, usd = dear.reserve({'x': 'y'})
         self.assertAlmostEqual(usd, ((tokens - 4096) * 2.5 + 4096 * 10.0) / 1e6)  # the dearer of input and cache write
-        self.assertIn('not\na billing limit of the provider', llm_adapter.__doc__)  # what the budget is, said where it is set
+        self.assertIn('not\na billing limit of the provider', llm_api.__doc__)  # what the budget is, said where it is set
 
     def test_r6_2_keys_are_masked_before_any_text_is_shortened(self):
         key, plain = 'sk-proj-' + 'Q7' * 60, 'zz-secret-value-0123456789'
-        controllers.SECRETS.update({key, plain})
-        self.addCleanup(controllers.SECRETS.difference_update, {key, plain})
+        order_controller.SECRETS.update({key, plain})
+        self.addCleanup(order_controller.SECRETS.difference_update, {key, plain})
         for error in (RuntimeError('x' * 280 + key), RuntimeError('y' * 290 + key), RuntimeError(f'{plain} {key}'),
                       RuntimeError('w' * 276 + plain), RuntimeError('Incorrect API key provided: sk-proj-********Q7Q7.')):
-            text = controllers.error_text(error)
+            text = order_controller.error_text(error)
             self.assertLessEqual(len(text), 300)
             self.assertNotIn('Q7Q7', text, text[-40:])  # Codex: no prefix survives the cut either
             self.assertNotIn(plain[:9], text, text[-40:])  # a key of no sk- shape: only masking before the cut protects it
-        self.assertNotIn('Q7Q7', controllers.masked(json.dumps({'reply': key[:30]})))
+        self.assertNotIn('Q7Q7', order_controller.masked(json.dumps({'reply': key[:30]})))
 
         class Conn:
             def __init__(self, requests):
@@ -2065,18 +2065,18 @@ class SixthReview(unittest.TestCase):
                 if not self.requests:
                     raise EOFError
                 return self.requests.pop(0)
-        spec = json.dumps(controllers.full_spec(GPT_SPEC))
-        with mock.patch.dict(os.environ, {'OPENAI_API_KEY': key, llm_adapter.PAID_GATE: '1'}):
+        spec = json.dumps(order_controller.full_spec(GPT_SPEC))
+        with mock.patch.dict(os.environ, {'OPENAI_API_KEY': key, llm_api.PAID_GATE: '1'}):
             def broken_sdk(self, spec, sdk=None):  # an SDK that fails to build its client and names the key
-                llm_adapter.api_key('openai')
+                llm_api.api_key('openai')
                 raise ValueError(f'could not build a client for {key}')
             conn = Conn([])
-            with mock.patch.object(llm_adapter.OpenAISender, '__init__', broken_sdk):
+            with mock.patch.object(llm_api.OpenAISender, '__init__', broken_sdk):
                 controller_worker.serve(conn, spec)
             self.assertIn('could not build a client', conn.sent[0])
             conn = Conn([b'{}'])
             leaky = SimpleNamespace(decide=lambda request: {'order': '3-0-2-1-4', 'echo': f'{key} and {plain}'})
-            with mock.patch.object(controllers, 'make_policy', lambda spec: leaky):
+            with mock.patch.object(order_controller, 'make_policy', lambda spec: leaky):
                 controller_worker.serve(conn, spec)  # whatever a policy replies is masked as it leaves the worker
             self.assertEqual(json.loads(conn.sent[1])['ok']['echo'], '*** and ***')
         for sent in conn.sent:
@@ -2127,7 +2127,7 @@ class SixthReview(unittest.TestCase):
         self.assertEqual(record['source'], 'fallback:llm_error')
         self.assertEqual(sdk.bodies[0], sdk.bodies[1])  # a retry sends the same request
         self.assertEqual((t['exchange']['payload'], t['exchange']['payload_sha256'], t['exchange']['response']),
-                         (sdk.bodies[0], llm_adapter.sha256(sdk.bodies[0]), None))  # Codex: kept for a failed call
+                         (sdk.bodies[0], llm_api.sha256(sdk.bodies[0]), None))  # Codex: kept for a failed call
         self.assertEqual([{k: a.get(k) for k in ('outcome', 'status_code', 'request_id', 'billed')} for a in t['attempts']],
                          [{'outcome': 'retried', 'status_code': 429, 'request_id': 'req_a', 'billed': 'none'},
                           {'outcome': 'failed', 'status_code': 400, 'request_id': 'req_b', 'billed': 'none'}])
@@ -2147,8 +2147,8 @@ class SixthReview(unittest.TestCase):
         client, _ = self.openai(sdk)
         _, record = self.call(client)
         anthropic = FakeSDK(extra_call=True)
-        api = llm_adapter.APILLM(OPUS, sender=llm_adapter.AnthropicSender(llm_adapter.full(OPUS), sdk=anthropic))
-        other = controllers.ControllerClient(OPUS_SPEC, controllers.InlineTransport(lambda: controllers.ReActPolicy(api, llm_timeout=120.0)),
+        api = llm_api.APILLM(OPUS, sender=llm_api.AnthropicSender(llm_api.full(OPUS), sdk=anthropic))
+        other = order_controller.ControllerClient(OPUS_SPEC, order_controller.InlineTransport(lambda: order_controller.ReActPolicy(api, llm_timeout=120.0)),
                                              ledger=[].append)
         for c, r, n in ((client, record, len(sdk.bodies)), (other, self.call(other)[1], len(anthropic.bodies))):
             self.assertEqual((r['source'], r['final']['order'], n), ('fallback:llm_error', '3-0-2-1-4', 1))  # the commit in it never ran
@@ -2160,9 +2160,9 @@ class SixthReview(unittest.TestCase):
     @mock.patch.dict(os.environ, {'OPENAI_API_KEY': SECRET})
     def test_r6_7_efforts_and_encrypted_reasoning(self):
         for effort in (None, 'none', 'low', 'medium', 'high', 'xhigh', 'max'):  # gpt-6.1-terra's documented values
-            llm_adapter.full({**GPT, 'effort': effort})
+            llm_api.full({**GPT, 'effort': effort})
         with self.assertRaises(ValueError):
-            llm_adapter.full({**GPT, 'effort': 'minimal'})
+            llm_api.full({**GPT, 'effort': 'minimal'})
         sdk = FakeOpenAISDK()
         self.call(self.openai(sdk, {**GPT_SPEC, 'llm': {**GPT, 'effort': None}})[0])
         self.assertEqual((sdk.bodies[0]['include'], 'reasoning' in sdk.bodies[0]), (['reasoning.encrypted_content'], False))
@@ -2183,9 +2183,9 @@ class SixthReview(unittest.TestCase):
         llm = {**GPT, 'price_per_mtok': [1.0, 10.0, 1.25, 0.1]}
         _, record = self.call(self.openai(FakeOpenAISDK(cache_write=300), {**GPT_SPEC, 'llm': llm})[0])
         usage = record['transcripts'][0]['response']['usage']
-        self.assertEqual({k: usage[k] for k in llm_adapter.USAGE_KEYS},
+        self.assertEqual({k: usage[k] for k in llm_api.USAGE_KEYS},
                          {'input_tokens': 500, 'output_tokens': 80, 'cache_creation_input_tokens': 300, 'cache_read_input_tokens': 200})
-        spent = llm_adapter.spend(llm, record['transcripts'])
+        spent = llm_api.spend(llm, record['transcripts'])
         self.assertAlmostEqual(spent['cost_usd'], 2 * (500 * 1.0 + 80 * 10.0 + 300 * 1.25 + 200 * 0.1) / 1e6)
         self.assertEqual(spent['tokens'], 2 * 1080)
         client, _ = self.openai(FakeOpenAISDK(cache_write=900), {**GPT_SPEC, 'llm': llm})
@@ -2194,16 +2194,16 @@ class SixthReview(unittest.TestCase):
 
     def test_r6_10_the_openai_key_comes_only_from_OPENAI_API_KEY(self):
         with self.assertRaises(ValueError):
-            llm_adapter.full({**GPT, 'api_key_env': 'SOME_OTHER_KEY'})
+            llm_api.full({**GPT, 'api_key_env': 'SOME_OTHER_KEY'})
         env = {k: v for k, v in os.environ.items() if k != 'OPENAI_API_KEY'}
-        with mock.patch.dict(os.environ, {**env, llm_adapter.PAID_GATE: '1'}, clear=True):
+        with mock.patch.dict(os.environ, {**env, llm_api.PAID_GATE: '1'}, clear=True):
             with self.assertRaisesRegex(ValueError, 'OPENAI_API_KEY is not set'):
-                controllers.make_controller(GPT_SPEC)
+                order_controller.make_controller(GPT_SPEC)
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': SECRET, 'SOME_OTHER_KEY': 'sk-other-key-0000000000'}):
             sdk = FakeOpenAISDK()
-            llm_adapter.OpenAISender(llm_adapter.full(GPT), sdk=sdk)
+            llm_api.OpenAISender(llm_api.full(GPT), sdk=sdk)
             self.assertEqual(sdk.clients[0]['api_key'], SECRET)
-            self.assertIn(SECRET, controllers.SECRETS)  # registered for masking before the client was built
+            self.assertIn(SECRET, order_controller.SECRETS)  # registered for masking before the client was built
 
 @mock.patch.dict(os.environ, {'OPENAI_API_KEY': SECRET})
 class SeventhReview(unittest.TestCase):
@@ -2239,7 +2239,7 @@ class SeventhReview(unittest.TestCase):
             self.assertEqual([(a['attempt'], a['outcome'], a['billed']) for a in t['attempts']],
                              [(0, 'reply' if name == 'missing usage' else 'failed', 'unknown')], name)
             self.assertEqual(t['exchange']['payload'], sdk.bodies[0], name)  # what was sent is on record
-            with self.assertRaisesRegex(controllers.LLMFailure, 'stopped before sending'):
+            with self.assertRaisesRegex(order_controller.LLMFailure, 'stopped before sending'):
                 api(*[[{'role': 'system', 'content': 's'}, {'role': 'user', 'content': '{}'}], []])  # the LLM itself is halted
             self.assertEqual(len(sdk.bodies), 1, name)
             self.assertNotIn(SECRET, json.dumps([first, second]))
@@ -2265,15 +2265,15 @@ class SeventhReview(unittest.TestCase):
         self.assertEqual((sent, [a['outcome'] for a in first['transcripts'][0]['response']['attempts']]), (1, ['failed']))
 
     def test_r7_3_offline_replay_refuses_paid_api_specs(self):
-        with mock.patch.dict(os.environ, {llm_adapter.PAID_GATE: '1'}), \
-                mock.patch.object(llm_adapter.OpenAISender, '__init__', side_effect=AssertionError('an API client was built')):
+        with mock.patch.dict(os.environ, {llm_api.PAID_GATE: '1'}), \
+                mock.patch.object(llm_api.OpenAISender, '__init__', side_effect=AssertionError('an API client was built')):
             for spec in (GPT_SPEC, OPUS_SPEC):
                 with self.assertRaisesRegex(ValueError, 'never calls a paid API'):
-                    controllers.replay(Path('no-such-wall'), spec)
+                    order_controller.replay(Path('no-such-wall'), spec)
                 with self.assertRaisesRegex(ValueError, 'never calls a paid API'):
-                    controllers.rerun(Path('no-such-wall'), spec, PAPER, 'process')
-        controllers.refuse_paid({'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}}, 'replay')  # local: allowed
-        controllers.refuse_paid({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, 'replay')
+                    order_controller.rerun(Path('no-such-wall'), spec, PAPER, 'process')
+        order_controller.refuse_paid({'kind': 'react', 'llm': {'kind': 'api', 'provider': 'fake', 'model': 'fake-1'}}, 'replay')  # local: allowed
+        order_controller.refuse_paid({'kind': 'react', 'llm': {'kind': 'mock', 'mode': 'max_llc'}}, 'replay')
 
 if __name__ == '__main__':
     unittest.main()

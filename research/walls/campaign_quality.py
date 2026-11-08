@@ -1,12 +1,12 @@
 """Batch wall quality, method wang-quality-v1: for every run of a campaign, the four metrics of
-Wang et al. by metrics.wall_quality on the corrected canvas (F_SF, F_AH, F_AV, F_LR: the formal
+Wang et al. by wall_metrics.wall_quality on the corrected canvas (F_SF, F_AH, F_AV, F_LR: the formal
 values) and on the author-compatible canvas (F_*_author: the reference), beside placed_ratio,
-wall_density and wall_height of metrics.wall_metrics. Raw values: no weights, no total score.
+wall_density and wall_height of wall_metrics.wall_metrics. Raw values: no weights, no total score.
 
-  python -B research/quality_batch.py <campaign id> [--method wang-quality-v1] [--out DIR]
+  python -B -m research.walls.campaign_quality <campaign id> [--method wang-quality-v1] [--out DIR]
 
 --method wang-quality-s1-keep-all (or -earlier) is the sensitivity analysis of 02's overlap rule
-(see metrics.render_original leave_out, overlap); its output goes to research/quality/<method>.
+(see wall_metrics.render_original leave_out, overlap); its output goes to research/quality/<method>.
 
 Writes <out>/batch.json, quality.csv and quality.jsonl once; refuses an existing <out> or one
 inside research/runs, which it only reads. The runs are the campaign's manifest.csv rows, which
@@ -28,18 +28,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(REPO), str(REPO / 'research')]
-import check_case  # noqa: E402
-import metrics  # noqa: E402
+from research.paths import QUALITY_DIR, REPO, RUNS
+from research.walls import check_run
+from research.walls import wall_metrics
 
 METHOD = 'wang-quality-v1'  # the formal method
 # method: wall_quality options. The s1 methods are a sensitivity analysis of 02's overlap rule
 # (every stone drawn), never the formal values.
 METHODS = {METHOD: {}, 'wang-quality-s1-keep-all': {'leave_out': False},
            'wang-quality-s1-keep-all-earlier': {'leave_out': False, 'overlap': 'earlier'}}
-RUNS = REPO / 'research' / 'runs'
-SOURCES = ['research/quality_batch.py', 'research/metrics.py', 'research/check_case.py',
+SOURCES = ['research/walls/campaign_quality.py', 'research/walls/wall_metrics.py', 'research/walls/check_run.py',
            'Tests/Thangavelu/02_view_transformation_ori_reso.py', 'Tests/Thangavelu/03_evaluate_wall_metrics.py',
            'Tests/Thangavelu/graph.py', 'Stonepacker2D']
 COLUMNS = ['campaign', 'arm', 'policy', 'order', 'seed', 'run', 'status', 'problems',
@@ -85,7 +83,7 @@ def problems(run):
     if sha256(run / '00_run.py') != receipt.get('staged_sha256'):
         p.append('00_run.py differs from the staged source the receipt names')
     try:
-        source = metrics.stone_source(run)
+        source = wall_metrics.stone_source(run)
         if sha256(source) != sha256(REPO / 'Tests' / 'Thangavelu' / 'data' / source.name):
             p.append(f'{source.name} differs from Tests/Thangavelu/data')
     except (ValueError, FileNotFoundError) as e:
@@ -103,7 +101,7 @@ def problems(run):
         if len(names) != 1 or not re.fullmatch(rf'{side}[0-9.eE+-]+_mechanism\.png', names[0]):
             p.append(f'{side} mechanism images: {names}')
     try:
-        check = check_case.check_run(run)
+        check = check_run.check_run(run)
         if not check['ok']:
             p.append(f"check_run: {len(check['problems'])} problems, first: {check['problems'][0]}")
     except Exception as e:  # an unreadable record fails, it is not skipped
@@ -120,9 +118,9 @@ def evaluate(run, method=METHOD):
         return {'status': 'FAIL', 'problems': p}, {}
     result = next(run.glob('result_*'))
     try:
-        qc = metrics.wall_quality(run, result, 'corrected', **METHODS[method])
-        qa = metrics.wall_quality(run, result, 'author', **METHODS[method])
-        wm = metrics.wall_metrics(run, result)
+        qc = wall_metrics.wall_quality(run, result, 'corrected', **METHODS[method])
+        qa = wall_metrics.wall_quality(run, result, 'author', **METHODS[method])
+        wm = wall_metrics.wall_metrics(run, result)
     except Exception as e:
         return {'status': 'FAIL', 'problems': [f'evaluation raised {type(e).__name__}: {e}']}, {}
     stones = qc['render']['stones']
@@ -173,8 +171,8 @@ def batch(campaign_id, out, runs=RUNS, check_sources=True, method=METHOD):
     info = {
         'method': method, 'options': METHODS[method], 'campaign': campaign_id, 'formal': 'corrected canvas', 'reference': 'author canvas (*_author)',
         'git_head': git('rev-parse', 'HEAD').strip(), 'sources_git_blob': hashes, 'sources_dirty': dirty,
-        'resolution': {'rescale': metrics.RESCALE, 'mu': metrics.MU, 'stone_images': sorted({
-            f"{metrics.stone_source(runs / r['run']).name} {sha256(metrics.stone_source(runs / r['run']))}"
+        'resolution': {'rescale': wall_metrics.RESCALE, 'mu': wall_metrics.MU, 'stone_images': sorted({
+            f"{wall_metrics.stone_source(runs / r['run']).name} {sha256(wall_metrics.stone_source(runs / r['run']))}"
             for r in rows if r['status'] == 'OK'})},
         'environment': {'python': sys.version.split()[0], 'platform': platform.platform(),
                         **{m: __import__(m).__version__ for m in ('numpy', 'scipy', 'cv2', 'skimage', 'networkx')}},
@@ -201,7 +199,7 @@ def main(argv=None):
     ap.add_argument('--method', choices=list(METHODS), default=METHOD)
     ap.add_argument('--out', help='default research/quality/<method>')
     a = ap.parse_args(argv)
-    n = batch(a.campaign, a.out or REPO / 'research' / 'quality' / a.method, method=a.method)
+    n = batch(a.campaign, a.out or QUALITY_DIR / a.method, method=a.method)
     print(f'{n} FAIL rows' if n else 'all rows OK')
     return 1 if n else 0
 

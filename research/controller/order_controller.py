@@ -1,7 +1,7 @@
 """Dynamic filter-order controllers for the paper policy (P2 architecture, mock LLM only).
 
-Usage: python -B research/controllers.py offline <campaign id> <out dir> [--arm paper_3-0-2-1-4]
-       python -B research/controllers.py check <run>
+Usage: python -B -m research.controller.order_controller offline <campaign id> <out dir> [--arm paper_3-0-2-1-4]
+       python -B -m research.controller.order_controller check <run>
 
 build_wall calls a controller before every selection (selection.controlled_policy) with a
 read-only copy of the base policy and detached copies of that selection's inputs; it returns the
@@ -40,7 +40,6 @@ import json
 import os
 import pickle
 import re
-import sys
 import threading
 import time
 import types
@@ -48,10 +47,9 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from failure_analysis import FILTERS, wall_state  # noqa: E402
+from research.analysis.unplaced_stones import FILTERS, wall_state
 
-from check_case import chain_problems  # noqa: E402
+from research.walls.check_run import chain_problems
 from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, footprint, load_trace, published_events, select  # noqa: E402
 
 ORDER_TEXT = re.compile(r'[0-4](-[0-4]){4}')
@@ -304,12 +302,12 @@ def full_spec(spec):
 
 def llm_identity(llm):
     """(model, params) an LLM spec puts into the requests of its transcripts; bad specs raise.
-    A mock is 'mock:<mode>' without parameters; an API LLM is llm_adapter's."""
+    A mock is 'mock:<mode>' without parameters; an API LLM is llm_api's."""
     if isinstance(llm, dict) and llm.get('kind') == 'mock' and set(llm) == {'kind', 'mode'} and isinstance(llm['mode'], str):
         return f"mock:{llm['mode']}", {}
     if isinstance(llm, dict) and llm.get('kind') == 'api':
-        import llm_adapter
-        return llm_adapter.identity(llm)
+        from research.controller import llm_api
+        return llm_api.identity(llm)
     raise NotImplementedError(f'an LLM spec is {{"kind": "mock", "mode": ...}} or {{"kind": "api", ...}}, got {llm!r}')
 
 
@@ -332,15 +330,15 @@ def validate_spec(spec):
         if not (usd is None or (type(usd) in (int, float) and 0 < usd < float('inf'))):
             raise ValueError(f'max_cost_usd is None or a positive number, got {usd!r}')
         if spec['llm']['kind'] == 'api':
-            import llm_adapter
-            llm_adapter.enabled(spec['llm'])
-            if llm_adapter.paid(spec['llm']):
+            from research.controller import llm_api
+            llm_api.enabled(spec['llm'])
+            if llm_api.paid(spec['llm']):
                 if budget is None or usd is None:
                     raise ValueError('a paid provider needs max_total_tokens and max_cost_usd')
-                if llm_adapter.call_bound(spec['llm']) > spec['llm_timeout']:
+                if llm_api.call_bound(spec['llm']) > spec['llm_timeout']:
                     raise ValueError(f"llm_timeout {spec['llm_timeout']} s is shorter than the provider's retries "
-                                     f"({llm_adapter.call_bound(spec['llm'])} s): an abandoned call leaves its usage unknown")
-            elif usd is not None and llm_adapter.price(spec['llm']) is None:
+                                     f"({llm_api.call_bound(spec['llm'])} s): an abandoned call leaves its usage unknown")
+            elif usd is not None and llm_api.price(spec['llm']) is None:
                 raise ValueError('max_cost_usd needs a price for the model')
     return spec
 
@@ -388,7 +386,7 @@ class ControllerClient:
     skip:llm_unavailable, after max_decisions skip:wall_budget, after max_total_tokens
     skip:token_budget, after max_cost_usd skip:cost_budget, before a spec's first_step
     skip:before_first_step (no decision of the budget is used), and none of them sends a request.
-    For an API LLM the spend is llm_adapter.spend's: reported and estimated tokens (both count)
+    For an API LLM the spend is llm_api.spend's: reported and estimated tokens (both count)
     and their cost; an attempt whose usage is unknown (a call abandoned or failed after it may have
     been sent, a worker failure of the decision, a reply without usage) is never counted as free:
     every later decision point is skip:usage_unknown. With a budget in the spec each request
@@ -450,8 +448,8 @@ class ControllerClient:
             return base, {'source': f'fallback:{status}', 'error': reply, **digest}
         self.request_failures += reply['source'] in LLM_FAILURES
         if self.api:
-            import llm_adapter
-            spent = llm_adapter.spend(spec['llm'], reply.get('transcripts'))
+            from research.controller import llm_api
+            spent = llm_api.spend(spec['llm'], reply.get('transcripts'))
             self.tokens += spent['tokens'] + spent['estimated_tokens']
             self.cost_usd += spent['cost_usd']
             self.unknown_usage += spent['unknown']
@@ -500,7 +498,7 @@ class InlineTransport:
         self.policy = None
 
 
-SECRETS = set()  # the API keys this process read (llm_adapter.api_key registers them): never written anywhere
+SECRETS = set()  # the API keys this process read (llm_api.api_key registers them): never written anywhere
 KEY_PATTERN = re.compile(r'(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_*-]{8,}')  # a key, or a provider's partly starred echo of one
 
 
@@ -954,8 +952,8 @@ def make_policy(spec):
     llm = params['llm']
     llm_identity(llm)
     if llm['kind'] == 'api':
-        import llm_adapter
-        llm = llm_adapter.APILLM(llm)  # its client is built here, in the process that calls it
+        from research.controller import llm_api
+        llm = llm_api.APILLM(llm)  # its client is built here, in the process that calls it
     else:
         llm = MockLLM(llm['mode'])
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
@@ -972,19 +970,19 @@ def make_controller(spec, sink=None, transport='process', ledger=None, worker_ve
     validate_spec(spec)
     if transport == 'inline':
         return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
-    import controller_worker
+    from research.controller import worker as controller_worker
     python = controller_worker.worker_python() if worker_venv else None
     client = ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec), python=python), sink, ledger)
     if worker_venv:
-        import llm_adapter
-        for k in llm_adapter.KEY_ENV.values():
+        from research.controller import llm_api
+        for k in llm_api.KEY_ENV.values():
             os.environ.pop(k, None)
     return client
 
 
 def append_trace(name, entry):
     """Append a JSON line to trace/<name> of the wall being built; nothing outside a traced wall
-    (run_case always traces controller runs; a lost line shows as a missing record or ledger)."""
+    (run_wall always traces controller runs; a lost line shows as a missing record or ledger)."""
     from Stonepacker2D.utils.constant import get_dir, get_trace
     if get_trace() is None:
         return
@@ -1024,8 +1022,8 @@ def refuse_paid(spec, what):
     """Raises if spec's LLM is a paid API: offline work only replays recorded replies (check())."""
     spec = full_spec(spec)
     if spec['kind'] == 'react' and spec['llm']['kind'] == 'api':
-        import llm_adapter
-        if llm_adapter.paid(spec['llm']):
+        from research.controller import llm_api
+        if llm_api.paid(spec['llm']):
             raise ValueError(f"{what} never calls a paid API ({spec['llm']['provider']}); check() replays a wall's recorded replies")
 
 
@@ -1259,14 +1257,14 @@ def worker_problems(entries, stopped):
 def manifest_problems(result, run, receipt):
     """The run manifest (receipt 'manifest': sha256 of every trace and result file, written by the
     launcher when the case process ended) against the files now: None without a manifest."""
-    import check_case
+    from research.walls import check_run
     manifest = receipt.get('manifest')
     if manifest is None:
         return None
-    files = {p.relative_to(run).as_posix(): p for p in check_case.artifact_files(result)}
+    files = {p.relative_to(run).as_posix(): p for p in check_run.artifact_files(result)}
     mine = {k for k in manifest if k.startswith(Path(result).relative_to(run).as_posix() + '/')}
     problems = [f'{k}: missing' for k in sorted(mine - set(files))] + [f'{k}: not in the manifest' for k in sorted(set(files) - mine)]
-    problems += [f'{k}: changed since the run' for k in sorted(mine & set(files)) if check_case.sha256_file(files[k]) != manifest[k]]
+    problems += [f'{k}: changed since the run' for k in sorted(mine & set(files)) if check_run.sha256_file(files[k]) != manifest[k]]
     return problems
 
 
@@ -1276,7 +1274,7 @@ def check(result, records=None, spec=None, stopped=None):
     the receipt's base policy; every record must equal its re-execution, the traced policy must be
     the base with the re-executed order, replaying select with it must give the traced pick,
     decision keys must be unique and the trace itself must be complete and consistent
-    (check_case.chain_problems). A stopped run (stopped; by default read from the receipt) may hold
+    (check_run.chain_problems). A stopped run (stopped; by default read from the receipt) may hold
     one record more than events: the controller is called before its event is written. Counts come
     from the re-execution, not from the records.
 
@@ -1409,11 +1407,11 @@ OFFLINE = [{'kind': 'null'}, {'kind': 'random', 'seed': 1}, {'kind': 'rule'},
 
 def offline(manifest, out):
     import pandas as pd
-    import run_case
+    from research.walls import run_wall
     rows = []
     with (out / 'records.jsonl').open('w', encoding='utf-8') as f:
         for w in manifest.itertuples():
-            result = next((run_case.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
+            result = next((run_wall.RUNS / w.run).rglob('trace/commits.jsonl')).parent.parent
             llm_switches = None
             for spec in OFFLINE + [{'kind': 'random', 'seed': 1, 'matched': True}]:
                 if spec.get('matched'):  # paired with the max_llc mock's switches on this wall
@@ -1444,11 +1442,11 @@ def main(argv=None):
     chk.add_argument('run', type=Path)
     args = parser.parse_args(argv)
     if args.command == 'check':
-        import check_case
-        reports = [check(r) for r in check_case.result_dirs(args.run)]
+        from research.walls import check_run
+        reports = [check(r) for r in check_run.result_dirs(args.run)]
         print(json.dumps(reports, indent=2))
         return 0 if reports and all(r['ok'] for r in reports) else 1
-    import campaign
+    from research.walls import campaign
     args.out.mkdir(parents=True, exist_ok=False)
     manifest = pd.read_csv(campaign.CAMPAIGNS / args.id / 'manifest.csv')
     df = offline(manifest[(manifest.arm == args.arm) & (manifest.status == 'PROCESS_PASS')], args.out)

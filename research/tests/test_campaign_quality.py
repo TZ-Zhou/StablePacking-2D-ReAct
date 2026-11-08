@@ -1,4 +1,4 @@
-"""research/quality_batch.py on a small campaign of copied walls: the output format, FAIL rows for
+"""research/walls/campaign_quality.py on a small campaign of copied walls: the output format, FAIL rows for
 broken runs and failed evaluations, identical bytes on a rerun, the refusals, and that the run
 records are only read."""
 import csv
@@ -11,10 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'research'))
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'research' / 'tests'))
-import quality_batch as q  # noqa: E402
-from test_controllers import WALL  # noqa: E402
+from research.walls import campaign_quality as q  # noqa: E402
+from test_order_controller import WALL  # noqa: E402
 from test_wall_quality import FIVE, digest  # noqa: E402
 
 ARMS = ['a', 'b', 'broken', 'absent']
@@ -66,7 +66,7 @@ class Batch(unittest.TestCase):
         self.assertEqual((self.info['method'], self.info['n_runs'], self.info['n_ok']), ('wang-quality-v1', 4, 2))
         self.assertEqual([f['arm'] for f in self.info['failed']], ['broken', 'absent'])
         self.assertEqual(self.info['resolution']['rescale'], 0.5)
-        self.assertIn('research/metrics.py', self.info['sources_git_blob'])
+        self.assertIn('research/walls/wall_metrics.py', self.info['sources_git_blob'])
         self.assertTrue(any(k.startswith('Stonepacker2D/') for k in self.info['sources_git_blob']))
         lines = [json.loads(line) for line in (self.root / 'out' / 'quality.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual([d['status'] for d in lines], ['OK', 'OK', 'FAIL', 'FAIL'])
@@ -86,9 +86,9 @@ class Batch(unittest.TestCase):
         with self.assertRaises(SystemExit):  # never inside the records
             q.batch('t', self.runs / 'campaigns' / 't' / 'quality', runs=self.runs, check_sources=False)
         hashes = q.sources()[0]
-        with mock.patch.object(q, 'sources', return_value=(hashes, ['research/metrics.py'])), self.assertRaises(SystemExit):
+        with mock.patch.object(q, 'sources', return_value=(hashes, ['research/walls/wall_metrics.py'])), self.assertRaises(SystemExit):
             q.batch('t', self.root / 'dirty', runs=self.runs)
-        changed = [(hashes, []), ({**hashes, 'research/metrics.py': '0'}, [])]
+        changed = [(hashes, []), ({**hashes, 'research/walls/wall_metrics.py': '0'}, [])]
         with mock.patch.object(q, 'sources', side_effect=changed), self.assertRaises(SystemExit):
             q.batch('t', self.root / 'changed', runs=self.runs)
         self.assertFalse((self.root / 'dirty').exists() or (self.root / 'changed').exists())
@@ -116,11 +116,11 @@ class Batch(unittest.TestCase):
 
     def test_a_failed_evaluation_is_a_fail_row(self):
         run = self.runs / 'campaigns' / 't' / 'case' / 'a' / 'seed1'
-        with mock.patch.object(q.metrics, 'wall_quality', side_effect=RuntimeError('boom')):
+        with mock.patch.object(q.wall_metrics, 'wall_quality', side_effect=RuntimeError('boom')):
             row, detail = q.evaluate(run)
         self.assertEqual((row['status'], row['problems'], detail), ('FAIL', ['evaluation raised RuntimeError: boom'], {}))
-        real = q.metrics.wall_quality
-        with mock.patch.object(q.metrics, 'wall_quality', side_effect=lambda *a: {**real(*a), 'F_LR': None}):
+        real = q.wall_metrics.wall_quality
+        with mock.patch.object(q.wall_metrics, 'wall_quality', side_effect=lambda *a: {**real(*a), 'F_LR': None}):
             row, _ = q.evaluate(run)
         self.assertEqual((row['status'], row['problems']), ('FAIL', ['F_LR undefined', 'F_LR_author undefined']))
 

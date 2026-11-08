@@ -1,10 +1,10 @@
 """Fixed filter-order campaigns: pre-registered arms x seeds, run one wall at a time.
 
-  python -B research/campaign.py init <id> --case thangavelu-noise80 --arms code_original \
+  python -B -m research.walls.campaign init <id> --case thangavelu-noise80 --arms code_original \
       paper=3,0,2,1,4 alt=2,4,3,1,0 random --n-seeds 3 [--master-seed 20261106] [--timeout 1200]
       [--extends <parent id>] [--note TEXT]
-  python -B research/campaign.py run <id> [--dry-run] [--max-runs N]
-  python -B research/campaign.py summarize <id>
+  python -B -m research.walls.campaign run <id> [--dry-run] [--max-runs N]
+  python -B -m research.walls.campaign summarize <id>
 
 init writes research/runs/campaigns/<id>/campaign.json once (never overwritten): the seed list
 (20 first, the rest drawn from --master-seed), arms (code_original, or the paper cascade with a
@@ -24,18 +24,15 @@ import argparse
 import csv
 import json
 import subprocess
-import sys
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import run_case  # noqa: E402
+from research.walls import run_wall
 
 from Stonepacker2D.stack.selection import ALL_ORDERS, CODE_ORIGINAL_ORDER, PAPER_ORDER  # noqa: E402
 
-CAMPAIGNS = run_case.RUNS / 'campaigns'
+CAMPAIGNS = run_wall.RUNS / 'campaigns'
 SUCCESS = ('PROCESS_PASS',)
 
 
@@ -52,7 +49,7 @@ def parse_arm(text):
 
 
 def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, extends=None, notes=()):
-    if case not in run_case.CASES:
+    if case not in run_wall.CASES:
         raise ValueError(f'unknown case {case}')
     rng = np.random.default_rng(master_seed)
     seeds = [20]
@@ -74,7 +71,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
     reused = []
     if extends:
         parent = load(extends)
-        if (parent['case'], parent['timeout_seconds'], parent['code_sha256']) != (case, timeout, run_case.code_fingerprint()):
+        if (parent['case'], parent['timeout_seconds'], parent['code_sha256']) != (case, timeout, run_wall.code_fingerprint()):
             raise ValueError(f'{extends}: case, timeout or executed code differs; its runs cannot be reused')
         if seeds[:len(parent['seeds'])] != parent['seeds']:
             raise ValueError(f"{extends}: seeds {parent['seeds']} are not a prefix of {seeds}")
@@ -82,7 +79,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
             same = [a for a in arms if (a['name'], a['policy'], a['order']) == (arm['name'], arm['policy'], arm['order'])]
             if same:
                 reused.append({'seed': seed, 'arm': arm['name'], 'run': run})
-    git = lambda *a: subprocess.run(['git', *a], cwd=run_case.REPO, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(['git', *a], cwd=run_wall.REPO, capture_output=True, text=True).stdout.strip()
     return {
         'id': campaign_id, 'created': datetime.now().isoformat(timespec='seconds'), 'case': case,
         'arms': arms, 'seeds': seeds, 'master_seed': master_seed, 'timeout_seconds': timeout,
@@ -90,7 +87,7 @@ def make_campaign(campaign_id, case, arm_texts, n_seeds, master_seed, timeout, e
                      'random arm order drawn afterwards from the same RNG among orders unused by other arms',
         'python_hash_seed': 20, 'paper_order': list(PAPER_ORDER), 'code_original_order': list(CODE_ORIGINAL_ORDER),
         'git_head': git('rev-parse', 'HEAD'), 'git_status': git('status', '--porcelain').splitlines(),
-        'code_sha256': run_case.code_fingerprint(), 'extends': extends, 'reused_runs': reused, 'notes': list(notes),
+        'code_sha256': run_wall.code_fingerprint(), 'extends': extends, 'reused_runs': reused, 'notes': list(notes),
     }
 
 
@@ -103,14 +100,14 @@ def planned_runs(campaign):
 
 
 def run_status(name):
-    receipt = run_case.RUNS / name / 'receipt.json'
+    receipt = run_wall.RUNS / name / 'receipt.json'
     if not receipt.exists():
-        return None if not (run_case.RUNS / name).exists() else 'NO_RECEIPT'
+        return None if not (run_wall.RUNS / name).exists() else 'NO_RECEIPT'
     return json.loads(receipt.read_text(encoding='utf-8'))['status']
 
 
-def run_campaign(campaign, dry_run=False, max_runs=None, launch=run_case.main):
-    if run_case.code_fingerprint() != campaign['code_sha256']:
+def run_campaign(campaign, dry_run=False, max_runs=None, launch=run_wall.main):
+    if run_wall.code_fingerprint() != campaign['code_sha256']:
         raise RuntimeError('executed code differs from the code registered in campaign.json')
     log = CAMPAIGNS / campaign['id'] / 'runs.jsonl'
     started = []
@@ -142,29 +139,29 @@ def run_campaign(campaign, dry_run=False, max_runs=None, launch=run_case.main):
 
 
 def summarize(campaign):
-    import metrics
-    from check_case import check_run, result_dirs
+    from research.walls import wall_metrics
+    from research.walls.check_run import check_run, result_dirs
     root = CAMPAIGNS / campaign['id']
     manifest, steps, by_key = [], [], {}
     names = {(seed, arm['name']): name for seed, arm, name in planned_runs(campaign)}
     for seed, arm, name in planned_runs(campaign):
-        run = run_case.RUNS / name
+        run = run_wall.RUNS / name
         row = {'campaign': campaign['id'], 'case': campaign['case'], 'arm': arm['name'], 'policy': arm['policy'],
                'order': '' if arm['order'] is None else '-'.join(map(str, arm['order'])), 'seed': seed,
                'run': name, 'status': run_status(name) or 'NOT_RUN'}
         results = result_dirs(run) if run.exists() else []
         if row['status'] in SUCCESS and len(results) == 1:
             check = check_run(run)
-            rows = metrics.step_rows(results[0])
+            rows = wall_metrics.step_rows(results[0])
             by_key[(seed, arm['name'])] = rows
-            row.update(metrics.wall_metrics(run, results[0]), checks_ok=check['ok'], n_check_problems=len(check['problems']))
+            row.update(wall_metrics.wall_metrics(run, results[0]), checks_ok=check['ok'], n_check_problems=len(check['problems']))
             steps += [{'arm': arm['name'], 'seed': seed, **r} for r in rows]
         manifest.append(row)
     for row in manifest:  # decision divergence and identical first candidate set vs code_original, same seed
         ref = by_key.get((row['seed'], 'code_original'))
         mine = by_key.get((row['seed'], row['arm']))
         if ref is not None and mine is not None:
-            row['first_divergence_step_vs_code_original'] = metrics.first_divergence(mine, ref)
+            row['first_divergence_step_vs_code_original'] = wall_metrics.first_divergence(mine, ref)
             row['first_candidates_same_as_code_original'] = same_first_candidates(
                 names[(row['seed'], row['arm'])], names[(row['seed'], 'code_original')])
     write_rows(root / 'manifest.csv', manifest)
@@ -176,7 +173,7 @@ def same_first_candidates(run, reference):
     """First filter event of the wall: identical raw score matrix and poses across arms."""
     from Stonepacker2D.stack.selection import load_trace
     def first(name):
-        return load_trace(next((run_case.RUNS / name).rglob('trace/e00000.npz')))[1]
+        return load_trace(next((run_wall.RUNS / name).rglob('trace/e00000.npz')))[1]
     a, b = first(run), first(reference)
     keys = ['features_raw', 'stone_id', 'rotation', 'x', 'y', 'wall', 'footprint']
     return all(np.array_equal(a[k], b[k]) for k in keys)
