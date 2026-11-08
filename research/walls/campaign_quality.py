@@ -100,10 +100,13 @@ def problems(run):
         ids = [int(line.split(';')[0]) for line in (res / 'transformation.txt').read_text().splitlines()[1:] if line.strip()]
         if ids != rocks:
             p.append('transformation.txt does not list the placed rocks of base.pkl')
-    for side in ('left', 'right'):
-        names = [x.name for x in (res / 'img').glob(f'{side}*_mechanism.png')]
-        if len(names) != 1 or not re.fullmatch(rf'{side}[0-9.eE+-]+_mechanism\.png', names[0]):
-            p.append(f'{side} mechanism images: {names}')
+    if (res / 'mechanism.csv').exists():
+        p += [f'{side}: no single limit load' for side, value in wall_metrics.mechanism_lambdas(res).items() if value is None]
+    else:
+        for side in ('left', 'right'):
+            names = [x.name for x in (res / 'img').glob(f'{side}*_mechanism.png')]
+            if len(names) != 1 or not re.fullmatch(rf'{side}[0-9.eE+-]+_mechanism\.png', names[0]):
+                p.append(f'{side} mechanism images: {names}')
     try:
         check = check_run.check_run(run)
         if not check['ok']:

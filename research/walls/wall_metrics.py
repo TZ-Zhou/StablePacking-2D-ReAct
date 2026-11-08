@@ -36,6 +36,7 @@ import json
 import pickle
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -43,18 +44,26 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from skimage.measure import regionprops
 
-from Stonepacker2D.stack.selection import load_trace, select, tie_count
-from Stonepacker2D.utils.constant import get_base_id, get_wedge_id
+from Stonepacker2D.stack.selection import CODE_ORIGINAL_ORDER, PAPER_ORDER, load_trace, select, tie_count
+from Stonepacker2D.utils.constant import get_base_id, get_ignore_pixel_value, get_wedge_id
 
 METRICS_VERSION = 1
 MU = 0.58  # Stonepacker2D.utils.constant.MU; no run here calls set_mu
+SCORES = {"01_LLC": 3, "02_NHR": 0, "03_IWR": 2, "04_GDS": 1, "05_LFR": 4}  # column of features_raw
+FILTER_NAMES = {column: name[3:] for name, column in SCORES.items()}
 
 
 def mechanism_lambdas(result):
+    """The limit load of each side: mechanism.csv of a new wall, the image names of an archived one."""
+    table = Path(result) / 'mechanism.csv'
+    rows = [line.split(',') for line in table.read_text(encoding='utf-8').splitlines()[1:]] if table.exists() else None
     found = {}
     for side in ('left', 'right'):
-        names = [p.name for p in (Path(result) / 'img').glob(f'{side}*_mechanism.png')]
-        values = [float(re.match(rf'{side}(.+)_mechanism\.png$', n).group(1)) for n in names]
+        if rows is None:
+            names = [p.name for p in (Path(result) / 'img').glob(f'{side}*_mechanism.png')]
+            values = [float(re.match(rf'{side}(.+)_mechanism\.png$', n).group(1)) for n in names]
+        else:
+            values = [float(value) for name, value in rows if name == side]
         found[side] = values[0] if len(values) == 1 else None
     return found
 
@@ -221,6 +230,92 @@ def wang_metrics(result, labels=None):
     return out
 
 
+def lambdas(world):
+    """evaluate_kine(load='tilting_table') of a wall matrix with both directions kept unrounded: its two
+    solve_force_rigid calls, 'right' (load +mass) and 'left' (-mass) as its mechanism files name them.
+    Bricks from the matrix as research/analysis/lookahead_study.kine_lr builds them."""
+    from Stonepacker2D.evaluate.tilting_angle import (
+        base_to_elements,
+        cal_Aglobal,
+        clear_contps,
+        pixel_to_mesh,
+        solve_force_rigid,
+    )
+    from Stonepacker2D.utils.constant import set_head_joint_state, set_world_size
+
+    set_world_size(world.shape[1], world.shape[0])
+    set_head_joint_state(True)
+    bricks = []
+    for k in range(1, int(world[world != 255].max()) + 1):
+        r, c = np.nonzero(world == k)
+        bricks.append(
+            SimpleNamespace(
+                matrix=(world == k).astype(np.uint8),
+                width=np.ptp(c) + 1 if r.size else 0,
+                height=np.ptp(r) + 1 if r.size else 0,
+            )
+        )
+    base = SimpleNamespace(matrix=world, placed_bricks=bricks, cluster_matrix=np.zeros(world.shape))
+    img = base.matrix.astype(np.uint8)
+    img = np.where(img != get_ignore_pixel_value(), img, 0)
+    contps = pixel_to_mesh(img)
+    elems = base_to_elements(base)
+    contps = clear_contps(elems, contps)
+    out = {}
+    for side, sign in (("right", 1), ("left", -1)):
+        for e in elems.values():
+            e.dl, e.ll = [0, -e.mass, 0], [sign * e.mass, 0, 0]
+        if side == "right":
+            Aglobal = cal_Aglobal(elems, contps)
+        out[side] = float(solve_force_rigid(elems, contps, Aglobal)["limit_force"])
+    return out
+
+
+def partial_quality(result):
+    """F_SF, F_AH, F_AV, F_LR of the wall as it stands after each placement: one dict per line of
+    trace/commits.jsonl, empty for an attempt that placed nothing or a wall without base.pkl.
+    On the simulation grid, so not the formal metrics of wall_quality: 03's rules on the rock labels of
+    base.pkl (F_AH, F_AV None while the wall is too small for its 10 px margins), and F_LR = the smaller
+    unrounded tilting-table solve / mu."""
+    result = Path(result)
+    commits = read_jsonl(result / "trace" / "commits.jsonl")
+    if not (result / "base.pkl").exists():
+        return [{} for _ in commits]
+    with open(result / "base.pkl", "rb") as f:
+        base = pickle.load(f)
+    labels, rocks, out = rock_labels(base), 0, []
+    for c in commits:
+        if c["outcome"] != "placed":
+            out.append({})
+            continue
+        rocks += "placed_bbox" in c
+        m = wang_metrics(result, labels=np.where(labels <= rocks, labels, 0))
+        kept = (base.matrix <= c["step"] + c["bricks_added"]) | (base.matrix == get_ignore_pixel_value())
+        out.append(
+            {
+                "F_SF": m["F_SF_author"],
+                "F_AH": m["F_AH"],
+                "F_AV": m["F_AV"],
+                "F_LR": min(lambdas(np.where(kept, base.matrix, 0)).values()) / MU,
+            }
+        )
+    return out
+
+
+def step_wall_times(events):
+    """Wall-clock seconds of each sampling attempt in commit order, from events.jsonl: the attempt alone
+    and since its build began. Empty for a case recorded before the step_commit events."""
+    out = []
+    for e in read_jsonl(events):
+        now = e["elapsed_seconds"]
+        if e["event"] == "build_enter":
+            begin = previous = now
+        elif e["event"] == "step_commit":
+            out.append({"wall_time_s": round(now - previous, 3), "wall_time_cum_s": round(now - begin, 3)})
+            previous = now
+    return out
+
+
 RESCALE = 0.5  # _rescale of Tests/Thangavelu/02_view_transformation_ori_reso.py
 
 
@@ -232,7 +327,8 @@ def stone_source(run):
     rescale = re.findall(r"^\s*_rescale = ([0-9.]+)\s*$", text, re.M)
     if len(set(image)) != 1 or [float(r) for r in rescale] != [RESCALE]:
         raise ValueError(f'not a Thangavelu run with _rescale {RESCALE}: {image} {rescale}')
-    return Path(run) / 'data' / image[0]
+    copied = Path(run) / 'data' / image[0]  # an archived run has a copy, a new case keeps none
+    return copied if copied.exists() else Path(__file__).resolve().parents[2] / 'Tests' / 'Thangavelu' / 'data' / image[0]
 
 
 def render_original(run, result, canvas='author', leave_out=True, overlap='later'):
@@ -331,9 +427,34 @@ def wall_quality(run, result, canvas='author', leave_out=True, overlap='later'):
             'render': render}
 
 
+def selection_columns(result, side):
+    """The step_rows columns held by the trace event of a sampling attempt's chosen side."""
+    meta, a = load_trace(result / "trace" / f"e{side['event']:05d}.npz")
+    p, raw = meta["policy"], a["features_raw"]
+    sel = select(raw, a["weights"], p["policy"], p["order"], p["tol"])
+    used = p["order"] or (PAPER_ORDER if p["policy"] == "paper" else CODE_ORIGINAL_ORDER)
+    columns = {
+        "event": side["event"],
+        "policy": p["policy"],
+        "order": "" if p["order"] is None else "-".join(map(str, p["order"])),
+        "filter_order": "-".join(FILTER_NAMES[column] for column in used),
+        "n_candidates": len(a["stone_id"]),
+        "n_stones": len(set(a["stone_id"].tolist())),
+        "n_feasible": int((raw[:, 3] > 0).sum()),
+        "branch": meta["branch"],
+        "final_ties": tie_count(raw, a["weights"], sel, p["policy"], p["order"], p["tol"]),
+    }
+    i = side.get("index")
+    if i is not None:
+        columns["placement_id"] = f"{a['footprint'][i]}:{a['x_world'][i]},{a['y'][i]}"
+        columns.update({name: float(raw[i, column]) for name, column in SCORES.items()})
+    return columns
+
+
 def step_rows(result):
-    """One row per sampling attempt: the action taken, the candidate set it was taken from and the policy
-    and order that selection used (a --switch or a controller changes them from step to step)."""
+    """One row per sampling attempt: the action taken, the candidate set it was taken from, the policy
+    and order that selection used (a --switch or a controller changes them from step to step) and the
+    raw scores of the selected candidate."""
     result = Path(result)
     rows = []
     for c in read_jsonl(result / 'trace' / 'commits.jsonl'):
@@ -342,17 +463,7 @@ def step_rows(result):
                                      'rotation_world', 'x_world', 'y', 'termination')}
         row['placement_id'] = ''
         if side.get('event') is not None:
-            meta, a = load_trace(result / 'trace' / f"e{side['event']:05d}.npz")
-            p = meta['policy']
-            sel = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'])
-            order = '' if p['order'] is None else '-'.join(map(str, p['order']))
-            row.update(event=side['event'], policy=p['policy'], order=order, n_candidates=len(a['stone_id']),
-                       n_stones=len(set(a['stone_id'].tolist())), n_feasible=int((a['features_raw'][:, 3] > 0).sum()),
-                       branch=meta['branch'], final_ties=tie_count(a['features_raw'], a['weights'], sel, p['policy'],
-                                                                  p['order'], p['tol']))
-            if side.get('index') is not None:
-                i = side['index']
-                row['placement_id'] = f"{a['footprint'][i]}:{a['x_world'][i]},{a['y'][i]}"
+            row.update(selection_columns(result, side))
         rows.append(row)
     return rows
 

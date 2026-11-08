@@ -22,6 +22,5 @@ python -B -m research.perf.profile_case fft-d2-0 perf-fft-pp --policy paper --or
 python -B -m research.perf.profile_report show perf-fft-pp
 ```
 - 兩種模式的結果是否相同，用同案例、政策、順序、種子各跑一次後，用 `research.walls.check_run.compare_runs(<資料夾 a>, <資料夾 b>)` 比對。
-- `img/selection.txt` 由多個 worker 附加寫入，列的順序不固定，比對時要排序。
 - 這是大量耗時的行程；在共用主機上先走硬體調度員送票，不要直接開跑。
 - 測試：`python -B -m unittest research.tests.test_perf`（不跑案例）。

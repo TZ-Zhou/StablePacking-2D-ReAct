@@ -130,9 +130,13 @@ C:\StonePacking-2D-ReAct\venvs\controller-worker\Scripts\python.exe -m pip insta
 | 項目 | 說明 |
 | --- | --- |
 | `receipt.json` | 整次執行的收據：狀態、種子、git 版本、程式雜湊、耗時、放置數、追蹤檢查 |
-| `result_<時間>/` | 牆本身：`img/`（牆圖）、`decisions.txt`、`filter.txt`、`base.pkl`、`time.txt`、`record/`、`trace/` |
-| `execution.log`、`events.jsonl`、`environment-guard.log` | 過程紀錄 |
-| `derived/steps.csv` | 有追蹤的牆才有：每一步的動作與實際用的政策、順序 |
+| `result_<時間>/` | 牆本身的資料：`decisions.txt`、`filter.txt`、`transformation.txt`、`mechanism.csv`（左右極限載重，牆完成才有）、`base.pkl`（牆完成時寫一次；有 `--placements` 時每放一顆更新）、`trace/` |
+| 暫存的案例腳本、`execution.log`、`events.jsonl` | 實際執行的腳本與過程紀錄；`environment-guard.log` 只在環境檢查失敗時才有 |
+| `derived/steps.csv` | 有追蹤的牆才有，每次抽樣一列：動作、實際用的政策與順序（`filter_order`）、入選候選的五個原始分數（`01_LLC`～`05_LFR`）、放完後的 `F_SF`、`F_AH`、`F_AV`、`F_LR`、耗時（`wall_time_s` 為該次，`wall_time_cum_s` 為從建牆開始累計） |
+
+`steps.csv` 的四項指標是當下未完成牆在模擬格點上的值，與 `research/quality` 的正式指標（原解析度）不能直接比較；牆還太小時 `F_AH`、`F_AV` 為空。計算 `F_LR` 需要 MOSEK，要先載入 `.env.local`。
+
+新的 case 只存資料：不存圖片與 PDF，輸入資料不留複本（在 `Tests/`）。`research/runs` 的舊牆維持原樣，讀取程式兩種都支援。
 
 `receipt.json` 的 `status`：
 

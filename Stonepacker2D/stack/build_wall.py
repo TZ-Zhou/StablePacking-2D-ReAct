@@ -648,7 +648,7 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
                     save_draw=True, file_name=f'AA_iteration_{construction_step_i}.pdf',sequence = True,number_type ='id')
 
                 # save base object to file by pickle
-                if get_dump():
+                if get_dump() and os.environ.get("BASELINE_BASE_EACH_PLACEMENT", "1") == "1":  # only a stopped wall needs it
                     with open(get_dir()+"base.pkl", "wb") as filehandler:
                         pickle.dump(base, filehandler)
                 # print(f"brick added to base: {brick.width} * {brick.height}")

@@ -137,7 +137,20 @@ def worker_venv_identity():
 
 
 def committed_placements(output):
-    return sum(len(p.read_text(encoding='utf-8').splitlines()) for p in output.rglob('decisions.txt'))
+    return sum(len(p.read_text(encoding='utf-8').splitlines()) for p in output.glob('result*/decisions.txt'))
+
+
+def keep_data_only(output):
+    """Remove what the finished case no longer needs: the copies of its inputs (they stay in Tests/), the runtime
+    copy, matplotlib's cache and Wang's image and record folders once they hold nothing."""
+    for name in ('data', 'matplotlib-config'):
+        shutil.rmtree(output / name, ignore_errors=True)
+    (output / 'windows_case_runtime.py').unlink(missing_ok=True)
+    for result in output.glob('result*'):
+        (result / 'img' / 'selection.txt').unlink(missing_ok=True)  # with the records off, only its header line
+        for folder in (result / 'img', result / 'record'):
+            if folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
 
 
 def code_fingerprint(root=REPO):
@@ -288,9 +301,16 @@ def verified_trace(output, args, process_status, termination):
 
 
 def write_steps(output):
-    """derived/steps.csv of a traced wall: wall_metrics.step_rows of every result; returns the number of rows."""
+    """derived/steps.csv of a traced wall, one row per sampling attempt: wall_metrics.step_rows of every result, the
+    wall's four metrics after it (partial_quality) and its wall time; returns the number of rows."""
     from research.walls import check_run, wall_metrics
-    rows = [{'result': r.name, **row} for r in check_run.result_dirs(output) for row in wall_metrics.step_rows(r)]
+
+    times = iter(wall_metrics.step_wall_times(output / "events.jsonl"))
+    rows = [
+        {"result": r.name, **row, **quality, **next(times, {})}
+        for r in check_run.result_dirs(output)
+        for row, quality in zip(wall_metrics.step_rows(r), wall_metrics.partial_quality(r))
+    ]
     path = output / 'derived' / 'steps.csv'
     path.parent.mkdir(exist_ok=True)
     case_index.write_csv(path, list(dict.fromkeys(k for row in rows for k in row)), rows)
@@ -348,7 +368,8 @@ def run(argv=None):
     case_id, output = prepare_output(args.case, started)
     guard = subprocess.run([sys.executable, '-B', str(VALIDATION / 'verify_environment.py')],
                            cwd=REPO, capture_output=True, text=True, env=quiet_env())
-    (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
+    if guard.returncode:
+        (output / 'environment-guard.log').write_text(guard.stdout + guard.stderr, encoding='utf-8')
     assert guard.returncode == 0, guard.stderr
 
     source_name, replicates = CASES[args.case]
@@ -368,7 +389,9 @@ def run(argv=None):
     if (original.parent / 'config.json').exists():
         shutil.copy2(original.parent / 'config.json', output / 'config.json')
 
-    git = lambda *a: subprocess.run(['git', *a], cwd=REPO, capture_output=True, text=True, env=quiet_env()).stdout.strip()
+    git = lambda *a: subprocess.run(
+        ["git", *a], cwd=REPO, capture_output=True, encoding="utf-8", errors="replace", env=quiet_env()
+    ).stdout.strip()
     receipt = {
         'schema_version': 2, 'case_id': case_id, 'scene': cid.scene_code(args.case), 'parent': args.parent,
         'started': started.isoformat(timespec='seconds'),
@@ -390,7 +413,8 @@ def run(argv=None):
     env = {**os.environ, 'MPLBACKEND': 'Agg', 'MPLCONFIGDIR': str(output / 'matplotlib-config'),
            'PYTHONHASHSEED': '20', 'PYTHONDONTWRITEBYTECODE': '1',
            'BASELINE_CASE_EVENTS': str(output / 'events.jsonl'),
-           'BASELINE_SELECT_FIRST_WALL': '1' if replicates > 1 else '0'}
+           'BASELINE_SELECT_FIRST_WALL': '1' if replicates > 1 else '0',
+           'BASELINE_BASE_EACH_PLACEMENT': '1' if args.placements else '0'}
     start = time.monotonic()
     termination, process_status = None, 'LAUNCHER_ERROR'
     try:
@@ -424,6 +448,7 @@ def run(argv=None):
                 receipt['derived'] = {'steps.csv': write_steps(output)}
             except Exception as error:  # a derived table never changes the wall's status
                 receipt['derived'] = {'steps.csv': f'not written: {error!r}'}
+        keep_data_only(output)
         if receipt['status'] != process_status or process_status == 'FAILED':
             receipt['execution_log_tail'] = (output / 'execution.log').read_text(
                 encoding='utf-8', errors='replace').splitlines()[-25:]

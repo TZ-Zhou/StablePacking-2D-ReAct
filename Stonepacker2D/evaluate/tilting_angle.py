@@ -125,6 +125,8 @@ def plot_failure_mec(base_image, base_image_id, elems, LA, direction='right',plo
         cbar.set_label('element y displacement/max y displacement')
     elif plot_disp == 'euclidean':
         cbar.set_label('element displacement/max displacement')
+    with open(get_dir()+"mechanism.csv", "a+") as f:  # the limit load, which only the image's name held before
+        f.write(("side,limit_load\n" if f.tell() == 0 else "") + "{},{}\n".format(direction, LA))
     plt.savefig(get_dir()+"img/"+direction+str(LA)+'_mechanism.png', dpi=2400, transparent=True)
 
 

@@ -22,12 +22,12 @@ import pickle
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
 from research.paths import LEGACY_RUNS, REPO
 from research.walls import wall_metrics as metrics
+from research.walls.wall_metrics import lambdas
 from Stonepacker2D.stack.selection import load_trace
 
 OUT = REPO / 'research' / 'reports' / 'gpt-001-cf-steps'
@@ -45,36 +45,6 @@ def result_of(run):
 
 def commits(result):
     return [json.loads(l) for l in (result / 'trace' / 'commits.jsonl').read_text(encoding='utf-8').splitlines()]
-
-
-def lambdas(world):
-    """evaluate_kine(load='tilting_table') of a wall matrix with both directions kept unrounded: its two
-    solve_force_rigid calls, 'right' (load +mass) and 'left' (-mass) as its mechanism files name them.
-    Bricks from the matrix as research/analysis/lookahead_study.kine_lr builds them."""
-    from Stonepacker2D.evaluate.tilting_angle import (base_to_elements, cal_Aglobal, clear_contps, pixel_to_mesh,
-                                                      solve_force_rigid)
-    from Stonepacker2D.utils.constant import get_ignore_pixel_value, set_head_joint_state, set_world_size
-    set_world_size(world.shape[1], world.shape[0])
-    set_head_joint_state(True)
-    bricks = []
-    for k in range(1, int(world[world != 255].max()) + 1):
-        r, c = np.nonzero(world == k)
-        bricks.append(SimpleNamespace(matrix=(world == k).astype(np.uint8), width=np.ptp(c) + 1 if r.size else 0,
-                                      height=np.ptp(r) + 1 if r.size else 0))
-    base = SimpleNamespace(matrix=world, placed_bricks=bricks, cluster_matrix=np.zeros(world.shape))
-    img = base.matrix.astype(np.uint8)
-    img = np.where(img != get_ignore_pixel_value(), img, 0)
-    contps = pixel_to_mesh(img)
-    elems = base_to_elements(base)
-    contps = clear_contps(elems, contps)
-    out = {}
-    for side, sign in (('right', 1), ('left', -1)):
-        for e in elems.values():
-            e.dl, e.ll = [0, -e.mass, 0], [sign * e.mass, 0, 0]
-        if side == 'right':
-            Aglobal = cal_Aglobal(elems, contps)
-        out[side] = float(solve_force_rigid(elems, contps, Aglobal)['limit_force'])
-    return out
 
 
 def wall_steps(name):

@@ -54,6 +54,7 @@ def case_environment(output, replicates, args):
         "PYTHONDONTWRITEBYTECODE": "1",
         "BASELINE_CASE_EVENTS": str(output / "events.jsonl"),
         "BASELINE_SELECT_FIRST_WALL": "1" if replicates > 1 else "0",
+        "BASELINE_BASE_EACH_PLACEMENT": "0",
         **perf,
     }
 
