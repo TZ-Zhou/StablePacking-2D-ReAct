@@ -53,6 +53,15 @@ into Observation V2.
   beyond one comparison of two seeds, and persistent-worker state across calls (not audited).
   A broader check was started and stopped unfinished.
 
+### Seconds per stone after the speedup (`pref/speed-up`, 2026-11-09)
+- Machine pc2, 8 workers, persistent pool, trace on, 16 full walls (8 scenes, `code_original` and `paper`), 752 stones after
+  the first. Mean 2.96 → 0.35 s; stones over 2 s 386 → 0. Identical walls to the baseline `59ae057`.
+- Slowest wall, `AL_IR`: mean 10.08 → 1.04 s (`code_original`), 7.25 → 0.91 s (`paper`), max 15.92 → 1.44 s. Per scene:
+  `docs/plans/case-speedup-2s-per-stone.md`.
+- One timing run of each wall, on a laptop; the maximum of `AL_IR` moved by 0.7 s between identical runs. An independent
+  rebuild of the 16 walls had 0 stones over 2 s, slowest 1.81 s.
+- `random` controller, 5 walls, identical to the baseline walls: 162 stones, 0 over 2 s, slowest 1.91 s (`AL_IR`, mean 1.25 s).
+
 ## Temporal myopia on TH_T80 (recorded walls)
 
 Does the step-by-step cascade miss the long-term result? All offline from `research/runs` traces; final metrics from

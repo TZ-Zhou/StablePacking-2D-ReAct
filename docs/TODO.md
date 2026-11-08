@@ -7,7 +7,7 @@
 
 ## 待驗證
 
-- 整面牆比較未跑。目前只比過 `thangavelu-noise80`、`paper` 的前 5 塊石頭：fresh 與持久 worker 各一面，零差異，`check_run` 通過。其他場景、`code_original`、整面牆與封存牆比對都沒驗證；比較出差異時從 `6886b87` 查起：
+- fresh 與持久 worker 只比過 `thangavelu-noise80`、`paper` 的前 5 塊石頭。持久 worker 的 16 面整牆與基準牆零差異，見 `docs/plans/case-speedup-2s-per-stone.md`。比較出差異時從 `6886b87` 查起：
 
   ```bash
   python -B -m research.runner.verify_speedup final --scenes thangavelu-noise80,fft-d2-0,bricks,almeida-pr --timeout 3600
@@ -28,7 +28,7 @@
 
 ## 砌牆加速（`docs/plans/case-speedup-2s-per-stone.md`）
 
-階段、手段與待決定都在該計畫。
+第二顆起每顆 < 2 秒已達成，結果與決定都在該計畫。`pref/speed-up` 尚未合併 `main`。
 
 | 項 | 要做什麼 |
 | --- | --- |
