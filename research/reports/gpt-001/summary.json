@@ -1,0 +1,49 @@
+{
+ "run": "research/runs/gpt-walls/gpt-001",
+ "seed": 66794912,
+ "git_head": "391d732a4df5f0d594213aaaeeb1361a421c110f",
+ "journal_state": "finished",
+ "journal_reasons": [],
+ "status": "PROCESS_PASS",
+ "elapsed_seconds": 459.157,
+ "started_at": "2026-11-08T12:54:47",
+ "ended_at": "2026-11-08T13:02:32",
+ "model": "gpt-6.1-terra",
+ "observation_version": 2,
+ "http_requests": 37,
+ "http_requests_exact": true,
+ "tokens": 145293,
+ "cost_usd": 0.14081575,
+ "unknown_usage": 0,
+ "workers_reaped": true,
+ "decision_points": 16,
+ "llm_decisions": 16,
+ "switches": 9,
+ "gpt_complete": true,
+ "key_scan": [],
+ "categories": {
+  "paper kept": 7,
+  "order differs, same candidate": 0,
+  "candidate changed": 9
+ },
+ "tool_sequences": {
+  "list_order_outcomes+commit_order": 11,
+  "list_order_outcomes+explain_order+commit_order": 5
+ },
+ "first_different_placement_vs_paper_wall": 6,
+ "steps_with_same_sample_vs_paper_wall": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6
+ ],
+ "information_checks": {
+  "controller_check": "PASS",
+  "check_problems": [],
+  "requests_with_quality_terms": [],
+  "requests_naming_tilting": 37,
+  "note": "check re-executes every record on its own event trace (ReplayLLM); a request built from anything else would not replay. Decision rows use one event each. tilting: the fixed system prompt defines LLC (a decision-time candidate score), not a final metric."
+ }
+}

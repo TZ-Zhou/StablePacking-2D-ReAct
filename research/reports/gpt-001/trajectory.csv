@@ -1,0 +1,19 @@
+step,gpt_stone_id,gpt_rotation_world,gpt_x_world,gpt_y,gpt_outcome,gpt_llc,gpt_sampled,paper_stone_id,paper_rotation_world,paper_x_world,paper_y,paper_outcome,paper_llc,paper_sampled,same_placement,same_sample
+1,11,0,1,2,placed,1.034483,18 2 3 4 5 15 11,11,0,1,2,placed,1.034483,18 2 3 4 5 15 11,True,True
+2,1,0,78,2,placed,1.034483,1 2 3 16 5 8 12,1,0,78,2,placed,1.034483,1 2 3 16 5 8 12,True,True
+3,14,180,168,2,placed,1.034483,13 2 19 4 5 15 14,14,180,168,2,placed,1.034483,13 2 19 4 5 15 14,True,True
+4,18,180,241,2,placed,1.034483,18 2 19 4 5 10 17,18,180,241,2,placed,1.034483,18 2 19 4 5 10 17,True,True
+5,2,270,347,2,placed,1.034483,13 2 19 16 5 10 17,2,270,347,2,placed,1.034483,13 2 19 16 5 10 17,True,True
+6,10,0,164,26,placed,1.034483,13 19 4 5 10 17 15,17,0,15,32,placed,0.862069,13 19 4 5 10 17 15,False,True
+7,8,180,161,48,placed,1.034483,9 19 4 5 8 12 16,12,180,190,32,placed,0.689655,9 19 4 5 10 12 8,False,False
+8,15,90,218,34,placed,0.862069,13 3 4 5 15 17 12,19,0,294,43,placed,0.689655,13 3 4 5 10 19 8,False,False
+9,3,90,47,24,placed,0.689655,13 3 4 5 12 9 19,15,270,161,35,placed,0.689655,13 3 4 5 8 16 15,False,False
+10,19,180,257,43,placed,0.689655,13 19 4 5 17 6 9,5,270,83,55,placed,0.689655,13 3 4 5 8 6 16,False,False
+11,5,180,39,55,placed,0.689655,13 6 4 5 17 16 12,13,0,23,76,placed,0.689655,13 6 4 8 9 16 10,False,False
+12,6,180,94,57,placed,0.862069,9 6 4 12 13 17 16,10,0,140,56,placed,0.517241,9 6 16 8 10 4 3,False,False
+13,12,180,300,48,placed,0.862069,9 4 17 12 13 16,16,0,275,70,placed,0.689655,9 6 16 8 4 3,False,False
+14,17,0,162,59,placed,0.517241,9 16 17 4 13,3,0,362,53,placed,0.517241,9 3 4 8 6,False,False
+16,4,0,291,87,placed,0.517241,9 16 4 13,9,0,147,74,placed,0.517241,9 6 4 8,False,False
+17,13,0,75,71,placed,0.172414,9 16 13,8,180,215,72,placed,0.517241,6 4 8,False,False
+18,9,0,194,100,placed,0.172414,9 16,6,0,130,115,placed,0.344828,6 4,False,False
+20,16,180,114,126,placed,0.689655,16,4,0,28,131,placed,0.344828,4,False,False
