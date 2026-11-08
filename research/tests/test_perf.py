@@ -10,6 +10,8 @@ import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from research.paths import REPO, VALIDATION
 from research.perf import profile_case, profile_report
@@ -43,6 +45,27 @@ class Staging(unittest.TestCase):
                 perf, registered.replace(profile_case.RUNTIME_IMPORT, "from perf_runtime import configure", 1), case
             )
             self.assertNotEqual(perf, registered, case)
+
+
+class RunFolders(unittest.TestCase):
+    def test_a_timing_run_gets_a_new_folder_of_its_own(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(profile_case, "PERF_RUNS", Path(tmp) / "runs"):
+            output = profile_case.prepare_output("a")
+            self.assertEqual(output, (Path(tmp) / "runs" / "a").resolve())
+            self.assertTrue(output.is_dir())
+            with self.assertRaises(FileExistsError):
+                profile_case.prepare_output("a")
+
+    def test_the_report_finds_a_path_a_timing_run_or_an_archived_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs, archive = Path(tmp) / "runs", Path(tmp) / "archive"
+            (runs / "new").mkdir(parents=True)
+            with mock.patch.object(profile_report, "PERF_RUNS", runs), mock.patch.object(
+                profile_report, "LEGACY_RUNS", archive
+            ):
+                self.assertEqual(profile_report.resolve_run(tmp), Path(tmp))
+                self.assertEqual(profile_report.resolve_run("new"), runs / "new")
+                self.assertEqual(profile_report.resolve_run("old"), archive / "old")
 
 
 class Report(unittest.TestCase):

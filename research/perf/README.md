@@ -5,7 +5,7 @@
 ## 內容
 | 檔案 | 說明 |
 | --- | --- |
-| `profile_case.py` | 以 `run_wall.CASES` 與 `run_wall.stage` 暫存並執行一個原始案例（不追蹤、無控制器），寫到新的 `research/runs/<名稱>/` |
+| `profile_case.py` | 以 `run_wall.CASES` 與 `run_wall.stage` 暫存並執行一個原始案例（不追蹤、無控制器），寫到新的 `research/perf/runs/<名稱>/`（不進版控，不是登記牆） |
 | `perf_runtime.py` | 暫存進案例資料夾的執行期：先套用登記的相容層，再換掉 `build_wall.Pool` 並加上計時；不可匯入 `research` 套件（spawn 的 worker 在案例資料夾執行） |
 | `profile_report.py` | 唯讀報告：階段耗時、主行程計時、worker 區段、平均忙碌 worker 數，以及 `--cprofile` 的函式層級資料 |
 
@@ -21,7 +21,7 @@
 python -B -m research.perf.profile_case fft-d2-0 perf-fft-pp --policy paper --order 3,0,2,1,4 --persistent-pool
 python -B -m research.perf.profile_report show perf-fft-pp
 ```
-- 兩種模式的結果是否相同，用同案例、政策、順序、種子各跑一次後比對：`python -B -m research.walls.check_run <run a> --compare <run b>`。
+- 兩種模式的結果是否相同，用同案例、政策、順序、種子各跑一次後，用 `research.walls.check_run.compare_runs(<資料夾 a>, <資料夾 b>)` 比對。
 - `img/selection.txt` 由多個 worker 附加寫入，列的順序不固定，比對時要排序。
 - 這是大量耗時的行程；在共用主機上先走硬體調度員送票，不要直接開跑。
 - 測試：`python -B -m unittest research.tests.test_perf`（不跑案例）。

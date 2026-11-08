@@ -17,7 +17,7 @@ import json
 import pstats
 from pathlib import Path
 
-from research.paths import RUNS
+from research.paths import LEGACY_RUNS, PERF_RUNS
 
 CASE_MARKS = (
     ("build_enter", "stone loading, shape factors, clustering"),
@@ -27,8 +27,11 @@ CASE_MARKS = (
 
 
 def resolve_run(run):
-    path = Path(run)
-    return path if path.is_dir() else RUNS / run
+    """A run's folder: a path, a name in research/perf/runs, or a name in the research/runs archive."""
+    for path in (Path(run), PERF_RUNS / run):
+        if path.is_dir():
+            return path
+    return LEGACY_RUNS / run
 
 
 def load_events(run_dir):

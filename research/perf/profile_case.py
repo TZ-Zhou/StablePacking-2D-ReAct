@@ -6,10 +6,10 @@ Then:  python -B -m research.perf.profile_report show <run name>
 
 Staging follows run_wall (same CASES, same stage(), copied inputs, shell cleanup refused); only the runtime that the
 staged case imports changes: perf_runtime.py (timers, optional persistent pool) on top of the registered
-windows_case_runtime.py. Output goes to a new research/runs/<name>: perf.json (launcher record), perf/ (timer output),
-events.jsonl, execution.log and the case's own result directory. The case runs without trace and without a controller,
-so nothing here is a registered run; to check that a pool mode leaves the result unchanged, run the same case, policy,
-order and seed twice and compare: python -B -m research.walls.check_run <run a> --compare <run b>.
+windows_case_runtime.py. Output goes to a new research/perf/runs/<name>: perf.json (launcher record), perf/ (timer
+output), events.jsonl, execution.log and the case's own result directory. The case runs without trace and without a
+controller, so nothing here is a registered run; to check that a pool mode leaves the result unchanged, run the same
+case, policy, order and seed twice and compare the two folders with research.walls.check_run.compare_runs.
 The case needs MOSEK: load .env.local first (. .\\research\\load_env.ps1); the API keys are dropped from the case
 environment (run_wall.quiet_env).
 """
@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from research.paths import REPO, VALIDATION
+from research.paths import PERF_RUNS, REPO, VALIDATION
 from research.walls import run_wall
 
 RUNTIME_IMPORT = "from windows_case_runtime import configure"
@@ -99,10 +99,17 @@ def run_case(args, output, target, replicates):
     return launched, round(time.monotonic() - start, 3), returncode
 
 
+def prepare_output(name):
+    """A new research/perf/runs/<name>: a timing run is not a registered wall, so it stays out of research/cases."""
+    output = PERF_RUNS / name
+    output.mkdir(parents=True)
+    return output.resolve()
+
+
 def main(argv=None):
     args = parse_args(argv)
     assert Path(sys.prefix).resolve() == run_wall.ENV_PREFIX, sys.prefix
-    output = run_wall.prepare_output(args.name)
+    output = prepare_output(args.name)
     source_name, replicates = run_wall.CASES[args.case]
     filter_policy = {"policy": args.policy, "order": args.order, "tol": 1e-9}
     target = stage_inputs(output, source_name, filter_policy, args.seed)
