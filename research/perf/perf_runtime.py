@@ -73,7 +73,7 @@ SHARED_TARGETS = (  # (module, owner class or None, attributes) timed in the mai
     (
         "Stonepacker2D.evaluate.tilting_angle",
         None,
-        ("pixel_to_mesh", "base_to_elements", "clear_contps", "cal_Aglobal", "solve_force_rigid"),
+        ("contps_of_image", "base_to_elements", "cal_Aglobal", "solve_force_rigid"),
     ),
     (
         "Stonepacker2D.entity.stone",

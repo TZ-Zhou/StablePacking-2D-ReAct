@@ -1,0 +1,199 @@
+"""The fast replacements of the wall-building hot spots give the same bits as the slow original.
+
+Run from the repository root: python -B -m unittest research.tests.test_speedup_kernels
+"""
+
+import math
+import unittest
+from types import SimpleNamespace
+
+import numpy as np
+from scipy import ndimage
+from skimage.measure import regionprops
+
+from Stonepacker2D.evaluate import local_void, tilting_angle
+from Stonepacker2D.entity.base import Base
+from Stonepacker2D.utils import region_memo
+from Stonepacker2D.utils.kine_2d import Element
+from Stonepacker2D.utils.region_memo import stone_region
+
+RNG = np.random.default_rng(20)
+
+
+def stone_kernels():
+    """Mirrored binary stone images: odd and even in both dimensions, with holes in the bounding box."""
+    return [RNG.random((rows, cols)) < 0.7 for rows, cols in ((5, 7), (6, 7), (5, 8), (6, 8))]
+
+
+class CandidateMetric(unittest.TestCase):
+    def test_equals_the_full_convolution_bit_for_bit(self):
+        matrix = RNG.random((60, 80)) * 1e4
+        for kernel in stone_kernels():
+            full = local_void.get_convolution_metric(matrix, kernel)
+            rows, cols = np.meshgrid(np.arange(40), np.arange(60), indexing="ij")
+            rows, cols = rows.ravel(), cols.ravel()
+            pixel_rows, pixel_cols = local_void.stone_pixels(kernel)
+            sparse = local_void.candidate_metric(matrix, pixel_rows, pixel_cols, rows, cols)
+            self.assertEqual(sparse.tobytes(), full[rows, cols].tobytes())
+
+
+class ColumnWindowMin(unittest.TestCase):
+    def footprint_min(self, matrix, footprint, cval):
+        origin = [-((footprint.shape[0] - 1) // 2), -((footprint.shape[1] - 1) // 2)]
+        return ndimage.minimum_filter(matrix, footprint=footprint, mode="constant", cval=cval, origin=origin)
+
+    def test_equals_the_filter_with_a_one_column_footprint(self):
+        matrix = RNG.random((40, 50)) * 30
+        for shape in ((5, 7), (6, 7), (5, 8), (6, 8)):
+            even_rows, even_cols = 1 - shape[0] % 2, 1 - shape[1] % 2
+            start = math.ceil(shape[0] / 2)
+            cases = (
+                (0, -even_rows, 1, 0, -even_cols, np.inf),
+                (0, -even_rows, 1, -1, shape[1] - 1 - even_cols, np.inf),
+                (slice(start, None), start - even_rows, shape[0] - start, 0, -even_cols, 0.0),
+                (slice(start, None), start - even_rows, shape[0] - start, -1, shape[1] - 1 - even_cols, 0.0),
+            )
+            for rows, first_row, length, column, shift, cval in cases:
+                footprint = np.zeros(shape, dtype=bool)
+                footprint[rows, column] = True
+                expected = self.footprint_min(matrix, footprint, cval)
+                got = local_void.column_window_min(matrix, first_row, length, shift, cval)
+                self.assertTrue(np.array_equal(got, expected))
+
+
+class StoneRegion(unittest.TestCase):
+    def test_equals_regionprops_and_is_none_without_a_region(self):
+        matrix = np.zeros((20, 30), dtype=np.float64)
+        matrix[3:9, 5:12] = 1
+        properties = regionprops(matrix.astype(np.uint8))[0]
+        self.assertEqual(stone_region(SimpleNamespace(matrix=matrix)), (properties.centroid, properties.area))
+        self.assertIsNone(stone_region(SimpleNamespace(matrix=np.zeros((20, 30), dtype=np.uint8))))
+
+    def test_a_new_image_of_the_stone_is_not_answered_from_the_old_one(self):
+        first, second = np.zeros((20, 30)), np.zeros((20, 30))
+        first[3:9, 5:12], second[10:12, 1:4] = 1, 1
+        stone = SimpleNamespace(matrix=first)
+        stone_region(stone)
+        stone.matrix = second
+        self.assertEqual(stone_region(stone)[1], 6)
+
+
+class OccupiedBounds(unittest.TestCase):
+    def bounds_of(self, matrix):
+        return region_memo.occupied_bounds(SimpleNamespace(matrix=matrix))
+
+    def test_equals_the_coordinates_of_the_placed_pixels(self):
+        matrix = np.zeros((20, 30))
+        matrix[3:9, 5:12] = 2
+        occupied = np.argwhere(matrix)
+        self.assertEqual(
+            self.bounds_of(matrix), (True, occupied[:, 0].min(), occupied[:, 0].max(), occupied[:, 1].min())
+        )
+
+    def test_a_wall_without_placed_pixels_is_not_found(self):
+        self.assertFalse(self.bounds_of(np.zeros((20, 30)))[0])
+
+    def test_a_single_pixel_at_the_origin_is_not_found_as_any_of_its_coordinates_says(self):
+        matrix = np.zeros((20, 30))
+        matrix[0, 0] = 1
+        self.assertFalse(np.argwhere(matrix).any())
+        self.assertFalse(self.bounds_of(matrix)[0])
+
+
+class ForPlacement(unittest.TestCase):
+    def test_adding_to_the_copy_leaves_the_lists_of_the_wall_as_they_were(self):
+        base = Base.__new__(Base)
+        base.matrix = np.zeros((5, 5))
+        names = (
+            "centers",
+            "placed_bricks",
+            "rock_centers",
+            "placed_rocks",
+            "rock_tops",
+            "rock_right_bottoms",
+            "rock_left_tops",
+            "rock_right_tops",
+        )
+        for name in names:
+            setattr(base, name, ["old"])
+        future = base.for_placement()
+        for name in names:
+            getattr(future, name).append("new")
+            self.assertEqual(getattr(base, name), ["old"])
+
+
+def blocks_image():
+    """Three stones on a ground, some in contact on their sides and with a gap between others."""
+    image = np.zeros((40, 60), dtype=np.uint8)
+    image[0:6, :] = 1
+    image[6:20, 4:20] = 2
+    image[6:18, 20:34] = 3
+    image[6:14, 40:50] = 4
+    image[18:30, 21:33] = 5
+    return image
+
+
+def contact_summary(contps):
+    return [(key, c.coor, c.cand, c.anta, c.orientation, c.cont_type.name, c.cont_type.mu) for key, c in contps.items()]
+
+
+class ContactsOfImage(unittest.TestCase):
+    def test_equals_the_objects_built_for_every_pixel(self):
+        image = blocks_image()
+        elems = {
+            key: Element(key, [0, 0], 1, [], type="ground" if key == 1 else "stone")
+            for key in np.unique(image)
+            if key != 0
+        }
+        elems = {int(key): element for key, element in elems.items()}
+        slow = tilting_angle.clear_contps(elems, tilting_angle.pixel_to_mesh(image))
+        fast = tilting_angle.contps_of_image(elems, image)
+        self.assertEqual(contact_summary(fast), contact_summary(slow))
+        self.assertGreater(len(fast), 0)
+
+    def assert_same_with_and_without_the_wall(self, wall, image):
+        elems = {
+            int(key): Element(int(key), [0, 0], 1, [], type="ground" if key == 1 else "stone")
+            for key in np.unique(image)
+            if key != 0
+        }
+        slow = tilting_angle.clear_contps(elems, tilting_angle.pixel_to_mesh(image))
+        self.assertEqual(contact_summary(tilting_angle.contps_of_image(elems, image, wall)), contact_summary(slow))
+
+    def test_a_stone_added_to_a_wall_equals_the_whole_image(self):
+        image = blocks_image()
+        wall = image.copy()
+        wall[wall == 5] = 0
+        self.assert_same_with_and_without_the_wall(wall, image)
+
+    def test_a_stone_touching_the_edge_of_the_image_equals_the_whole_image(self):
+        image = blocks_image()
+        image[20:40, 50:60] = 6
+        wall = image.copy()
+        wall[wall == 6] = 0
+        self.assert_same_with_and_without_the_wall(wall, image)
+
+    def test_an_unchanged_wall_equals_the_whole_image(self):
+        self.assert_same_with_and_without_the_wall(blocks_image(), blocks_image())
+
+    def test_a_changed_placed_stone_falls_back_to_the_whole_image(self):
+        image = blocks_image()
+        wall = image.copy()
+        wall[6:10, 4:10] = 3
+        self.assert_same_with_and_without_the_wall(wall, image)
+
+    def test_a_new_value_already_in_the_wall_falls_back_to_the_whole_image(self):
+        image = blocks_image()
+        image[30:34, 21:33] = 4
+        wall = image.copy()
+        wall[30:34, 21:33] = 0
+        self.assert_same_with_and_without_the_wall(wall, image)
+
+    def test_a_pixel_of_an_unknown_element_is_refused(self):
+        elems = {1: Element(1, [0, 0], 1, [], type="ground")}
+        with self.assertRaises(KeyError):
+            tilting_angle.contps_of_image(elems, blocks_image())
+
+
+if __name__ == "__main__":
+    unittest.main()

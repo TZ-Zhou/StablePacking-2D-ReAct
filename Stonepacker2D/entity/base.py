@@ -1,4 +1,6 @@
 
+from copy import copy
+
 from skimage.measure import regionprops
 import matplotlib.pyplot as plt
 from Geometry3D import *
@@ -64,6 +66,14 @@ class Base():
         for rock_right_top in self.rock_left_tops:
             mirrored_base.rock_right_tops.append((self._w - rock_right_top[0], rock_right_top[1]))
         return mirrored_base
+
+    def for_placement(self):
+        """A copy to try one more stone on: add_stone replaces the images and extends the lists, placed stones stay."""
+        future = copy(self)
+        for name in ("centers", "placed_bricks", "rock_centers", "placed_rocks", "rock_tops", "rock_right_bottoms",
+                     "rock_left_tops", "rock_right_tops"):
+            setattr(future, name, list(getattr(self, name)))
+        return future
 
     def plot(self):
         # plot Matrix
@@ -190,13 +200,11 @@ class Base():
                 # add to rock store
                 self.rock_centers.append(new_stone.center)
                 self.placed_rocks.append(new_stone)
-                self.rock_tops.append(np.max(np.nonzero(new_stone.matrix)[0]))
-                self.rock_right_bottoms.append([np.max(np.nonzero(new_stone.matrix)[
-                                               1]), np.min(np.nonzero(new_stone.matrix)[0])])  # max col, min row
-                self.rock_left_tops.append([np.min(np.nonzero(new_stone.matrix)[
-                    1]), np.max(np.nonzero(new_stone.matrix)[0])])  # min col, max row
-                self.rock_right_tops.append([np.max(np.nonzero(new_stone.matrix)[
-                    1]), np.max(np.nonzero(new_stone.matrix)[0])])  # max col, max row
+                stone_rows, stone_cols = np.nonzero(new_stone.matrix)
+                self.rock_tops.append(np.max(stone_rows))
+                self.rock_right_bottoms.append([np.max(stone_cols), np.min(stone_rows)])  # max col, min row
+                self.rock_left_tops.append([np.min(stone_cols), np.max(stone_rows)])  # min col, max row
+                self.rock_right_tops.append([np.max(stone_cols), np.max(stone_rows)])  # max col, max row
 
                 current_index = int(len(self.centers)-1)
                 if get_stabalize_method() == 'rotation':#DEFAULT: rotation first, if not stable, add wedge

@@ -1,5 +1,6 @@
 from scipy import ndimage
 from ..utils.kine_2d import ContPoint, ContType
+from ..utils.region_memo import stone_region
 import numpy as np
 from skimage.measure import regionprops
 from ..utils.kine_2d import Element, update_elem_disp
@@ -16,6 +17,7 @@ newcolors = np.concatenate([tab20_cm(np.linspace(0, 1, 20))] * 13, axis=0)
 white = np.array([255/256, 255/256, 255/256, 1])
 newcolors[:1, :] = white
 newcmp = ListedColormap(newcolors)
+
 
 # rot_cmap=cm.get_cmap('RdBu')
 # rot_cmap[0] = white
@@ -39,6 +41,9 @@ class Parameter:
 parameters = Parameter()
 parameters_head = Parameter()
 parameters_mortar = Parameter()
+
+WALL_CONTACTS_KEPT = 4  # wall images remembered per process
+WALL_CONTACTS = {}
 
 
 def plot_failure_mec(base_image, base_image_id, elems, LA, direction='right',plot_disp = 'euclidean',factor = 1e4):
@@ -130,7 +135,7 @@ def plot_failure_mec(base_image, base_image_id, elems, LA, direction='right',plo
     plt.savefig(get_dir()+"img/"+direction+str(LA)+'_mechanism.png', dpi=2400, transparent=True)
 
 
-def evaluate_kine(final_base, save_failure=False, load='linear_acceleration'):
+def evaluate_kine(final_base, save_failure=False, load='linear_acceleration', wall=None):
     """Evaluate the limit tilting angle of the placed stones
 
     :param final_base: The base to be evaluated
@@ -143,9 +148,8 @@ def evaluate_kine(final_base, save_failure=False, load='linear_acceleration'):
     # print(img.shape)
     img = np.where(img != ignore_pixel_value, img, 0)
     # print(img.shape)
-    contps = pixel_to_mesh(img)
     elems = base_to_elements(final_base)
-    contps = clear_contps(elems, contps)
+    contps = contps_of_image(elems, img, None if wall is None else wall.astype(np.uint8))
     # ****************************************************************
     # ******** Tilting Table Load********************************
     # ****************************************************************
@@ -249,20 +253,13 @@ def _append_contps(contps, maxPointID, img, index, coords, anta_rows, anta_cols,
     return maxPointID
 
 
-def pixel_to_mesh(img,ignore_zero = True):
-    contps = dict()
-    maxPointID = 0
-    parameters.mu = get_mu()
-
-    _conttype = ContType("friction", parameters)
-    parameters_head.mu = get_mu()
-    if get_head_joint_state() == True:
-        parameters_head.mu = 0
-    _conttype_head = ContType("friction", parameters_head)
-
+def _boundary_directions(img):
+    """The four kinds of boundary pixel of `img`: (pixels, contact coordinates, neighbour rows, neighbour columns, tangent,
+    normal, whether it is a head joint), in the order the contact points are numbered."""
     # CONVOLVE: https://towardsdatascience.com/image-derivative-8a07a4118550
-    # pixels whose value is different from pixel on the right
+    directions = []
 
+    # pixels whose value is different from pixel on the right
     normal = [-1, 0]
     tangent = [0, -1]
     Kx = np.array([[-1, 1, 0]])
@@ -273,9 +270,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     #matrix_x_right = np.multiply(img,matrix_x_right)
     index_x_right = np.argwhere(matrix_x_right > 0)
     coords = np.flip(np.sum([index_x_right, [[0, 0.5]]], axis=0), axis=1)
-    # print(maxPointID)
-    maxPointID = _append_contps(contps, maxPointID, img, index_x_right, coords, index_x_right[:, 0], np.minimum(
-        index_x_right[:, 1]+1, img.shape[1]), tangent, normal, _conttype_head, ignore_zero)
+    directions.append((index_x_right, coords, index_x_right[:, 0], np.minimum(
+        index_x_right[:, 1]+1, img.shape[1]), tangent, normal, True))
 
     # pixels whose value is different from pixel on the left
     normal = [1, 0]
@@ -288,9 +284,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     matrix_x_left = np.multiply(img, matrix_x_left)
     index_x_left = np.argwhere(matrix_x_left > 0)
     coords = np.flip(np.sum([index_x_left, [[0, -0.5]]], axis=0), axis=1)
-    # print(maxPointID)
-    maxPointID = _append_contps(contps, maxPointID, img, index_x_left, coords, index_x_left[:, 0], np.maximum(
-        index_x_left[:, 1]-1, 0), tangent, normal, _conttype_head, ignore_zero)
+    directions.append((index_x_left, coords, index_x_left[:, 0], np.maximum(
+        index_x_left[:, 1]-1, 0), tangent, normal, True))
 
     # pixels whose value is different from pixel below
     normal = [0, -1]
@@ -303,9 +298,8 @@ def pixel_to_mesh(img,ignore_zero = True):
     matrix_y_below = np.multiply(img, matrix_y_below)
     index_y_below = np.argwhere(matrix_y_below > 0)
     coords = np.flip(np.sum([index_y_below, [[+0.5, 0]]], axis=0), axis=1)
-    # print(maxPointID)
-    maxPointID = _append_contps(contps, maxPointID, img, index_y_below, coords, np.minimum(
-        index_y_below[:, 0]+1, img.shape[0]), index_y_below[:, 1], tangent, normal, _conttype, ignore_zero)
+    directions.append((index_y_below, coords, np.minimum(
+        index_y_below[:, 0]+1, img.shape[0]), index_y_below[:, 1], tangent, normal, False))
 
     # pixels whose value is different from pixel above
     normal = [0, 1]
@@ -318,9 +312,25 @@ def pixel_to_mesh(img,ignore_zero = True):
     matrix_y_above = np.multiply(img, matrix_y_above)
     index_y_above = np.argwhere(matrix_y_above > 0)
     coords = np.flip(np.sum([index_y_above, [[-0.5, 0]]], axis=0), axis=1)
-    # print(maxPointID)
-    maxPointID = _append_contps(contps, maxPointID, img, index_y_above, coords, np.maximum(
-        index_y_above[:, 0]-1, 0), index_y_above[:, 1], tangent, normal, _conttype, ignore_zero)
+    directions.append((index_y_above, coords, np.maximum(
+        index_y_above[:, 0]-1, 0), index_y_above[:, 1], tangent, normal, False))
+    return directions
+
+
+def pixel_to_mesh(img,ignore_zero = True):
+    contps = dict()
+    maxPointID = 0
+    parameters.mu = get_mu()
+
+    _conttype = ContType("friction", parameters)
+    parameters_head.mu = get_mu()
+    if get_head_joint_state() == True:
+        parameters_head.mu = 0
+    _conttype_head = ContType("friction", parameters_head)
+
+    for index, coords, anta_rows, anta_cols, tangent, normal, head in _boundary_directions(img):
+        maxPointID = _append_contps(contps, maxPointID, img, index, coords, anta_rows, anta_cols, tangent, normal,
+                                    _conttype_head if head else _conttype, ignore_zero)
 
     ####################################################################################################
     # print(len(contps))
@@ -373,8 +383,8 @@ def base_to_elements(final_base):
     elems = dict()
     for i, stone in enumerate(final_base.placed_bricks):
         element_id = i+1
-        property = regionprops(stone.matrix.astype(np.uint8))
-        if not property:
+        region = stone_region(stone)
+        if not region:
             print(stone.matrix)
             print(stone.id)
             if np.argwhere(stone.matrix).shape[0]==0:
@@ -385,24 +395,149 @@ def base_to_elements(final_base):
                 center = [0.5*(min_index[1]+max_index[1]),
                         0.5*(min_index[0]+max_index[0])]
         else:
-            center = [property[0].centroid[1], property[0].centroid[0]]
+            center = [region[0][1], region[0][0]]
         #edges = cv2.Canny(stone.matrix.astype(np.uint8), 0, 0)
         #vertices = np.flip(np.argwhere(edges > 0), axis=1)
         vertices = [[center[0]-stone.width/2, center[1]-stone.height/2], [center[0]-stone.width/2, center[1]+stone.height/2],
                     [center[0]+stone.width/2, center[1]+stone.height/2], [center[0]+stone.width/2, center[1]-stone.height/2]]
         if i == 0:
             elems[element_id] = Element(
-                element_id, center, property[0].area, vertices, type='ground')
+                element_id, center, region[1], vertices, type='ground')
         else:
             elems[element_id] = Element(
-                element_id, center, property[0].area, vertices, type='stone')
+                element_id, center, region[1], vertices, type='stone')
 
     return elems
 
 
+def _pair_geometry(normals, coordinates):
+    """Both ends and the axes of the contact of one pair of elements; None when its normals cancel out."""
+    averaged_normal = normals.mean(axis=0)
+    norm = np.linalg.norm(averaged_normal)
+    if norm == 0:
+        return None
+    # the cross product of (n0, n1, 0) and (0, 0, 1), term by term
+    tangent = np.array([averaged_normal[1] - 0.0, 0.0 - averaged_normal[0]])
+    new_t = tangent / np.linalg.norm(tangent)
+    new_n = averaged_normal / norm
+    # sort by projection to tangent direction
+    projections = np.matmul(coordinates, np.asarray([[new_t[0]], [new_t[1]]]))
+    coordinate_sort_indices = np.argsort(projections.reshape(1, -1))[0]
+    return (
+        coordinates[coordinate_sort_indices[0], :],
+        coordinates[coordinate_sort_indices[-1], :],
+        new_t.tolist(),
+        new_n.tolist(),
+    )
+
+
+def _add_pair(cleaned_contps, maxPointID, value_cand, value_anta, geometry):
+    """Add the two contact points of one pair of elements; returns the next point id."""
+    if geometry is None:
+        return maxPointID
+    coordinate_end1, coordinate_end2, new_t, new_n = geometry
+    if value_cand.type == 'mortar' and value_anta.type == 'mortar':
+        _conttype = ContType("friction_fc_cohesion", parameters)
+    else:
+        _conttype = ContType("friction", parameters)
+    cleaned_contps[maxPointID] = ContPoint(
+        maxPointID, [coordinate_end1[0], coordinate_end1[1]], value_cand.id, value_anta.id, list(new_t), list(new_n),
+        _conttype)
+    maxPointID += 1
+    cleaned_contps[maxPointID] = ContPoint(
+        maxPointID, [coordinate_end2[0], coordinate_end2[1]], value_cand.id, value_anta.id, list(new_t), list(new_n),
+        _conttype)
+    return maxPointID + 1
+
+
+def _cleaned_pair(cleaned_contps, maxPointID, value_cand, value_anta, normals, coordinates):
+    """Add the two contact points that replace all the boundary pixels of one pair; returns the next point id."""
+    return _add_pair(cleaned_contps, maxPointID, value_cand, value_anta, _pair_geometry(normals, coordinates))
+
+
+def _contact_pixels(img, first_row=0, first_col=0):
+    """(candidates, antagonists, coordinates, normals) of the boundary pixels between two non-zero values of `img`.
+
+    The order is the one of _boundary_directions; `first_row` and `first_col` place a cropped `img` in the full image.
+    """
+    occupied = img != 0
+    right = (img[:, :-1] != img[:, 1:]) & occupied[:, :-1] & occupied[:, 1:]
+    below = (img[:-1, :] != img[1:, :]) & occupied[:-1, :] & occupied[1:, :]
+    h_rows, h_cols = np.nonzero(right)
+    v_rows, v_cols = np.nonzero(below)
+    left_value, right_value = img[h_rows, h_cols], img[h_rows, h_cols + 1]
+    upper_value, lower_value = img[v_rows, v_cols], img[v_rows + 1, v_cols]
+    h_rows, h_cols = (h_rows + first_row).astype(np.float64), (h_cols + first_col).astype(np.float64)
+    v_rows, v_cols = (v_rows + first_row).astype(np.float64), (v_cols + first_col).astype(np.float64)
+    candidates = np.concatenate((left_value, right_value, upper_value, lower_value)).astype(np.int64)
+    antagonists = np.concatenate((right_value, left_value, lower_value, upper_value)).astype(np.int64)
+    h_coordinates = np.column_stack((h_cols + 0.5, h_rows))
+    v_coordinates = np.column_stack((v_cols, v_rows + 0.5))
+    coordinates = np.concatenate((h_coordinates, h_coordinates, v_coordinates, v_coordinates))
+    counts = (len(h_rows), len(h_rows), len(v_rows), len(v_rows))
+    normals = np.repeat(np.array([[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0]]), counts, axis=0)
+    return candidates, antagonists, coordinates, normals
+
+
+def _pair_geometries(candidates, antagonists, coordinates, normals):
+    """{(candidate, antagonist): geometry}; the pixels of a pair stay in the order they come in."""
+    pairs = candidates * (int(antagonists.max(initial=0)) + 1) + antagonists
+    in_key_order = np.argsort(pairs, kind="stable")
+    groups = np.split(in_key_order, np.flatnonzero(np.diff(pairs[in_key_order])) + 1) if pairs.size else []
+    return {
+        (int(candidates[group[0]]), int(antagonists[group[0]])): _pair_geometry(normals[group], coordinates[group])
+        for group in groups
+    }
+
+
+def _wall_contacts(wall):
+    """(geometries, values) of a wall image, remembered in this process: every pose of a step adds one stone to it."""
+    key = wall.shape, wall.tobytes()
+    if key not in WALL_CONTACTS:
+        if len(WALL_CONTACTS) >= WALL_CONTACTS_KEPT:
+            WALL_CONTACTS.clear()
+        WALL_CONTACTS[key] = _pair_geometries(*_contact_pixels(wall)), set(np.unique(wall).tolist())
+    return WALL_CONTACTS[key]
+
+
+def _contact_geometries(img, wall):
+    """The geometries of `img`: those of `wall` plus the new pairs, when `img` only fills empty pixels with new values."""
+    if wall is not None:
+        geometries, wall_values = _wall_contacts(wall)
+        changed = img != wall
+        new_values = set(np.unique(img[changed]).tolist())
+        if not np.any(wall[changed]) and not new_values & wall_values:
+            if not new_values:
+                return geometries
+            rows = np.flatnonzero(changed.any(axis=1))
+            cols = np.flatnonzero(changed.any(axis=0))
+            first_row, first_col = max(int(rows[0]) - 1, 0), max(int(cols[0]) - 1, 0)
+            window = img[first_row : int(rows[-1]) + 2, first_col : int(cols[-1]) + 2]
+            local = _pair_geometries(*_contact_pixels(window, first_row, first_col))
+            new_pairs = {pair: value for pair, value in local.items() if pair[0] in new_values or pair[1] in new_values}
+            return {**geometries, **new_pairs}
+    return _pair_geometries(*_contact_pixels(img))
+
+
+def contps_of_image(elems, img, wall=None):
+    """clear_contps(elems, pixel_to_mesh(img)) without an object for every boundary pixel.
+
+    `wall` is the image before the last stone was added, when there is one: its pairs are not computed again.
+    """
+    parameters.mu = get_mu()
+    geometries = _contact_geometries(img, wall)
+    element_order = {key: position for position, key in enumerate(elems)}
+    cleaned_contps = dict()
+    maxPointID = 0
+    # only pairs with contacts, in elems order: contact order decides the LP columns
+    for cand, anta in sorted(geometries, key=lambda pair: (element_order[pair[0]], element_order[pair[1]])):
+        if elems[cand].id != elems[anta].id:
+            maxPointID = _add_pair(cleaned_contps, maxPointID, elems[cand], elems[anta], geometries[(cand, anta)])
+    return cleaned_contps
+
+
 def clear_contps(elems, contps):
     parameters.mu = get_mu()
-    _conttype = ContType("friction", parameters)
     # make a loop up table for cand, anta -> contact point
     element_order = {key: position for position, key in enumerate(elems)}
     contps_table = dict()
@@ -426,42 +561,5 @@ def clear_contps(elems, contps):
                 if len(all_contps) != 0:
                     normals = np.array([pixel_point.orientation[1] for pixel_point in all_contps], dtype=np.float64)
                     coordinates = np.array([pixel_point.coor for pixel_point in all_contps], dtype=np.float64)
-                    averaged_normal = np.average(normals, axis=0)
-                    if np.linalg.norm(averaged_normal) == 0:
-                        continue
-                    _n_3d = np.asarray(
-                        [averaged_normal[0], averaged_normal[1], 0])
-                    _v = np.asarray([0, 0, 1])
-                    _t = np.cross(_n_3d, _v)
-                    new_t = _t[0:2]/np.linalg.norm(_t[0:2])
-                    new_n = averaged_normal/np.linalg.norm(averaged_normal)
-                    # #check if n is vertical
-                    # if new_n[1]==0:
-                    #     parameters.mu = 0
-                    # else:
-                    #     parameters.mu = 0.58
-                    # print(new_t)
-                    #print(coordinates[:, 0])
-                    # sort by projection to tangent direction
-                    projections = np.matmul(
-                        coordinates, np.asarray([[new_t[0]], [new_t[1]]]))
-                    #print("cood: ", coordinates)
-                    #print("projections: ", projections)
-                    coordinate_sort_indices = np.argsort(
-                        projections.reshape(1, -1))[0]
-                    #print("order", coordinate_sort_indices)
-                    # coordinate_sort_indices = np.lexsort(
-                    #     (coordinates[:, 1], coordinates[:, 0]))
-                    coordinate_end1 = coordinates[coordinate_sort_indices[0], :]
-                    coordinate_end2 = coordinates[coordinate_sort_indices[-1], :]
-                    if value_cand.type=='mortar' and value_anta.type == 'mortar':
-                        _conttype = ContType("friction_fc_cohesion", parameters)
-                    else:
-                        _conttype = ContType("friction", parameters)
-                    cleaned_contps[maxPointID] = ContPoint(maxPointID, [
-                        coordinate_end1[0], coordinate_end1[1]], value_cand.id, value_anta.id, new_t.tolist(), new_n.tolist(), _conttype)
-                    maxPointID += 1
-                    cleaned_contps[maxPointID] = ContPoint(maxPointID, [
-                        coordinate_end2[0], coordinate_end2[1]], value_cand.id, value_anta.id, new_t.tolist(), new_n.tolist(), _conttype)
-                    maxPointID += 1
+                    maxPointID = _cleaned_pair(cleaned_contps, maxPointID, value_cand, value_anta, normals, coordinates)
     return cleaned_contps

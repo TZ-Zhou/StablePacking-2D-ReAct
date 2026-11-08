@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from Geometry3D import *
 import numpy as np
 from ..utils.logger import get_main_logger, get_log_level
+from ..utils.region_memo import stone_region
 from ..utils.constant import get_plot_placement, get_plot_stone_id, get_ignore_pixel_value
 from skimage.morphology import square,closing,convex_hull_image,opening
 
@@ -30,8 +31,7 @@ def rotate_brick(brick_index, final_base):
         final_base.placed_bricks[stone_index].matrix.astype(np.uint8))
     low_bound = stone_prop[0].bbox[0]
     for index, brick in enumerate(final_base.placed_bricks):
-        other_stone_prop = regionprops(brick.matrix.astype(np.uint8))
-        if other_stone_prop[0].centroid[0] < low_bound:
+        if stone_region(brick)[0][0] < low_bound:
             indices.append(index)
     base = np.zeros(final_base.matrix.shape)
 
@@ -56,11 +56,11 @@ def rotate_brick(brick_index, final_base):
     else:
         intersection = np.multiply(img, base)
         # if no intersection is found
-        if np.argwhere(intersection).size == 0:
+        if not np.any(intersection):
             get_main_logger().debug(
                 "No intersection is found of the stone and the stones underneath, the stone is not stable")
             return False
-    if np.argwhere(intersection).size == 0:
+    if not np.any(intersection):
         return False
     intersection_prop = regionprops(intersection.astype(np.uint8))
     if not intersection_prop:  # region prop fails
@@ -112,7 +112,7 @@ def rotate_brick(brick_index, final_base):
             rot_mat = cv2.getRotationMatrix2D(rot_center, angle, 1.0)
             img_rotated = cv2.warpAffine(
                 img, rot_mat, img.shape[1::-1], flags=cv2.WARP_FILL_OUTLIERS)
-            if len(np.argwhere(img_rotated)) == 0:
+            if not np.any(img_rotated):
                 return False
             # check penetration
             product = np.multiply(img_rotated, other_stones)
@@ -150,7 +150,7 @@ def rotate_brick(brick_index, final_base):
                     break
             else:
                 intersection = np.multiply(img_rotated_dilated, base)
-                if np.argwhere(intersection).size > 0:
+                if np.any(intersection):
                     # plt.imshow(intersection)
                     # plt.show()
                     break
@@ -171,7 +171,7 @@ def rotate_brick(brick_index, final_base):
             #img_rotated = convex_hull_image(img_rotated,offset_coordinates=False)
             img_rotated = np.where(np.multiply(
                 img_rotated, other_stones) == 0, img_rotated, 0)
-            if len(np.argwhere(img_rotated)) == 0:
+            if not np.any(img_rotated):
                 return False
 
             final_base.matrix = final_base.matrix - \
@@ -216,8 +216,7 @@ def check_stable(stone_index, final_base):
         return True
     low_bound = stone_prop[0].bbox[0]
     for index, brick in enumerate(final_base.placed_bricks):
-        other_stone_prop = regionprops(brick.matrix.astype(np.uint8))
-        if other_stone_prop[0].centroid[0] < low_bound:
+        if stone_region(brick)[0][0] < low_bound:
             indices.append(index)
     base = np.zeros(final_base.matrix.shape)
 

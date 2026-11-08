@@ -1,6 +1,7 @@
 
 import matplotlib.pyplot as plt
 from copy import deepcopy
+from ..utils.region_memo import occupied_bounds
 
 import numpy as np
 
@@ -77,7 +78,6 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
         #intersection of two constraints
         region_potential = np.multiply(non_overlap_mask, overlap_contour_mask)
         plot_region_matrix = np.where(non_overlap_mask!=0,1,0)+np.where(overlap_contour_mask!=0,2,0)
-        locations = np.argwhere(region_potential!=0)
         if plot_img_detail:
             save_matrix_plot(np.where(a !=0, 1, 0), f"ite{len(base.placed_bricks)}_brick{brick.id}_{brick.width}_{brick.rotate_from_ori}_brick_a.png")
             save_matrix_plot(brick.matrix.astype(np.uint8), f"ite{len(base.placed_bricks)}_brick{brick.id}_{brick.width}_{brick.rotate_from_ori}_brick_bounding_box_matrix.png")
@@ -94,7 +94,7 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     if write_txt:
         with open(get_dir()+f"record/place_ite{len(base.placed_bricks)}_brick{brick.id}_{brick.width}_{brick.rotate_from_ori}.txt", "w+") as f:
             f.write("x;y;score;void;global density;x distance\n")
-    if len(np.argwhere(region_potential!=0))==0:
+    if not np.any(region_potential):
         get_main_logger().warning(
             "No valid location found for stone {}".format(brick.id))
         return -1, -1, float("+inf"),-1*np.ones(6), 0,times
@@ -435,7 +435,7 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     filters[5] = max_local_void_center
     #_____________________________________place and stabalize
     # build k stones ahead
-    future_base = deepcopy(base)
+    future_base = base.for_placement()
     # add current brick to future base
     future_base.add_stone(brick, [min_x, min_y])
     try_stone = future_base.placed_rocks[-1]
@@ -449,12 +449,11 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     else:
         placed_stone_right_tops_left = []
 
-    stone_h = np.max(np.nonzero(try_stone.matrix)[0])
+    stone_rows, stone_cols = np.nonzero(try_stone.matrix)
+    stone_h = np.max(stone_rows)
     if len(placed_stone_right_tops_left) >= 1:
         tree = KDTree(placed_stone_right_tops_left)
-        query_point = [np.min(np.nonzero(try_stone.matrix)
-                              [1]), np.max(np.nonzero(try_stone.matrix)
-                                           [0])]  # min_col, max_row => left top
+        query_point = [np.min(stone_cols), np.max(stone_rows)]  # min_col, max_row => left top
         _, ii = tree.query(query_point, k=1)
         left_stone_h = placed_stone_right_tops_left[ii][1]
         #min_distance = selection_weights['course_height'] * \
@@ -479,23 +478,19 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     #rec1 = []
     #rec1.append(min_distance)
     # --------------------------------------------------------------------global density
-    occupied = np.argwhere(np.where(
-        base.matrix != get_ignore_pixel_value(), base.matrix, 0))
+    found, first_row, last_row, first_col = occupied_bounds(base)
     bbox = np.zeros(base.matrix.shape)
     _heighest_stone = 0
-    if occupied.any():
-        _max_stone_bb = occupied.max(axis=0)
-        _min_stone_bb = occupied.min(axis=0)
-        bbox[_min_stone_bb[0]:_max_stone_bb[0]+1,
-             _min_stone_bb[1]:base.matrix.shape[1]] = 1  # !different bounding box
-        _heighest_stone = _max_stone_bb[0]
+    if found:
+        bbox[first_row:last_row+1,
+             first_col:base.matrix.shape[1]] = 1  # !different bounding box
+        _heighest_stone = last_row
     else:
         bbox[0:3, :] = 1
         _heighest_stone = 3
-    distance_gd = np.argwhere(np.multiply(bbox, try_stone.matrix)
-                              ).shape[0]/np.argwhere(bbox+try_stone.matrix).shape[0]
+    distance_gd = np.count_nonzero(np.multiply(bbox, try_stone.matrix))/np.count_nonzero(bbox+try_stone.matrix)
     distance_gd = distance_gd / \
-        (np.argwhere(try_stone.matrix).shape[0]/np.argwhere(bbox).shape[0])
+        (len(stone_rows)/np.count_nonzero(bbox))
     
     if distance_gd > 0.7:
         filters[1] = distance_gd
@@ -505,17 +500,15 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     # rec1.append(-distance_gd)
 # _______________________________________________________________________interlocking based on right bottom
     #determine if the stone is in the middle or at the edge
-    query_point = [np.max(np.nonzero(try_stone.matrix)[1]), np.min(
-        np.nonzero(try_stone.matrix)[0])]  # max col, min row
-    query_point_2 = [np.min(np.nonzero(try_stone.matrix)[1]), np.min(
-        np.nonzero(try_stone.matrix)[0])]  # min col, min row
+    query_point = [np.max(stone_cols), np.min(stone_rows)]  # max col, min row
+    query_point_2 = [np.min(stone_cols), np.min(stone_rows)]  # min col, min row
     distance_to_right_wall_bound = wall_width - query_point[0]
     distance_to_right_wall_bound_2 = query_point_2[0]
 
     placed_stone_left_tops = np.asarray(base.rock_left_tops)
     placed_stone_right_tops = np.asarray(base.rock_right_tops)
     placed_stone_centers = np.asarray(base.rock_centers)
-    stone_b = np.min(np.nonzero(try_stone.matrix)[0])
+    stone_b = np.min(stone_rows)
     if placed_stone_left_tops.shape[0] > 0:
         placed_stone_left_tops_under = placed_stone_left_tops[placed_stone_centers[:, 1] < stone_b]
         placed_stone_right_tops_under = placed_stone_right_tops[placed_stone_centers[:, 1] < stone_b]
@@ -746,7 +739,7 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
 
     #_______________________________________________________________________________________end hole detection
     # future_base.plot()
-    kine = evaluate_kine(future_base,load = 'tilting_table')/get_mu()
+    kine = evaluate_kine(future_base,load = 'tilting_table',wall = base.matrix)/get_mu()
     if get_record_time():
         end = time.time()
         times[0,5] = end-start

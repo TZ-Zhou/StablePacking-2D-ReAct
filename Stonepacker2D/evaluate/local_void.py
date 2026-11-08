@@ -6,7 +6,11 @@ import matplotlib.pyplot as plt
 import scipy
 from scipy import ndimage
 from skimage.measure import regionprops
+from ..utils.region_memo import occupied_bounds
 INTERLOCKING_PIXEL = 3
+CANDIDATE_CHUNK = 256  # candidates summed at once; bounds the memory of a large stone with many candidates
+WALL_MAPS_KEPT = 4  # walls remembered: a step evaluates the wall and its mirror image
+WALL_MAPS = {}
 NUMBER_OF_PIXELS_AS_EPSILON = 3
 
 def get_void_to_left(base,stone):
@@ -70,7 +74,7 @@ def evaluate(base, stone):
                 f.write("{};{};{};{};{};{}\n".format(stone.center[0], stone.center[1],
                         100, 0, 0,0))
         return float("+inf"),-1,-1
-    if len(np.nonzero(stone.matrix)) == 0 or len(np.nonzero(stone.matrix)[0]) == 0:
+    if not np.any(stone.matrix):
         if write_txt == True:
             with open(get_dir()+f"record/place_ite{len(base.placed_bricks)}_brick{stone.id}_{stone.width}_{stone.rotate_from_ori}.txt", "a+") as f:
                 f.write("{};{};{};{};{};{}\n".format(stone.center[0], stone.center[1],
@@ -90,7 +94,7 @@ def evaluate(base, stone):
         local = _base_after[max(0, int(stone.center[1]-stone.height/2-local_width_h)):min(stone.matrix.shape[0], int(stone.center[1] + stone.height/2)),
                             max(0, int(stone.center[0]-stone.width/2-local_width_w)):min(stone.matrix.shape[1], int(stone.center[0]+stone.width/2))]
 
-        nb_void = len(np.argwhere(local == 0))
+        nb_void = np.count_nonzero(local == 0)
         void_ratio = nb_void/((stone.height+local_width_h)*(stone.width+local_width_w)-stone.height*stone.width)
     else:
         m_shape = base.matrix.shape
@@ -129,23 +133,20 @@ def evaluate(base, stone):
     # _____________________________________________________________use local void where stone is placed in the center
     local_center = _base_after[max(0, int(stone.center[1]-stone.height/2-local_width_h)):min(stone.matrix.shape[0], int(stone.center[1] + stone.height/2)),
                         max(0, int(stone.center[0]-stone.width/2-local_width_w/2)):min(stone.matrix.shape[1], int(stone.center[0]+stone.width/2+local_width_w/2))]
-    nb_void_center = len(np.argwhere(local_center == 0))
+    nb_void_center = np.count_nonzero(local_center == 0)
     void_ratio_center = nb_void_center/((stone.height+local_width_h)*(stone.width+local_width_w)-stone.height*stone.width)
     # --------------------------------------------------------------------------global density
-    occupied = np.argwhere(np.where(
-        base.matrix != get_ignore_pixel_value(), base.matrix, 0))
+    found, first_row, last_row, first_col = occupied_bounds(base)
     bbox = np.zeros(base.matrix.shape)
-    if occupied.any():
-        _max_stone_bb = occupied.max(axis=0)
-        _min_stone_bb = occupied.min(axis=0)
-        bbox[_min_stone_bb[0]:_max_stone_bb[0]+1,
-             _min_stone_bb[1]:base.matrix.shape[1]] = 1
+    if found:
+        bbox[first_row:last_row+1,
+             first_col:base.matrix.shape[1]] = 1
     else:
         bbox[0:3, :] = 1
-    distance_gd = np.argwhere(np.multiply(bbox, stone.matrix)
-                              ).shape[0]/np.argwhere(bbox+stone.matrix).shape[0]
+    distance_gd = np.count_nonzero(np.multiply(bbox, stone.matrix)
+                                   )/np.count_nonzero(bbox+stone.matrix)
     distance_gd = distance_gd / \
-        (np.argwhere(stone.matrix).shape[0]/np.argwhere(bbox).shape[0])
+        (np.count_nonzero(stone.matrix)/np.count_nonzero(bbox))
     if distance_gd > 0.7:
         distance_gd *= 1
     else:
@@ -235,6 +236,41 @@ def get_convolution_metric(base_phi, brick_bounding_box_matrix_mirrow):
     #proximity_metric = np.multiply(base_phi, stone)
     return proximity_metric
 
+def stone_pixels(brick_bounding_box_matrix_mirrow):
+    """Row and column offsets of the unmirrored stone's pixels, in the order ndimage.convolve visits them."""
+    return np.nonzero(np.flip(brick_bounding_box_matrix_mirrow))
+
+def candidate_metric(matrix, pixel_rows, pixel_cols, rows, cols):
+    """get_convolution_metric at (rows, cols) only, where the stone pixels lie inside the image.
+
+    ndimage.convolve adds the stone's pixels one by one from left to right; the running sum here keeps that order, so
+    every value has the same bits as in the full image.
+    """
+    metric = np.empty(len(rows))
+    for first in range(0, len(rows), CANDIDATE_CHUNK):
+        last = first + CANDIDATE_CHUNK
+        pixels = matrix[rows[first:last, None] + pixel_rows, cols[first:last, None] + pixel_cols]
+        metric[first:last] = np.add.accumulate(pixels, axis=1)[:, -1]
+    return metric
+
+def column_window_min(matrix, first_row, length, column, cval):
+    """At each (r, c), the minimum of matrix[r + first_row : r + first_row + length, c + column]; cval outside the image.
+
+    Equals ndimage.minimum_filter with a footprint of one column: both take the minimum of the same values.
+    """
+    pad = length + 2 + abs(first_row)
+    padded = np.pad(matrix, ((pad, pad), (0, 0)), constant_values=cval)
+    filtered = ndimage.minimum_filter1d(padded, length, axis=0, mode='constant', cval=cval)
+    start = pad + first_row + length // 2
+    rows = filtered[start:start + matrix.shape[0]]
+    window_min = np.full_like(matrix, cval)
+    if column >= 0:
+        if column < matrix.shape[1]:
+            window_min[:, :matrix.shape[1] - column] = rows[:, column:]
+    else:
+        window_min[:, -column:] = rows[:, :column]
+    return window_min
+
 def convolve_nonzero(matrix, mirrored_kernel, cval):
     """Where ndimage.convolve with origin (size-1)//2 is nonzero, for non-negative float matrix and binary kernel.
 
@@ -247,19 +283,62 @@ def convolve_nonzero(matrix, mirrored_kernel, cval):
     overlap = cv2.filter2D(occupied, cv2.CV_64F, kernel, anchor=(0, 0), borderType=cv2.BORDER_CONSTANT)
     return overlap[:matrix.shape[0], :matrix.shape[1]] > 0.5
 
+def wall_maps(base):
+    """The images evaluate_convolve reads that depend on the wall alone, computed once per wall in this process.
+
+    A pose task unpickles its own copy of the wall, so the wall is recognised by its content. The images are read-only.
+    """
+    left_tops, right_tops = np.asarray(base.rock_left_tops), np.asarray(base.rock_right_tops)
+    key = (
+        get_ignore_pixel_value(),
+        base.matrix.dtype.str,
+        base.matrix.shape,
+        base.matrix.tobytes(),
+        left_tops.shape,
+        left_tops.tobytes(),
+        right_tops.shape,
+        right_tops.tobytes(),
+    )
+    maps = WALL_MAPS.get(key)
+    if maps is None:
+        wall_with_no_bound = np.where(base.matrix != get_ignore_pixel_value(), base.matrix, 0)
+        contour_dilated = cv2.dilate(wall_with_no_bound, np.ones((3, 3), np.uint8), anchor=(1, 1), iterations=1)
+        interlocking_point_matrix = np.zeros(base.matrix.shape)
+        # make all top points of placed stones 1
+        if left_tops.shape[0] >= 1:
+            interlocking_point_matrix[left_tops[:, 1], left_tops[:, 0]] = 1
+        if right_tops.shape[0] >= 1:
+            interlocking_point_matrix[right_tops[:, 1], right_tops[:, 0]] = 1
+        interlocking_distance = get_distance_to_interlocking(
+            interlocking_point_matrix
+        )  # maximize the distance to the interlocking
+        maps = (
+            contour_dilated,
+            interlocking_distance,
+            get_distance_to_edge(base.matrix),
+            get_phi_distance(base.matrix),
+            get_height(base.matrix),
+        )
+        for image in maps:
+            image.flags.writeable = False
+        if len(WALL_MAPS) >= WALL_MAPS_KEPT:
+            WALL_MAPS.clear()
+        WALL_MAPS[key] = maps
+    return maps
+
+
 def evaluate_convolve(base,brick,brick_bounding_box_matrix_mirrow=None,region_potential=None):
     stone_width = brick.width
     stone_height = brick.height
     stone_center = (brick.width/2,brick.height/2)
-    brick_bounding_box_matrix = regionprops(brick.matrix.astype(np.uint8))[0].image
-    shift_to = [(brick_bounding_box_matrix_mirrow.shape[0]-1) // 2,(brick_bounding_box_matrix_mirrow.shape[1]-1) // 2]
+    # the minimum filters' windows: their footprint's centre is the middle pixel, or the one after it in an even dimension
+    bbox_rows, bbox_cols = brick_bounding_box_matrix_mirrow.shape
+    even_rows, even_cols = 1 - bbox_rows % 2, 1 - bbox_cols % 2
+    touch_start = math.ceil(stone_center[1])
 
     # find positions that have support from both left and right
-    kernel_dilation = np.ones((3, 3), np.uint8)
-    wall_with_no_bound = np.where(base.matrix!=get_ignore_pixel_value(),base.matrix,0)
-    contour_dilated = cv2.dilate(wall_with_no_bound, kernel_dilation,
-                            anchor=(1, 1), iterations=1)
-    
+    contour_dilated, interlocking_distance, touch_distance, base_phi, base_height = wall_maps(base)
+
     #dilate the region to filter out floating positions
     # kernel_dilation_y = np.ones((2, 1), np.uint8)
     # contour_dilated = cv2.dilate(base.matrix, kernel_dilation_y, anchor=(0,1),iterations=1)
@@ -280,56 +359,25 @@ def evaluate_convolve(base,brick,brick_bounding_box_matrix_mirrow=None,region_po
         contour_dilated, right_brick_bounding_box_matrix_mirrow, cval=0.0) != 0, 1, 0)
     
     stable_potential = np.multiply(right_overlap_contour_mask, left_overlap_contour_mask)
-    if len(np.argwhere(np.multiply(region_potential,stable_potential)!=0))==0:
+    if not np.any(np.multiply(region_potential, stable_potential)):
         #print("No stable potential")
         stable_potential = np.ones_like(region_potential)
     #stable_potential = np.ones_like(region_potential)
     region_potential = np.multiply(region_potential,stable_potential)
 
     # find locations matches mason's practice
-    placed_stone_left_tops = np.asarray(base.rock_left_tops)
-    placed_stone_right_tops = np.asarray(base.rock_right_tops)
-    #interlocking point matrix
-    interlocking_point_matrix = np.zeros(base.matrix.shape)
-    #make all top points of placed stones 1
-    if placed_stone_left_tops.shape[0] >= 1:
-        interlocking_point_matrix[placed_stone_left_tops[:, 1], placed_stone_left_tops[:, 0]] = 1
-    if placed_stone_right_tops.shape[0] >= 1:
-        interlocking_point_matrix[placed_stone_right_tops[:, 1], placed_stone_right_tops[:, 0]] = 1
-    # plt.imshow(interlocking_point_matrix)
-    # plt.title("interlocking point")
-    # plt.show()
-
-    
-    
     #left interlocking distance map and convolve with the bounding of stone
-    interlocking_distance = get_distance_to_interlocking(interlocking_point_matrix)#maximize the distance to the interlocking
-    brick_bounding_box_matrix_boundary_only = np.zeros_like(brick_bounding_box_matrix)#using bounding box instead of actual stone shape
-    brick_bounding_box_matrix_boundary_only[0,0] = 1
-    left_interlocking_distance_convolved = ndimage.minimum_filter(
-        interlocking_distance, footprint=brick_bounding_box_matrix_boundary_only, mode='constant', cval=np.inf, origin=[-shift_to[0],-shift_to[1]])
+    left_interlocking_distance_convolved = column_window_min(interlocking_distance, -even_rows, 1, -even_cols, np.inf)
     left_interlocking_distance_convolved[left_interlocking_distance_convolved==0.12] = np.inf
     #right interlocking distance map and convolve with the bounding of stone
-    brick_bounding_box_matrix_boundary_only = np.zeros_like(brick_bounding_box_matrix)#using bounding box instead of actual stone shape
-    brick_bounding_box_matrix_boundary_only[0,-1] = 1
-    right_interlocking_distance_convolved = ndimage.minimum_filter(
-        interlocking_distance, footprint=brick_bounding_box_matrix_boundary_only, mode='constant', cval=np.inf, origin=[-shift_to[0],-shift_to[1]])
+    right_interlocking_distance_convolved = column_window_min(interlocking_distance, -even_rows, 1, bbox_cols - 1 - even_cols, np.inf)
     right_interlocking_distance_convolved[right_interlocking_distance_convolved==0.12] = np.inf
     
     #touch
 
-    touch_distance = get_distance_to_edge(base.matrix)
-    brick_bounding_box_matrix_boundary_only = np.zeros_like(brick_bounding_box_matrix)#using bounding box instead of actual stone shape
-    #print("The stone center is at ",stone_center[0])
-    #print("The stone center int is at ",int(stone_center[0]))
-    brick_bounding_box_matrix_boundary_only[math.ceil(stone_center[1]):,0] = 1
-    left_touch_distance_convolved = ndimage.minimum_filter(
-        touch_distance, footprint=brick_bounding_box_matrix_boundary_only, mode='constant', cval=0, origin=[-shift_to[0],-shift_to[1]])
+    left_touch_distance_convolved = column_window_min(touch_distance, touch_start - even_rows, bbox_rows - touch_start, -even_cols, 0.0)
     #right interlocking distance map and convolve with the bounding of stone
-    brick_bounding_box_matrix_boundary_only = np.zeros_like(brick_bounding_box_matrix)#using bounding box instead of actual stone shape
-    brick_bounding_box_matrix_boundary_only[math.ceil(stone_center[1]):,-1] = 1
-    right_touch_distance_convolved = ndimage.minimum_filter(
-        touch_distance, footprint=brick_bounding_box_matrix_boundary_only, mode='constant', cval=0, origin=[-shift_to[0],-shift_to[1]])
+    right_touch_distance_convolved = column_window_min(touch_distance, touch_start - even_rows, bbox_rows - touch_start, bbox_cols - 1 - even_cols, 0.0)
     
 
     interlocking_thre = min(INTERLOCKING_PIXEL,stone_width/2)
@@ -358,18 +406,28 @@ def evaluate_convolve(base,brick,brick_bounding_box_matrix_mirrow=None,region_po
     # plt.title("mason criterial with interlocking thre = {}".format(interlocking_thre))
     # plt.show()
     weight_height = np.sqrt(stone_width**2+stone_height**2)*1000
-    base_phi = get_phi_distance(base.matrix)
-    base_height = get_height(base.matrix)
-    score_optimization_phi = get_convolution_metric(base_phi, brick_bounding_box_matrix_mirrow)#smaller better
-    score_optimization_height = get_convolution_metric(base_height*weight_height, brick_bounding_box_matrix_mirrow)
-    distance_optimization = score_optimization_phi+score_optimization_height#smaller better
-    score_potential = np.where((region_potential != 0) & (mason_criteria!=0), distance_optimization, float("+inf"))
-    best_score = np.min(score_potential)
-    #best_loc = np.argmax(score_potential)
-    best_loc = np.argwhere(score_potential == best_score)[0]
-    # get the proximity metric of the best location
-    best_distance_optimization = distance_optimization[best_loc[0],best_loc[1]]
-    best_phi = -score_optimization_phi[best_loc[0],best_loc[1]]
+    # only the candidates are read: their sums replace the full images when every stone pixel is inside the image
+    candidate_rows, candidate_cols = np.nonzero((region_potential != 0) & (mason_criteria!=0))
+    pixel_rows, pixel_cols = stone_pixels(brick_bounding_box_matrix_mirrow)
+    if candidate_rows.size and candidate_rows.max() + pixel_rows.max() < base.matrix.shape[0] \
+            and candidate_cols.max() + pixel_cols.max() < base.matrix.shape[1]:
+        candidate_phi = candidate_metric(base_phi, pixel_rows, pixel_cols, candidate_rows, candidate_cols)#smaller better
+        candidate_height = candidate_metric(base_height*weight_height, pixel_rows, pixel_cols, candidate_rows, candidate_cols)
+        candidate_distance = candidate_phi+candidate_height#smaller better
+        best_candidate = np.argmin(candidate_distance)#the first of equal scores, as np.argwhere gives
+        best_loc = np.array([candidate_rows[best_candidate], candidate_cols[best_candidate]])
+        best_distance_optimization = candidate_distance[best_candidate]
+        best_phi = -candidate_phi[best_candidate]
+    else:
+        score_optimization_phi = get_convolution_metric(base_phi, brick_bounding_box_matrix_mirrow)#smaller better
+        score_optimization_height = get_convolution_metric(base_height*weight_height, brick_bounding_box_matrix_mirrow)
+        distance_optimization = score_optimization_phi+score_optimization_height#smaller better
+        score_potential = np.where((region_potential != 0) & (mason_criteria!=0), distance_optimization, float("+inf"))
+        best_score = np.min(score_potential)
+        best_loc = np.argwhere(score_potential == best_score)[0]
+        # get the proximity metric of the best location
+        best_distance_optimization = distance_optimization[best_loc[0],best_loc[1]]
+        best_phi = -score_optimization_phi[best_loc[0],best_loc[1]]
 
     # print("Best location",best_loc)
     # print("Best left interlocking",left_interlocking_distance_convolved[best_loc[0],best_loc[1]])

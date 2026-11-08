@@ -1,12 +1,25 @@
 from matplotlib import collections as mc
 import matplotlib.pyplot as plt
 # import parameters
+import contextlib
 import numpy as np
 import sys
 import mosek
 import math
 import random
 print_detail = False
+
+
+PROCESS_MOSEK_ENV = None  # one per process: making an Env costs more than a small LP
+
+
+@contextlib.contextmanager
+def process_mosek_env():
+    """The mosek.Env of this process, created once and never closed; it holds no state of a solved task."""
+    global PROCESS_MOSEK_ENV
+    if PROCESS_MOSEK_ENV is None:
+        PROCESS_MOSEK_ENV = mosek.Env()
+    yield PROCESS_MOSEK_ENV
 color = ["#"+''.join([random.choice('0123456789ABCDEF') for j in range(6)])
              for i in range(1000)]
 
@@ -293,7 +306,7 @@ def solve_force_rigid(elems, contps, Aglobal):
 
     limit_force = 0
     # Make mosek environment
-    with mosek.Env() as env:
+    with process_mosek_env() as env:
         # Create a task object
         with env.Task(0, 0) as task:
             # Attach a log stream printer to the task
@@ -359,25 +372,20 @@ def solve_force_rigid(elems, contps, Aglobal):
             # matrix stored by column.
             asub = []
             aval = []
+            # the nonzeros of every column of Aglobal, rows ascending, without a Python loop over the rows
+            columns, rows = np.nonzero(Aglobal.T)
+            values = Aglobal.T[columns, rows]
+            column_starts = np.searchsorted(columns, np.arange(Aglobal.shape[1] + 1))
             for i, value in enumerate(contps.values()):
                 for j in range(2):  # 2variables(t,n)*1nodes*
                     col = i*2+j
-                    col_index = []
-                    col_value = []
-                    for row in range(len(elems)*3):
-                        if Aglobal[row][col] != 0:
-                            col_index.append(row)
-                            col_value.append(Aglobal[row][col])
-                    _start_row = len(elems)*3 + math.floor(col/2)*3
-                    col_index.extend(
-                        list(range(_start_row, _start_row+3)))
+                    first, last = column_starts[col], column_starts[col + 1]
+                    _start_row = len(elems) * 3 + i * 3
+                    asub.append(rows[first:last].tolist() + [_start_row, _start_row + 1, _start_row + 2])
                     if col % 2 == 0:
-                        col_value.extend([1, -1, 0])
+                        aval.append(values[first:last].tolist() + [1, -1, 0])
                     else:
-                        col_value.extend(
-                            [-value.cont_type.mu, -value.cont_type.mu, -1])
-                    asub.append(col_index)
-                    aval.append(col_value)
+                        aval.append(values[first:last].tolist() + [-value.cont_type.mu, -value.cont_type.mu, -1])
 
             col_index = []
             col_value = []
