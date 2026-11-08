@@ -34,3 +34,9 @@ Generate 5 packing layout for each stone set. The wall size is 420\*420 pixels.
 - 02_view_transformation_ori_reso.py: transform original stone images and visualize the layout in high resolution image.
 - 03_evaluate_wall_metrics.py: evaluate the filling, stability and interlocking of all walls. It uses the functions of graph calculation in graph.py.
 - 04_plot_filling_stability.py: plot filling and stability evaluations of all walls.
+
+## 內容
+
+| 項目 | 說明 |
+| --- | --- |
+| `05_generate_gif.py` | 讀取某次建牆結果中依序疊上的石頭影像，輸出牆體逐步建成並對照石頭資料集的 GIF 動畫。 |
