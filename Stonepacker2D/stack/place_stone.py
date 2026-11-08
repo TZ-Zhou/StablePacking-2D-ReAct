@@ -7,7 +7,7 @@ import numpy as np
 
 from ..evaluate.tilting_angle import evaluate_kine
 from ..evaluate.ksteps import build_kstones
-from ..evaluate.local_void import evaluate,evaluate_convolve,get_void_to_left,convolve_nonzero
+from ..evaluate.local_void import center_void,evaluate,evaluate_convolve,get_void_to_left,convolve_nonzero
 from ..utils.constant import get_record_detail,get_record_time,get_local_width,get_partial_enumeration_ratio,get_placement_optimization,get_mu,get_width_weight, get_ignore_pixel_value, get_ksteps, get_selection_weights, get_world_size, get_dir
 from ..utils.logger import get_main_logger
 from scipy.spatial import KDTree
@@ -412,8 +412,11 @@ def place_one_stone(brick_index, all_stones, all_poses, base, locations=None, re
     try_stone = brick.transformed(
         [min_x, min_y])
     if get_placement_optimization() != "full_enumeration":
-        _,max_local_void,max_local_void_center = evaluate(
-                    base, try_stone)
+        if get_record_detail()['RECORD_PLACEMENT_VALUE']:
+            _,_,max_local_void_center = evaluate(
+                        base, try_stone)
+        else:
+            max_local_void_center = center_void(base, try_stone)
     if get_record_time():
         start = time.time()
     

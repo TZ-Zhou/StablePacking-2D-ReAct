@@ -6,12 +6,14 @@ Run from the repository root: python -B -m unittest research.tests.test_speedup_
 import math
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 from scipy import ndimage
 from skimage.measure import regionprops
 
 from Stonepacker2D.evaluate import local_void, tilting_angle
+from Stonepacker2D.entity import transform
 from Stonepacker2D.entity.base import Base
 from Stonepacker2D.utils import region_memo
 from Stonepacker2D.utils.kine_2d import Element
@@ -57,8 +59,10 @@ class ColumnWindowMin(unittest.TestCase):
                 footprint = np.zeros(shape, dtype=bool)
                 footprint[rows, column] = True
                 expected = self.footprint_min(matrix, footprint, cval)
-                got = local_void.column_window_min(matrix, first_row, length, shift, cval)
+                got = local_void.column_window_min(matrix, first_row, length, shift, cval, (0, 40, 0, 50))
                 self.assertTrue(np.array_equal(got, expected))
+                box = local_void.column_window_min(matrix, first_row, length, shift, cval, (3, 38, 11, 49))
+                self.assertTrue(np.array_equal(box, expected[3:38, 11:49]))
 
 
 class StoneRegion(unittest.TestCase):
@@ -126,6 +130,80 @@ class OccupiedBounds(unittest.TestCase):
         matrix[0, 0] = 1
         self.assertFalse(np.argwhere(matrix).any())
         self.assertFalse(self.bounds_of(matrix)[0])
+
+
+def notched_stone(wall_shape, row, col):
+    """A 7 x 9 stone with a missing corner and a hole in one row, at (row, col) of an image of wall_shape."""
+    matrix = np.zeros(wall_shape)
+    matrix[row : row + 7, col : col + 9] = 1
+    matrix[row, col] = 0
+    matrix[row + 3, col : col + 9] = 0
+    return SimpleNamespace(matrix=matrix, center=[col + 4.5, row + 3.5], height=7, width=9, id=1, rotate_from_ori=0)
+
+
+class VoidOfAPlacedStone(unittest.TestCase):
+    def setUp(self):
+        self.wall = np.zeros((40, 60))
+        self.wall[0:10, :] = 1
+        self.wall[10:16, 3:14] = 2
+        self.wall[10:13, 30:44] = 3
+        self.wall[:, [0, -1]] = 255
+        modes = (
+            mock.patch.object(local_void, "get_placement_optimization", return_value="image_convolve"),
+            mock.patch.object(local_void, "get_record_detail", return_value={"RECORD_PLACEMENT_VALUE": False}),
+        )
+        for mode in modes:
+            mode.start()
+            self.addCleanup(mode.stop)
+
+    def test_the_void_metrics_equal_the_ones_over_the_whole_image(self):
+        base = SimpleNamespace(matrix=self.wall)
+        checked = 0
+        for row in range(10, 30, 3):
+            for col in range(15, 48, 4):
+                stone = notched_stone(self.wall.shape, row, col)
+                if np.any(self.wall * stone.matrix):
+                    continue
+                _, void, void_center = local_void.evaluate(base, stone)
+                self.assertEqual(
+                    np.float64(local_void.get_void_to_left(base, stone)).tobytes(), np.float64(-void).tobytes()
+                )
+                self.assertEqual(
+                    np.float64(local_void.center_void(base, stone)).tobytes(), np.float64(void_center).tobytes()
+                )
+                checked += 1
+        self.assertGreater(checked, 20)
+
+    def test_a_stone_overlapping_the_wall_or_without_pixels_has_the_value_of_evaluate(self):
+        base = SimpleNamespace(matrix=self.wall)
+        overlapping = notched_stone(self.wall.shape, 5, 20)
+        empty = SimpleNamespace(**{**vars(overlapping), "matrix": np.zeros(self.wall.shape)})
+        for stone in (overlapping, empty):
+            self.assertEqual(local_void.center_void(base, stone), local_void.evaluate(base, stone)[2])
+
+
+class NeedsNoRotation(unittest.TestCase):
+    def built(self, *rectangles):
+        """A wall of rectangles (first row, end row, first col, end col), the last one being the stone asked about."""
+        stones = []
+        wall = np.zeros((40, 60))
+        for label, (top, bottom, left, right) in enumerate(rectangles, start=1):
+            matrix = np.zeros(wall.shape)
+            matrix[top:bottom, left:right] = 1
+            wall += label * matrix
+            stones.append(SimpleNamespace(matrix=matrix))
+        return SimpleNamespace(matrix=wall, placed_bricks=stones)
+
+    def test_a_stone_centred_on_the_stone_below_is_left_as_it_is(self):
+        wall = self.built((0, 10, 5, 45), (10, 18, 10, 30))
+        self.assertTrue(transform._needs_no_rotation(1, wall))
+        self.assertTrue(transform.rotate_brick(1, wall))
+
+    def test_a_stone_hanging_over_the_edge_of_the_stone_below_goes_through_the_rotation(self):
+        self.assertFalse(transform._needs_no_rotation(1, self.built((0, 10, 5, 20), (10, 18, 15, 45))))
+
+    def test_a_stone_on_the_floor_goes_through_the_rotation(self):
+        self.assertFalse(transform._needs_no_rotation(0, self.built((0, 10, 5, 20))))
 
 
 class ForPlacement(unittest.TestCase):

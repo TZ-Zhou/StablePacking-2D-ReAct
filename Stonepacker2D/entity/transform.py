@@ -10,6 +10,35 @@ from ..utils.region_memo import stone_region
 from ..utils.constant import get_plot_placement, get_plot_stone_id, get_ignore_pixel_value
 from skimage.morphology import square,closing,convex_hull_image,opening
 
+def _needs_no_rotation(brick_index, final_base):
+    """True when rotate_brick would leave the stone as it is, computed only in the rows and columns the stone occupies.
+
+    False sends rotate_brick through all of its work, so anything unusual here can answer False.
+    """
+    image = final_base.placed_bricks[brick_index].matrix.astype(np.uint8)
+    rows, cols = np.nonzero(image)
+    if rows.size == 0 or np.any(image[rows, cols] != 1):
+        return False
+    below = [
+        index
+        for index, brick in enumerate(final_base.placed_bricks)
+        if stone_region(brick)[0][0] < rows[0]
+    ]
+    if not below:
+        return False
+    # the dilation below reaches one row further on each side of the stone
+    window = (slice(max(rows[0] - 1, 0), rows[-1] + 2), slice(cols.min(), cols.max() + 1))
+    dilated = cv2.dilate(image[window], np.ones((3, 1), np.uint8), iterations=1)
+    stones_below = np.zeros(dilated.shape)
+    for index in below:
+        stones_below += final_base.placed_bricks[index].matrix[window] * (index + 1)
+    intersection = regionprops(np.multiply(dilated, stones_below).astype(np.uint8))
+    if not intersection:
+        return False
+    centroid_col = cols.mean()
+    return intersection[0].bbox[1] + window[1].start < centroid_col < intersection[0].bbox[3] + window[1].start - 1
+
+
 def rotate_brick(brick_index, final_base):
     """Rotate the one brick in the base to make it stable
 
@@ -20,6 +49,8 @@ def rotate_brick(brick_index, final_base):
     :return: Whether the stone is stable or not. A stone is stable if its center of mass is envelopped by contact with under stones with or without rotation
     :rtype: bool
     """
+    if _needs_no_rotation(brick_index, final_base):
+        return True
     other_stones = np.zeros(final_base.matrix.shape)
     stone_index = brick_index
     other_stones = final_base.matrix - \
