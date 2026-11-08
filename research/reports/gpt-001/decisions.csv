@@ -1,0 +1,17 @@
+step,event,side,n_remaining,n_outcomes,gpt_order,gpt_order_filters,category,switched,gpt_stone_id,gpt_rotation,gpt_x,gpt_y,paper_stone_id,paper_rotation,paper_x,paper_y,gpt_label,paper_label,tools,http,input_tokens,cached_tokens,output_tokens,cost_usd,unknown_usage,latency_s
+3,2,left,16,5,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,14,180,168,2,14,180,168,2,S14,S14,list_order_outcomes+commit_order,2,7241,3041,362,0.012453,0,10.84
+4,3,left,15,2,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,18,180,241,2,18,180,241,2,S1,S1,list_order_outcomes+commit_order,2,6971,4825,317,0.007182,0,6.3
+5,4,left,14,5,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,2,270,347,2,2,270,347,2,S2,S2,list_order_outcomes+commit_order,2,7826,4930,266,0.008807,0,6.05
+6,5,left,13,6,0-1-3-4-2,NHR>GDS>LLC>LFR>IWR,candidate changed,True,10,0,164,26,17,0,15,32,S15,S16,list_order_outcomes+commit_order,2,8054,4932,403,0.010058,0,6.52
+7,6,left,12,6,0-1-3-4-2,NHR>GDS>LLC>LFR>IWR,candidate changed,True,8,180,161,48,4,180,5,27,S10,S4,list_order_outcomes+commit_order,2,8091,4951,397,0.010074,0,6.67
+8,7,left,11,5,1-3-4-0-2,GDS>LLC>LFR>NHR>IWR,candidate changed,True,15,90,218,34,17,0,15,32,S6,S16,list_order_outcomes+commit_order,2,7984,5006,353,0.009451,0,7.45
+9,8,left,10,3,0-1-3-4-2,NHR>GDS>LLC>LFR>IWR,candidate changed,True,3,90,47,24,12,180,8,29,S3,S11,list_order_outcomes+commit_order,2,7557,5008,270,0.007964,0,5.44
+10,9,left,9,5,0-1-2-3-4,NHR>GDS>IWR>LLC>LFR,candidate changed,True,19,180,257,43,19,0,242,42,S13,S13,list_order_outcomes+explain_order+commit_order,3,12979,9622,361,0.010665,0,7.34
+11,10,left,8,4,1-3-2-0-4,GDS>LLC>IWR>NHR>LFR,candidate changed,True,5,180,39,55,12,180,300,48,S5,S11,list_order_outcomes+explain_order+commit_order,3,12752,9506,313,0.010142,0,6.64
+12,11,left,7,4,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,6,180,94,57,6,180,94,57,S18,S18,list_order_outcomes+commit_order,2,7785,5012,327,0.008809,0,6.36
+13,12,left,6,2,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,12,180,300,48,12,180,300,48,S11,S11,list_order_outcomes+commit_order,2,7141,4911,225,0.006937,0,5.81
+14,13,left,5,5,0-1-2-3-4,NHR>GDS>IWR>LLC>LFR,candidate changed,True,17,0,162,59,4,180,147,56,S16,S4,list_order_outcomes+explain_order+commit_order,3,12258,9176,364,0.00997,0,7.8
+16,14,left,4,5,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,4,0,291,87,4,0,291,87,S4,S4,list_order_outcomes+commit_order,2,7377,4704,324,0.008529,0,5.86
+17,15,left,3,2,0-1-2-3-4,NHR>GDS>IWR>LLC>LFR,candidate changed,True,13,0,75,71,16,0,76,86,S12,S9,list_order_outcomes+explain_order+commit_order,3,10255,8094,304,0.007314,0,10.17
+18,16,left,2,2,3-0-2-1-4,LLC>NHR>IWR>GDS>LFR,paper kept,False,9,0,194,100,9,0,194,100,S17,S17,list_order_outcomes+commit_order,2,6305,4497,241,0.005941,0,5.22
+20,17,left,1,2,1-2-3-4-0,GDS>IWR>LLC>LFR>NHR,candidate changed,True,16,180,114,126,16,90,155,126,S9,S9,list_order_outcomes+explain_order+commit_order,3,9640,7680,250,0.00652,0,6.05

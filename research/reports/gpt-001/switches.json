@@ -1,0 +1,847 @@
+[
+ {
+  "step": 6,
+  "event": 5,
+  "n_remaining": 13,
+  "n_outcomes": 6,
+  "wall": {
+   "h_max": 55,
+   "h_min": 0,
+   "h_range": 55,
+   "h_std": 11.876287740420441,
+   "fill_under_hmax": 0.6411910669975186,
+   "void_under_skyline_px": 462,
+   "n_skyline_jumps": 19
+  },
+  "now": {
+   "feasible_share": 0.6071,
+   "mean_feasible_llc": 0.669371,
+   "n_candidates": 28,
+   "n_feasible": 17,
+   "max_feasible_llc": 1.034483
+  },
+  "gpt": {
+   "order": "0-1-3-4-2",
+   "filters": "NHR>GDS>LLC>LFR>IWR",
+   "stone_id": 10,
+   "rotation": 0,
+   "x": 164,
+   "y": 26,
+   "label": "S15",
+   "scores": {
+    "NHR": -0.409091,
+    "GDS": 1.0,
+    "IWR": 0.259793,
+    "LLC": 1.034483,
+    "LFR": -0.005965
+   },
+   "geometry": {
+    "d_h_max": 0.0,
+    "d_h_min": 0.0,
+    "d_h_range": 0.0,
+    "d_h_std": -0.0895,
+    "d_fill_under_hmax": 0.0328,
+    "d_void_under_skyline_px": 81.0,
+    "d_n_skyline_jumps": -2.0,
+    "stone_px": 726
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 17,
+   "rotation": 0,
+   "x": 15,
+   "y": 32,
+   "label": "S16",
+   "scores": {
+    "NHR": -0.068182,
+    "GDS": 0.0,
+    "IWR": 0.611222,
+    "LLC": 0.862069,
+    "LFR": -0.039598
+   },
+   "geometry": {
+    "d_h_max": 19.0,
+    "d_h_min": 0.0,
+    "d_h_range": 19.0,
+    "d_h_std": 4.7728,
+    "d_fill_under_hmax": -0.0628,
+    "d_void_under_skyline_px": 1018.0,
+    "d_n_skyline_jumps": 2.0,
+    "stone_px": 3038
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-3-4-2",
+     "rationale": "Choose S15's outcome for its maximum LLC (1.034), full GDS (1.0), and best LFR (-0.006); its costs are poor NHR (-0.409) and low IWR (0.260). Its unstabilized geometry proxy adds 81 skyline-void pixels without raising maximum height. The paper S16 has better NHR (-0.068) and IWR (0.611) and good LLC (0.862), but GDS is zero and LFR is -0.040; its proxy adds 1018 void pixels and 19 height. S5 has the best NHR (-0.024), GDS 1, IWR 0.5 and good LFR (-0.019), but much weaker LLC (0.345). S13 has strong IWR (0.674), GDS 0.829 and LLC 0.690, but the worst NHR (-0.519) and LFR -0.043. S6 at 270 degrees has moderate NHR (-0.185), GDS 0.853, IWR 0.390 and LLC 0.862, but LFR -0.051; at 90 degrees it improves NHR (-0.148) and LLC (1.034), with GDS 0.842, IWR 0.370 and LFR -0.048. S15 balances maximum stability and band fit with a relatively favorable local-void score, accepting its weaker course alignment and interlocking. Geometry figures are pre-stabilization proxies."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "Choose S15's outcome for its maximum LLC (1.034), full GDS (1.0), and best LFR (-0.006); its costs are poor NHR (-0.409) and low IWR (0.260). Its unstabilized geometry proxy adds 81 skyline-void pixels without raising maximum height. The paper S16 has better NHR (-0.068) and IWR (0.611) and good LLC (0.862), but GDS is zero and LFR is -0.040; its proxy adds 1018 void pixels and 19 height. S5 has the best NHR (-0.024), GDS 1, IWR 0.5 and good LFR (-0.019), but much weaker LLC (0.345). S13 has strong IWR (0.674), GDS 0.829 and LLC 0.690, but the worst NHR (-0.519) and LFR -0.043. S6 at 270 degrees has moderate NHR (-0.185), GDS 0.853, IWR 0.390 and LLC 0.862, but LFR -0.051; at 90 degrees it improves NHR (-0.148) and LLC (1.034), with GDS 0.842, IWR 0.370 and LFR -0.048. S15 balances maximum stability and band fit with a relatively favorable local-void score, accepting its weaker course alignment and interlocking. Geometry figures are pre-stabilization proxies."
+ },
+ {
+  "step": 7,
+  "event": 6,
+  "n_remaining": 12,
+  "n_outcomes": 6,
+  "wall": {
+   "h_max": 55,
+   "h_min": 0,
+   "h_range": 55,
+   "h_std": 11.796741621383223,
+   "fill_under_hmax": 0.673900293255132,
+   "void_under_skyline_px": 550,
+   "n_skyline_jumps": 17
+  },
+  "now": {
+   "feasible_share": 0.6071,
+   "mean_feasible_llc": 0.709939,
+   "n_candidates": 28,
+   "n_feasible": 17,
+   "max_feasible_llc": 1.034483
+  },
+  "gpt": {
+   "order": "0-1-3-4-2",
+   "filters": "NHR>GDS>LLC>LFR>IWR",
+   "stone_id": 8,
+   "rotation": 180,
+   "x": 161,
+   "y": 48,
+   "label": "S10",
+   "scores": {
+    "NHR": 0.0,
+    "GDS": 1.0,
+    "IWR": 0.219265,
+    "LLC": 1.034483,
+    "LFR": -0.013379
+   },
+   "geometry": {
+    "d_h_max": 0.0,
+    "d_h_min": 0.0,
+    "d_h_range": 0.0,
+    "d_h_std": 0.8716,
+    "d_fill_under_hmax": 0.0143,
+    "d_void_under_skyline_px": 123.0,
+    "d_n_skyline_jumps": -3.0,
+    "stone_px": 316
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 4,
+   "rotation": 180,
+   "x": 5,
+   "y": 27,
+   "label": "S4",
+   "scores": {
+    "NHR": -0.33871,
+    "GDS": 0.0,
+    "IWR": 0.7469,
+    "LLC": 0.862069,
+    "LFR": -0.043528
+   },
+   "geometry": {
+    "d_h_max": 32.0,
+    "d_h_min": 0.0,
+    "d_h_range": 32.0,
+    "d_h_std": 9.7133,
+    "d_fill_under_hmax": -0.1152,
+    "d_void_under_skyline_px": 1560.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 4653
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-3-4-2",
+     "rationale": "This order selects S10 at 180°. It combines level NHR 0, GDS 1, the highest LLC 1.0345 and best LFR -0.0134; its cost is weak IWR 0.2193 and a small 316-pixel unstabilized placement. S4, the paper outcome, has stronger IWR 0.7469 and LLC 0.8621, but NHR -0.3387, GDS 0 and LFR -0.0435; its proxy also raises the maximum height by 32. S13 has good GDS 0.8289 and IWR 0.6743, but poorer NHR -0.5185, LLC 0.6897 and LFR -0.0427. S5 offers NHR -0.0244, GDS 1, IWR 0.5 and LFR -0.0188, but much lower LLC 0.3448. S10 at 0° has GDS 1, IWR 0.512 and LLC 0.8621, but very poor NHR -3.5556 and LFR -0.0357. S11 has level NHR, IWR 0.6921 and LLC 0.6897, but GDS 0 and LFR -0.0372. S10 at 180° prioritizes stability, density and fit over interlocking; its pre-stabilization geometry proxy also leaves maximum height unchanged, though it is not the stabilized wall."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "This order selects S10 at 180°. It combines level NHR 0, GDS 1, the highest LLC 1.0345 and best LFR -0.0134; its cost is weak IWR 0.2193 and a small 316-pixel unstabilized placement. S4, the paper outcome, has stronger IWR 0.7469 and LLC 0.8621, but NHR -0.3387, GDS 0 and LFR -0.0435; its proxy also raises the maximum height by 32. S13 has good GDS 0.8289 and IWR 0.6743, but poorer NHR -0.5185, LLC 0.6897 and LFR -0.0427. S5 offers NHR -0.0244, GDS 1, IWR 0.5 and LFR -0.0188, but much lower LLC 0.3448. S10 at 0° has GDS 1, IWR 0.512 and LLC 0.8621, but very poor NHR -3.5556 and LFR -0.0357. S11 has level NHR, IWR 0.6921 and LLC 0.6897, but GDS 0 and LFR -0.0372. S10 at 180° prioritizes stability, density and fit over interlocking; its pre-stabilization geometry proxy also leaves maximum height unchanged, though it is not the stabilized wall."
+ },
+ {
+  "step": 8,
+  "event": 7,
+  "n_remaining": 11,
+  "n_outcomes": 5,
+  "wall": {
+   "h_max": 55,
+   "h_min": 0,
+   "h_range": 55,
+   "h_std": 12.632284716955628,
+   "fill_under_hmax": 0.6881570042860365,
+   "void_under_skyline_px": 657,
+   "n_skyline_jumps": 14
+  },
+  "now": {
+   "feasible_share": 0.6786,
+   "mean_feasible_llc": 0.589837,
+   "n_candidates": 28,
+   "n_feasible": 19,
+   "max_feasible_llc": 0.862069
+  },
+  "gpt": {
+   "order": "1-3-4-0-2",
+   "filters": "GDS>LLC>LFR>NHR>IWR",
+   "stone_id": 15,
+   "rotation": 90,
+   "x": 218,
+   "y": 34,
+   "label": "S6",
+   "scores": {
+    "NHR": -0.148148,
+    "GDS": 0.87199,
+    "IWR": 0.168201,
+    "LLC": 0.862069,
+    "LFR": -0.053905
+   },
+   "geometry": {
+    "d_h_max": 4.0,
+    "d_h_min": 0.0,
+    "d_h_range": 4.0,
+    "d_h_std": 0.5787,
+    "d_fill_under_hmax": -0.0127,
+    "d_void_under_skyline_px": 182.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 807
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 17,
+   "rotation": 0,
+   "x": 15,
+   "y": 32,
+   "label": "S16",
+   "scores": {
+    "NHR": -0.0,
+    "GDS": 0.0,
+    "IWR": 0.611222,
+    "LLC": 0.862069,
+    "LFR": -0.039598
+   },
+   "geometry": {
+    "d_h_max": 19.0,
+    "d_h_min": 0.0,
+    "d_h_range": 19.0,
+    "d_h_std": 2.6643,
+    "d_fill_under_hmax": -0.0748,
+    "d_void_under_skyline_px": 1018.0,
+    "d_n_skyline_jumps": 2.0,
+    "stone_px": 3038
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "1-3-4-0-2",
+     "rationale": "Choose the order selecting S6 at 90°: it combines maximum LLC (0.862) with high GDS (0.872), though its IWR (0.168) is the weakest, NHR (-0.148) is imperfect and LFR (-0.054) is modest. S3 at 90° offers better IWR (0.476), but lower LLC (0.690) and GDS (0.782), with similar NHR (-0.156) and LFR (-0.052). S5 has the best GDS (1.000), near-level NHR (-0.024), IWR 0.500 and best LFR (-0.019), but much lower LLC (0.345). The paper outcome S16 has level NHR, stronger IWR (0.611), maximum LLC and LFR -0.040, but zero GDS. S4 has the best IWR (0.747) and maximum LLC, but zero GDS, the worst NHR (-0.290) and LFR -0.044. S6 prioritizes stability and placement inside the wall band over joint separation; its pre-stabilization geometry proxy also raises maximum height by only 4 pixels."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "Choose the order selecting S6 at 90°: it combines maximum LLC (0.862) with high GDS (0.872), though its IWR (0.168) is the weakest, NHR (-0.148) is imperfect and LFR (-0.054) is modest. S3 at 90° offers better IWR (0.476), but lower LLC (0.690) and GDS (0.782), with similar NHR (-0.156) and LFR (-0.052). S5 has the best GDS (1.000), near-level NHR (-0.024), IWR 0.500 and best LFR (-0.019), but much lower LLC (0.345). The paper outcome S16 has level NHR, stronger IWR (0.611), maximum LLC and LFR -0.040, but zero GDS. S4 has the best IWR (0.747) and maximum LLC, but zero GDS, the worst NHR (-0.290) and LFR -0.044. S6 prioritizes stability and placement inside the wall band over joint separation; its pre-stabilization geometry proxy also raises maximum height by only 4 pixels."
+ },
+ {
+  "step": 9,
+  "event": 8,
+  "n_remaining": 10,
+  "n_outcomes": 3,
+  "wall": {
+   "h_max": 59,
+   "h_min": 0,
+   "h_range": 59,
+   "h_std": 13.133219843804286,
+   "fill_under_hmax": 0.6753585397653195,
+   "void_under_skyline_px": 815,
+   "n_skyline_jumps": 15
+  },
+  "now": {
+   "feasible_share": 0.5714,
+   "mean_feasible_llc": 0.646552,
+   "n_candidates": 28,
+   "n_feasible": 16,
+   "max_feasible_llc": 0.862069
+  },
+  "gpt": {
+   "order": "0-1-3-4-2",
+   "filters": "NHR>GDS>LLC>LFR>IWR",
+   "stone_id": 3,
+   "rotation": 90,
+   "x": 47,
+   "y": 24,
+   "label": "S3",
+   "scores": {
+    "NHR": -0.21875,
+    "GDS": 1.0,
+    "IWR": 1.019195,
+    "LLC": 0.689655,
+    "LFR": -0.042439
+   },
+   "geometry": {
+    "d_h_max": 0.0,
+    "d_h_min": 0.0,
+    "d_h_range": 0.0,
+    "d_h_std": -3.7544,
+    "d_fill_under_hmax": 0.058,
+    "d_void_under_skyline_px": 659.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 1380
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 12,
+   "rotation": 180,
+   "x": 8,
+   "y": 29,
+   "label": "S11",
+   "scores": {
+    "NHR": -0.292683,
+    "GDS": 0.71323,
+    "IWR": 0.692052,
+    "LLC": 0.689655,
+    "LFR": -0.037184
+   },
+   "geometry": {
+    "d_h_max": 9.0,
+    "d_h_min": 0.0,
+    "d_h_range": 9.0,
+    "d_h_std": -0.8099,
+    "d_fill_under_hmax": 0.0082,
+    "d_void_under_skyline_px": 1129.0,
+    "d_n_skyline_jumps": 2.0,
+    "stone_px": 2674
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-3-4-2",
+     "rationale": "S3 at 90° balances the candidates best: GDS 1.0 and IWR 1.019 are highest, LLC 0.690 matches S11, and NHR -0.219 and LFR -0.042 are intermediate. S11 has slightly better LFR (-0.037) but worse NHR (-0.293), GDS (0.713) and IWR (0.692), with the same LLC. S4 has the best NHR (-0.145) and LLC (0.862), but GDS is zero, IWR is 0.747 and LFR is lowest (-0.044). S3's unstabilized geometry proxy also leaves maximum height unchanged and reduces height variation, whereas S4 raises maximum height substantially. This order selects S3 while favoring its density and interlocking advantages; the proxy does not predict the stabilized wall."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "S3 at 90° balances the candidates best: GDS 1.0 and IWR 1.019 are highest, LLC 0.690 matches S11, and NHR -0.219 and LFR -0.042 are intermediate. S11 has slightly better LFR (-0.037) but worse NHR (-0.293), GDS (0.713) and IWR (0.692), with the same LLC. S4 has the best NHR (-0.145) and LLC (0.862), but GDS is zero, IWR is 0.747 and LFR is lowest (-0.044). S3's unstabilized geometry proxy also leaves maximum height unchanged and reduces height variation, whereas S4 raises maximum height substantially. This order selects S3 while favoring its density and interlocking advantages; the proxy does not predict the stabilized wall."
+ },
+ {
+  "step": 10,
+  "event": 9,
+  "n_remaining": 9,
+  "n_outcomes": 5,
+  "wall": {
+   "h_max": 59,
+   "h_min": 0,
+   "h_range": 59,
+   "h_std": 9.378835943283644,
+   "fill_under_hmax": 0.7333978214240653,
+   "void_under_skyline_px": 1474,
+   "n_skyline_jumps": 16
+  },
+  "now": {
+   "feasible_share": 0.5714,
+   "mean_feasible_llc": 0.549569,
+   "n_candidates": 28,
+   "n_feasible": 16,
+   "max_feasible_llc": 0.689655
+  },
+  "gpt": {
+   "order": "0-1-2-3-4",
+   "filters": "NHR>GDS>IWR>LLC>LFR",
+   "stone_id": 19,
+   "rotation": 180,
+   "x": 257,
+   "y": 43,
+   "label": "S13",
+   "scores": {
+    "NHR": -0.37037,
+    "GDS": 0.745317,
+    "IWR": 0.190683,
+    "LLC": 0.689655,
+    "LFR": -0.080346
+   },
+   "geometry": {
+    "d_h_max": 9.0,
+    "d_h_min": 0.0,
+    "d_h_range": 9.0,
+    "d_h_std": 1.1053,
+    "d_fill_under_hmax": -0.03,
+    "d_void_under_skyline_px": 197.0,
+    "d_n_skyline_jumps": 0.0,
+    "stone_px": 1838
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 19,
+   "rotation": 0,
+   "x": 242,
+   "y": 42,
+   "label": "S13",
+   "scores": {
+    "NHR": -0.296296,
+    "GDS": 0.0,
+    "IWR": 0.26968,
+    "LLC": 0.689655,
+    "LFR": -0.068456
+   },
+   "geometry": {
+    "d_h_max": 8.0,
+    "d_h_min": 0.0,
+    "d_h_range": 8.0,
+    "d_h_std": 1.9127,
+    "d_fill_under_hmax": -0.0195,
+    "d_void_under_skyline_px": 356.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 1838
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "explain_order",
+    "arguments": {
+     "order": "0-1-2-3-4"
+    },
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-2-3-4",
+     "rationale": "This order selects S13/180: it combines positive GDS 0.745 with maximum feasible LLC 0.690, though its NHR -0.370, IWR 0.191 and LFR -0.080 are worse than the base S13/0's -0.296, 0.270 and -0.068. S13/0 has the same LLC but GDS 0. S5/0 offers much stronger interlocking (0.778) but worse NHR (-0.659), LLC (0.517), LFR (-0.152) and GDS 0. S5/180 matches the maximum LLC and has IWR 0.354, but has GDS 0, worse NHR (-0.537) and LFR (-0.236). S16/0 has IWR 0.376 but weaker LLC 0.345, NHR -0.636, LFR -0.145 and GDS 0. The chosen order prioritizes course alignment then density, retaining a maximum-LLC placement; its unstabilized proxy also adds fewer skyline void pixels than the base outcome (197 versus 356), although that is not a stabilized-wall prediction."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "This order selects S13/180: it combines positive GDS 0.745 with maximum feasible LLC 0.690, though its NHR -0.370, IWR 0.191 and LFR -0.080 are worse than the base S13/0's -0.296, 0.270 and -0.068. S13/0 has the same LLC but GDS 0. S5/0 offers much stronger interlocking (0.778) but worse NHR (-0.659), LLC (0.517), LFR (-0.152) and GDS 0. S5/180 matches the maximum LLC and has IWR 0.354, but has GDS 0, worse NHR (-0.537) and LFR (-0.236). S16/0 has IWR 0.376 but weaker LLC 0.345, NHR -0.636, LFR -0.145 and GDS 0. The chosen order prioritizes course alignment then density, retaining a maximum-LLC placement; its unstabilized proxy also adds fewer skyline void pixels than the base outcome (197 versus 356), although that is not a stabilized-wall prediction."
+ },
+ {
+  "step": 11,
+  "event": 10,
+  "n_remaining": 8,
+  "n_outcomes": 4,
+  "wall": {
+   "h_max": 69,
+   "h_min": 0,
+   "h_range": 69,
+   "h_std": 10.387045794731675,
+   "fill_under_hmax": 0.6931348221670802,
+   "void_under_skyline_px": 1647,
+   "n_skyline_jumps": 18
+  },
+  "now": {
+   "feasible_share": 0.4643,
+   "mean_feasible_llc": 0.623342,
+   "n_candidates": 28,
+   "n_feasible": 13,
+   "max_feasible_llc": 0.862069
+  },
+  "gpt": {
+   "order": "1-3-2-0-4",
+   "filters": "GDS>LLC>IWR>NHR>LFR",
+   "stone_id": 5,
+   "rotation": 180,
+   "x": 39,
+   "y": 55,
+   "label": "S5",
+   "scores": {
+    "NHR": -0.073171,
+    "GDS": 0.0,
+    "IWR": 0.335909,
+    "LLC": 0.689655,
+    "LFR": -0.071487
+   },
+   "geometry": {
+    "d_h_max": 25.0,
+    "d_h_min": 0.0,
+    "d_h_range": 25.0,
+    "d_h_std": 3.2973,
+    "d_fill_under_hmax": -0.1518,
+    "d_void_under_skyline_px": 180.0,
+    "d_n_skyline_jumps": 0.0,
+    "stone_px": 1234
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 12,
+   "rotation": 180,
+   "x": 300,
+   "y": 48,
+   "label": "S11",
+   "scores": {
+    "NHR": -0.439024,
+    "GDS": 0.0,
+    "IWR": 0.446054,
+    "LLC": 0.689655,
+    "LFR": -0.14845
+   },
+   "geometry": {
+    "d_h_max": 18.0,
+    "d_h_min": 10.0,
+    "d_h_range": 8.0,
+    "d_h_std": 5.5795,
+    "d_fill_under_hmax": -0.0671,
+    "d_void_under_skyline_px": 945.0,
+    "d_n_skyline_jumps": -9.0,
+    "stone_px": 2674
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "explain_order",
+    "arguments": {
+     "order": "1-3-2-0-4"
+    },
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "1-3-2-0-4",
+     "rationale": "Choose S5/180's reachable outcome for its strong level alignment (NHR -0.073) and best local fit (LFR -0.071), with LLC 0.690; its IWR 0.336 is weaker than S11 and S16, and GDS is 0. S11/180 has the same LLC and higher IWR 0.446, but worse NHR -0.439 and LFR -0.148. S16/0 has the strongest IWR 0.645, but lower LLC 0.517 and worse NHR -0.591 and LFR -0.205. S12/180 has the highest LLC 0.862 and LFR -0.083, but poor NHR -1.127 and IWR 0.243. All four have GDS 0. The chosen cascade retains S5 and S11 through NHR, then LFR selects S5. Its pre-stabilization proxy also adds less skyline void than the alternatives, though that is not the stabilized wall."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "Choose S5/180's reachable outcome for its strong level alignment (NHR -0.073) and best local fit (LFR -0.071), with LLC 0.690; its IWR 0.336 is weaker than S11 and S16, and GDS is 0. S11/180 has the same LLC and higher IWR 0.446, but worse NHR -0.439 and LFR -0.148. S16/0 has the strongest IWR 0.645, but lower LLC 0.517 and worse NHR -0.591 and LFR -0.205. S12/180 has the highest LLC 0.862 and LFR -0.083, but poor NHR -1.127 and IWR 0.243. All four have GDS 0. The chosen cascade retains S5 and S11 through NHR, then LFR selects S5. Its pre-stabilization proxy also adds less skyline void than the alternatives, though that is not the stabilized wall."
+ },
+ {
+  "step": 14,
+  "event": 13,
+  "n_remaining": 5,
+  "n_outcomes": 5,
+  "wall": {
+   "h_max": 94,
+   "h_min": 10,
+   "h_range": 84,
+   "h_std": 15.798967107409007,
+   "fill_under_hmax": 0.6555884061031625,
+   "void_under_skyline_px": 2942,
+   "n_skyline_jumps": 10
+  },
+  "now": {
+   "feasible_share": 0.6,
+   "mean_feasible_llc": 0.517241,
+   "n_candidates": 20,
+   "n_feasible": 12,
+   "max_feasible_llc": 0.862069
+  },
+  "gpt": {
+   "order": "0-1-2-3-4",
+   "filters": "NHR>GDS>IWR>LLC>LFR",
+   "stone_id": 17,
+   "rotation": 0,
+   "x": 162,
+   "y": 59,
+   "label": "S16",
+   "scores": {
+    "NHR": -0.318182,
+    "GDS": 0.812341,
+    "IWR": 0.112984,
+    "LLC": 0.517241,
+    "LFR": -0.055914
+   },
+   "geometry": {
+    "d_h_max": 7.0,
+    "d_h_min": 0.0,
+    "d_h_range": 7.0,
+    "d_h_std": 2.9463,
+    "d_fill_under_hmax": 0.0292,
+    "d_void_under_skyline_px": 445.0,
+    "d_n_skyline_jumps": 0.0,
+    "stone_px": 3038
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 4,
+   "rotation": 180,
+   "x": 147,
+   "y": 56,
+   "label": "S4",
+   "scores": {
+    "NHR": -0.467742,
+    "GDS": 0.0,
+    "IWR": 0.227213,
+    "LLC": 0.517241,
+    "LFR": -0.096471
+   },
+   "geometry": {
+    "d_h_max": 22.0,
+    "d_h_min": 0.0,
+    "d_h_range": 22.0,
+    "d_h_std": 8.3766,
+    "d_fill_under_hmax": -0.0248,
+    "d_void_under_skyline_px": 1099.0,
+    "d_n_skyline_jumps": 0.0,
+    "stone_px": 4653
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "explain_order",
+    "arguments": {
+     "order": "0-1-2-3-4"
+    },
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-2-3-4",
+     "rationale": "S16/0 offers the best NHR (-0.318), GDS (0.812), and LFR (-0.056) among reachable outcomes, with LLC 0.517; its cost is low IWR (0.113). The paper outcome S4/180 has better IWR (0.227) and equal LLC, but worse NHR (-0.468), GDS (0), and LFR (-0.096). S17/0 has stronger IWR (0.347) and equal LLC, but worse NHR (-0.434), GDS (0), and LFR (-0.117). S16/180 has the best IWR (0.403) and LLC (0.862), but much worse NHR (-1.409), GDS (0), and LFR (-0.320). S17/270 has IWR 0.331 and LFR -0.095, but poor NHR (-1.093), zero GDS, and low LLC (0.172). The unstabilized geometry proxy also favors S16/0 over the paper outcome for height increase and fill, though it is not the stabilized wall. NHR then GDS leaves S16/0 alone; this order prioritizes level, dense placement while retaining a moderate LLC."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "S16/0 offers the best NHR (-0.318), GDS (0.812), and LFR (-0.056) among reachable outcomes, with LLC 0.517; its cost is low IWR (0.113). The paper outcome S4/180 has better IWR (0.227) and equal LLC, but worse NHR (-0.468), GDS (0), and LFR (-0.096). S17/0 has stronger IWR (0.347) and equal LLC, but worse NHR (-0.434), GDS (0), and LFR (-0.117). S16/180 has the best IWR (0.403) and LLC (0.862), but much worse NHR (-1.409), GDS (0), and LFR (-0.320). S17/270 has IWR 0.331 and LFR -0.095, but poor NHR (-1.093), zero GDS, and low LLC (0.172). The unstabilized geometry proxy also favors S16/0 over the paper outcome for height increase and fill, though it is not the stabilized wall. NHR then GDS leaves S16/0 alone; this order prioritizes level, dense placement while retaining a moderate LLC."
+ },
+ {
+  "step": 17,
+  "event": 15,
+  "n_remaining": 3,
+  "n_outcomes": 2,
+  "wall": {
+   "h_max": 147,
+   "h_min": 10,
+   "h_range": 137,
+   "h_std": 30.958397537181746,
+   "fill_under_hmax": 0.5491635860299455,
+   "void_under_skyline_px": 3650,
+   "n_skyline_jumps": 18
+  },
+  "now": {
+   "feasible_share": 0.25,
+   "mean_feasible_llc": 0.229885,
+   "n_candidates": 12,
+   "n_feasible": 3,
+   "max_feasible_llc": 0.344828
+  },
+  "gpt": {
+   "order": "0-1-2-3-4",
+   "filters": "NHR>GDS>IWR>LLC>LFR",
+   "stone_id": 13,
+   "rotation": 0,
+   "x": 75,
+   "y": 71,
+   "label": "S12",
+   "scores": {
+    "NHR": -0.545455,
+    "GDS": 1.0,
+    "IWR": 0.487349,
+    "LLC": 0.172414,
+    "LFR": -0.064675
+   },
+   "geometry": {
+    "d_h_max": 0.0,
+    "d_h_min": 0.0,
+    "d_h_range": 0.0,
+    "d_h_std": 1.1677,
+    "d_fill_under_hmax": 0.069,
+    "d_void_under_skyline_px": 1038.0,
+    "d_n_skyline_jumps": 2.0,
+    "stone_px": 4090
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 16,
+   "rotation": 0,
+   "x": 76,
+   "y": 86,
+   "label": "S9",
+   "scores": {
+    "NHR": -0.814815,
+    "GDS": 1.0,
+    "IWR": 0.273039,
+    "LLC": 0.344828,
+    "LFR": -0.099944
+   },
+   "geometry": {
+    "d_h_max": 0.0,
+    "d_h_min": 0.0,
+    "d_h_range": 0.0,
+    "d_h_std": 3.5746,
+    "d_fill_under_hmax": 0.0772,
+    "d_void_under_skyline_px": 1351.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 4576
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "explain_order",
+    "arguments": {
+     "order": "0-1-2-3-4"
+    },
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "0-1-2-3-4",
+     "rationale": "NHR first selects S12/0 from the three feasible candidates. Against the paper outcome S9/0, S12 has better NHR (-0.545 vs -0.815), IWR (0.487 vs 0.273), and LFR (-0.065 vs -0.100), with equal GDS (1.0). Its cost is substantially lower LLC (0.172 vs 0.345), a meaningful stability concern given the recent decline in feasible LLC. The unstabilized geometry proxy also shows a smaller increase in skyline void for S12 (1038 vs 1351 pixels), though it adds less fill and one more skyline jump than S9; this is not a stabilized-wall prediction. I favor S12's better course alignment, joint offset and local fit despite its lower positive LLC."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "NHR first selects S12/0 from the three feasible candidates. Against the paper outcome S9/0, S12 has better NHR (-0.545 vs -0.815), IWR (0.487 vs 0.273), and LFR (-0.065 vs -0.100), with equal GDS (1.0). Its cost is substantially lower LLC (0.172 vs 0.345), a meaningful stability concern given the recent decline in feasible LLC. The unstabilized geometry proxy also shows a smaller increase in skyline void for S12 (1038 vs 1351 pixels), though it adds less fill and one more skyline jump than S9; this is not a stabilized-wall prediction. I favor S12's better course alignment, joint offset and local fit despite its lower positive LLC."
+ },
+ {
+  "step": 20,
+  "event": 17,
+  "n_remaining": 1,
+  "n_outcomes": 2,
+  "wall": {
+   "h_max": 151,
+   "h_min": 10,
+   "h_range": 141,
+   "h_std": 33.38182162954912,
+   "fill_under_hmax": 0.6660805547795507,
+   "void_under_skyline_px": 7155,
+   "n_skyline_jumps": 10
+  },
+  "now": {
+   "feasible_share": 0.75,
+   "mean_feasible_llc": 0.517241,
+   "n_candidates": 4,
+   "n_feasible": 3,
+   "max_feasible_llc": 0.689655
+  },
+  "gpt": {
+   "order": "1-2-3-4-0",
+   "filters": "GDS>IWR>LLC>LFR>NHR",
+   "stone_id": 16,
+   "rotation": 180,
+   "x": 114,
+   "y": 126,
+   "label": "S9",
+   "scores": {
+    "NHR": -1.555556,
+    "GDS": 0.0,
+    "IWR": 0.625141,
+    "LLC": 0.689655,
+    "LFR": -0.137796
+   },
+   "geometry": {
+    "d_h_max": 27.0,
+    "d_h_min": 0.0,
+    "d_h_range": 27.0,
+    "d_h_std": 7.8206,
+    "d_fill_under_hmax": -0.0372,
+    "d_void_under_skyline_px": 53.0,
+    "d_n_skyline_jumps": 7.0,
+    "stone_px": 4576
+   }
+  },
+  "paper": {
+   "order": "3-0-2-1-4",
+   "filters": "LLC>NHR>IWR>GDS>LFR",
+   "stone_id": 16,
+   "rotation": 90,
+   "x": 155,
+   "y": 126,
+   "label": "S9",
+   "scores": {
+    "NHR": -1.322581,
+    "GDS": 0.0,
+    "IWR": 0.454966,
+    "LLC": 0.689655,
+    "LFR": -0.275398
+   },
+   "geometry": {
+    "d_h_max": 66.0,
+    "d_h_min": 0.0,
+    "d_h_range": 66.0,
+    "d_h_std": 12.4796,
+    "d_fill_under_hmax": -0.1503,
+    "d_void_under_skyline_px": 107.0,
+    "d_n_skyline_jumps": 1.0,
+    "stone_px": 4576
+   }
+  },
+  "tools": [
+   {
+    "tool": "list_order_outcomes",
+    "arguments": {},
+    "status": "ok"
+   },
+   {
+    "tool": "explain_order",
+    "arguments": {
+     "order": "1-2-3-4-0"
+    },
+    "status": "ok"
+   },
+   {
+    "tool": "commit_order",
+    "arguments": {
+     "order": "1-2-3-4-0",
+     "rationale": "The 180° outcome has better IWR (0.625 versus 0.455) and LFR (-0.138 versus -0.275), with the same LLC (0.690) and GDS (0) as the paper-order 90° outcome. Its cost is worse NHR (-1.556 versus -1.323). The unstabilized geometry proxy also shows a smaller increase in maximum height and skyline void, although more skyline jumps; it does not describe the stabilized wall. This order keeps both main candidates through LLC and selects 180° at LFR, favoring interlocking and local fit without sacrificing LLC."
+    },
+    "status": "ok"
+   }
+  ],
+  "rationale": "The 180° outcome has better IWR (0.625 versus 0.455) and LFR (-0.138 versus -0.275), with the same LLC (0.690) and GDS (0) as the paper-order 90° outcome. Its cost is worse NHR (-1.556 versus -1.323). The unstabilized geometry proxy also shows a smaller increase in maximum height and skyline void, although more skyline jumps; it does not describe the stabilized wall. This order keeps both main candidates through LLC and selects 180° at LFR, favoring interlocking and local fit without sacrificing LLC."
+ }
+]
