@@ -1,0 +1,245 @@
+{
+ "walls": {
+  "GPT": "gpt-walls/gpt-001",
+  "Paper": "campaigns/dev-2seeds/thangavelu-noise80/paper/seed66794912",
+  "V": "branches/gpt-001-cf/V",
+  "G6": "branches/gpt-001-cf/G6",
+  "G8": "branches/gpt-001-cf/G8",
+  "P8": "branches/gpt-001-cf/P8",
+  "G17": "branches/gpt-001-cf/G17",
+  "P17": "branches/gpt-001-cf/P17"
+ },
+ "pairs": {
+  "k6": {
+   "a": "G6",
+   "b": "Paper",
+   "decision_n": 6,
+   "metrics": {
+    "F_SF": {
+     "at_decision": -0.02055398216626625,
+     "final": -0.016860618588065812,
+     "after_decision": 0.003693363578200437,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_SF_progress": {
+     "at_decision": -0.02045222842031688,
+     "final": -0.01677714906442407,
+     "after_decision": 0.003675079355892813,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_AH_partial": {
+     "at_decision": 0.29454195387652593,
+     "final": 1.8646275356853286,
+     "after_decision": 1.5700855818088026,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_AV_partial": {
+     "at_decision": 1.1598875989597737,
+     "final": -4.645574047764498,
+     "after_decision": -5.805461646724272,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "lambda_left": {
+     "at_decision": 0.07298860590659745,
+     "final": 0.01242153074480895,
+     "after_decision": -0.0605670751617885,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "lambda_right": {
+     "at_decision": 0.0605982250902275,
+     "final": 0.07243710617205693,
+     "after_decision": 0.011838881081829428,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_LR": {
+     "at_decision": 0.12584242397689216,
+     "final": 0.12489156236561544,
+     "after_decision": -0.000950861611276721,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    }
+   }
+  },
+  "k8": {
+   "a": "G8",
+   "b": "P8",
+   "decision_n": 8,
+   "metrics": {
+    "F_SF": {
+     "at_decision": -0.02020276588414785,
+     "final": -0.000527906495087771,
+     "after_decision": 0.01967485938906008,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "F_SF_progress": {
+     "at_decision": -0.020102750855886142,
+     "final": 0.0004785839258127922,
+     "after_decision": 0.020581334781698934,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "F_AH_partial": {
+     "at_decision": 0.21706813420050874,
+     "final": -0.3719592009962236,
+     "after_decision": -0.5890273351967323,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "F_AV_partial": {
+     "at_decision": 4.045754762725174,
+     "final": 1.427543169715939,
+     "after_decision": -2.618211593009235,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "lambda_left": {
+     "at_decision": 0.0729886059065975,
+     "final": -0.08804612224106428,
+     "after_decision": -0.1610347281476618,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "lambda_right": {
+     "at_decision": -0.03591087571519486,
+     "final": 0.060153276622650964,
+     "after_decision": 0.09606415233784582,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    },
+    "F_LR": {
+     "at_decision": 0.01566424318164439,
+     "final": -0.0153390256071545,
+     "after_decision": -0.031003268788798888,
+     "onset_n": 8,
+     "onset_phase": "decision"
+    }
+   }
+  },
+  "k17": {
+   "a": "G17",
+   "b": "P17",
+   "decision_n": 16,
+   "metrics": {
+    "F_SF": {
+     "at_decision": -0.004734412633441654,
+     "final": 0.00012288470733329282,
+     "after_decision": 0.0048572973407749465,
+     "onset_n": 16,
+     "onset_phase": "decision"
+    },
+    "F_SF_progress": {
+     "at_decision": -0.0047168341339411946,
+     "final": 0.0001224284461381342,
+     "after_decision": 0.004839262580079329,
+     "onset_n": 16,
+     "onset_phase": "decision"
+    },
+    "F_AH_partial": {
+     "at_decision": 0.0,
+     "final": -0.7551089215645197,
+     "after_decision": -0.7551089215645197,
+     "onset_n": 17,
+     "onset_phase": "after"
+    },
+    "F_AV_partial": {
+     "at_decision": 0.0,
+     "final": 1.1118564141318643,
+     "after_decision": 1.1118564141318643,
+     "onset_n": 17,
+     "onset_phase": "after"
+    },
+    "lambda_left": {
+     "at_decision": -0.08931215124361565,
+     "final": 0.43007623701411657,
+     "after_decision": 0.5193883882577323,
+     "onset_n": 16,
+     "onset_phase": "decision"
+    },
+    "lambda_right": {
+     "at_decision": 0.010798106063847457,
+     "final": 0.004484115944912326,
+     "after_decision": -0.006313990118935131,
+     "onset_n": 16,
+     "onset_phase": "decision"
+    },
+    "F_LR": {
+     "at_decision": -0.1539864676614063,
+     "final": 0.536443866914112,
+     "after_decision": 0.6904303345755184,
+     "onset_n": 16,
+     "onset_phase": "decision"
+    }
+   }
+  },
+  "GPT-Paper": {
+   "a": "GPT",
+   "b": "Paper",
+   "decision_n": 6,
+   "metrics": {
+    "F_SF": {
+     "at_decision": -0.02055398216626625,
+     "final": -0.0008802414400478353,
+     "after_decision": 0.019673740726218414,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_SF_progress": {
+     "at_decision": -0.02045222842031688,
+     "final": -0.00037396325365834926,
+     "after_decision": 0.020078265166658532,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_AH_partial": {
+     "at_decision": 0.29454195387652593,
+     "final": 0.5920368008215338,
+     "after_decision": 0.29749484694500783,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_AV_partial": {
+     "at_decision": 1.1598875989597737,
+     "final": -0.15474852638994463,
+     "after_decision": -1.3146361253497183,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "lambda_left": {
+     "at_decision": 0.07298860590659745,
+     "final": 0.10724409771882526,
+     "after_decision": 0.03425549181222781,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "lambda_right": {
+     "at_decision": 0.0605982250902275,
+     "final": 0.17629965052625088,
+     "after_decision": 0.11570142543602338,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    },
+    "F_LR": {
+     "at_decision": 0.12584242397689216,
+     "final": 0.3039649147004326,
+     "after_decision": 0.17812249072354042,
+     "onset_n": 6,
+     "onset_phase": "decision"
+    }
+   }
+  }
+ },
+ "checks": {
+  "V_equals_gpt001": true,
+  "final_equals_wang_quality_v1": true,
+  "llc_every_placement": true,
+  "prefix_identical": true
+ },
+ "definitions": "Step-wise quality of the gpt-001 counterfactual walls, offline from their records (no wall is built).\n\n  python -B research/step_quality.py        # research/reports/gpt-001-cf-steps/, written once\n\nAfter each placement n of a recorded wall:\n- F_SF (author: 03's right-cropped area), F_SF_progress (stone px / (H*W - 2H - 3W) of the whole 02\n  wall: one denominator for every wall and step), F_AH_partial, F_AV_partial: 02 (corrected canvas,\n  as wang-quality-v1) on the first n lines of transformation.txt, then 03 unchanged. 03 drops the\n  empty rows above the highest stone, so the pockets of an unfinished wall count as joints: partial\n  values, never a final quality. At the last placement they are wang-quality-v1's.\n- lambda_left, lambda_right: evaluate_kine's two tilting-table solves (solve_force_rigid, unrounded)\n  of the simulation wall after n; F_LR = min / mu, the partial wall's limit.\nChecks, each fatal: V's series is gpt-001's; at the last placement F_SF, F_AH, F_AV, F_LR are\nwang-quality-v1's (summary.json of the counterfactual plan) and the lambdas the mechanism files';\nat every placement round(lambda_min, 1) / mu is the chosen candidate's LLC; G_k and P_k agree before\nthe placement of step k.\n"
+}
