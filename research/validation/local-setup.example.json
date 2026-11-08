@@ -1,0 +1,4 @@
+{
+ "env_prefix": "C:\\path\\to\\miniconda3\\envs\\stablepacking-baseline",
+ "worker_venv_manifest": "worker-venv.local.json"
+}

@@ -27,7 +27,12 @@ import time
 REPO = Path(__file__).resolve().parents[1]
 RUNS = REPO / 'research' / 'runs'
 VALIDATION = REPO / 'research' / 'validation'
-ENV_PREFIX = Path(json.loads((VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix'])
+sys.path.insert(0, str(VALIDATION))
+import local_setup  # noqa: E402  (this computer's paths; the registered ones without a local-setup file)
+
+ENV_PREFIX = local_setup.env_prefix(
+    json.loads((VALIDATION / "environment-manifest.json").read_text(encoding="utf-8"))["prefix"]
+)
 CASES = {  # case -> (entry script, original number of walls in its batch)
     'bricks': ('Tests/Bricks/run.py', 1),
     'almeida-r': ('Tests/Almeida/R/run.py', 1),
