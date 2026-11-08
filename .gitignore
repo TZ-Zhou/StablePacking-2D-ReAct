@@ -173,3 +173,7 @@ research/runs/
 .env.*.local
 secrets/
 *.lic
+
+# Machine-local setup of this computer (template: research/validation/local-setup.example.json)
+research/validation/local-setup.json
+research/validation/worker-venv.local.json

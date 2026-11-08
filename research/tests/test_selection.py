@@ -375,7 +375,7 @@ class LauncherSafety(unittest.TestCase):
     def test_launcher_tools_reach_a_clone_and_need_no_baseline(self):
         # A fresh clone has no baseline/: everything run_wall executes or reads lives in research/validation.
         self.assertEqual(run_wall.VALIDATION, REPO / 'research' / 'validation')
-        tools = ('windows_case_runtime.py', 'verify_environment.py', 'environment-manifest.json')
+        tools = ('windows_case_runtime.py', 'verify_environment.py', 'environment-manifest.json', 'local_setup.py')
         for tool in tools:
             self.assertTrue((run_wall.VALIDATION / tool).is_file(), tool)
             ignored = subprocess.run(['git', 'check-ignore', '--no-index', '-q', f'research/validation/{tool}'], cwd=REPO)
@@ -384,8 +384,33 @@ class LauncherSafety(unittest.TestCase):
             code = (REPO / source).read_text(encoding='utf-8')
             self.assertNotRegex(code, r"['\"]baseline['\"]|baseline[/\\]validation|Users[/\\]", source)
         manifest = json.loads((run_wall.VALIDATION / 'environment-manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(run_wall.ENV_PREFIX, Path(manifest['prefix']))
+        self.assertEqual(run_wall.ENV_PREFIX, run_wall.local_setup.env_prefix(manifest['prefix']))  # this computer's, else registered
         self.assertTrue({'python', 'platform', 'packages', 'conda_records'} <= set(manifest))
+
+    def test_local_setup_overrides_only_the_paths(self):
+        # Two computers keep their own paths in untracked files; the tracked manifests are never edited.
+        ls = run_wall.local_setup
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            ls, "LOCAL", Path(tmp) / "local-setup.json"
+        ), mock.patch.object(ls, "HERE", Path(tmp)):
+            self.assertEqual(ls.env_prefix("C:/registered"), Path("C:/registered"))
+            self.assertEqual(ls.worker_venv_manifest("C:/registered/w.json"), Path("C:/registered/w.json"))
+            ls.LOCAL.write_text(
+                json.dumps({"env_prefix": "D:/mine", "worker_venv_manifest": "w.local.json"}), encoding="utf-8"
+            )
+            self.assertEqual(ls.env_prefix("C:/registered"), Path("D:/mine"))
+            self.assertEqual(ls.worker_venv_manifest("C:/registered/w.json"), Path(tmp) / "w.local.json")
+        ignored = subprocess.run(
+            [
+                "git",
+                "check-ignore",
+                "-q",
+                "research/validation/local-setup.json",
+                "research/validation/worker-venv.local.json",
+            ],
+            cwd=REPO,
+        )
+        self.assertEqual(ignored.returncode, 0, "the local files must stay out of git")
 
 
 class MirrorFrame(unittest.TestCase):

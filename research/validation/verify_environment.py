@@ -5,9 +5,11 @@ from pathlib import Path
 import re
 import sys
 
+import local_setup  # this computer's paths, from the folder of this script
+
 repo = Path(__file__).resolve().parents[2]
 registered = json.loads(Path(__file__).with_name("environment-manifest.json").read_text(encoding="utf-8"))
-assert Path(sys.prefix).resolve() == Path(registered["prefix"]).resolve(), sys.prefix
+assert Path(sys.prefix).resolve() == local_setup.env_prefix(registered["prefix"]).resolve(), sys.prefix
 assert sys.version == registered["python"], sys.version
 assert sys.platform == registered["platform"], sys.platform
 actual = {re.sub(r"[-_.]+", "-", d.metadata["Name"]).lower(): d.version for d in md.distributions()}

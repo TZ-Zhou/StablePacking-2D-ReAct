@@ -52,7 +52,10 @@ MAX_BYTES = 1 << 20
 # venv_main runs this file under `python -I`, whose sys.path holds neither the script's directory
 # nor the working directory: the research package is found from here, not from an import
 REPO = Path(__file__).resolve().parents[2]
-VENV_MANIFEST = REPO / 'research' / 'validation' / 'worker-venv.json'
+sys.path.insert(0, str(REPO / 'research' / 'validation'))
+import local_setup  # noqa: E402  (this computer's paths; the registered ones without a local-setup file)
+REGISTERED_VENV_MANIFEST = REPO / 'research' / 'validation' / 'worker-venv.json'
+VENV_MANIFEST = local_setup.worker_venv_manifest(REGISTERED_VENV_MANIFEST)
 # Windows needs these to start Python and load its DLLs, matplotlib (imported with Stonepacker2D) a
 # home or config directory; nothing else of this process reaches the worker
 WORKER_ENV = ('SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'PATH', 'PATHEXT', 'COMSPEC', 'TEMP', 'TMP',
@@ -91,7 +94,13 @@ def venv_problems(manifest=VENV_MANIFEST):
         seen = json.loads(out.stdout)
     except (subprocess.TimeoutExpired, ValueError, OSError) as error:
         return [f'worker venv: the interpreter does not report itself ({type(error).__name__})']
-    frozen = json.loads((REPO / 'research' / 'validation' / 'environment-manifest.json').read_text(encoding='utf-8'))['prefix']
+    frozen = str(
+        local_setup.env_prefix(
+            json.loads((REPO / "research" / "validation" / "environment-manifest.json").read_text(encoding="utf-8"))[
+                "prefix"
+            ]
+        )
+    )
     if os.path.normcase(m['base_prefix']) != os.path.normcase(frozen):
         return [f"worker venv: its base {m['base_prefix']} is not the frozen environment {frozen}"]
     want = {k: m[k] for k in ('prefix', 'base_prefix', 'version', 'sdks')}
