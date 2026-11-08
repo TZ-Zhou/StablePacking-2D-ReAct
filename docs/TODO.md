@@ -28,14 +28,14 @@
 
 ## 砌牆加速（`docs/plans/case-speedup-2s-per-stone.md`）
 
+階段、手段與待決定都在該計畫。
+
 | 項 | 要做什麼 |
 | --- | --- |
-| 4a 重用 `mosek.Env` | 載授權後比對重用與新建 Env 的求解結果 |
-| 階段 5 worker 預熱 | `configure` 時 `NUMBER_CPU` 還是預設 8，`set_number_cpu(10)` 在其後才跑；Python 3.10 的 executor 要 submit 才建 worker，需要暖機 task |
-| 階段 5 完成後評估 | `tilting_angle.plot_failure_mec` 把 `mechanism.csv` 的寫入移到函式開頭，略過圖時提早返回 |
+| worker 預熱（C1） | `configure` 時 `NUMBER_CPU` 還是預設 8，`set_number_cpu(10)` 在其後才跑；Python 3.10 的 executor 要 submit 才建 worker，需要暖機 task |
+| 完成後評估 | `tilting_angle.plot_failure_mec` 把 `mechanism.csv` 的寫入移到函式開頭，略過圖時提早返回 |
 
 - `rotate_min_shape_factor` 的平行分支要等 worker 預熱完成才會啟用，目前走序列分支。
-- PR 階段 3–6 後前 11 顆約 2.5 秒/顆，尚未達 2 秒/顆。
 - batch 跑完後拆 `run_wall.run`、`configure`。
 
 ## 分支與清理（只在 pc2 `GIAAIL-STRIX`）
@@ -56,7 +56,6 @@
 | 控制器可否直接選候選 | 可以 |
 | 離線建牆批次 | 可以 |
 | 第二個驗證場景 | `TH_T20` |
-| D4：PR 是否一定要 < 2 秒/顆 | 不強制，以實測為準 |
-| D5：workers 是否超過 10 | 維持 10，worker 數不影響決策 |
-| 4g `num_threads=1` | 量到超訂才做 |
+| 砌牆加速的目標 | 第二顆起每顆 < 2 秒，努力到 0.5 秒，結果完全不變 |
+| MOSEK `num_threads=1` | 量到超訂才做 |
 | 舊單引號 Python 檔被 clean-hook 整檔排版 | 接受，排版變動獨立 commit |

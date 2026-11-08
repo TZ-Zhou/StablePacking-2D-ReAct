@@ -1,442 +1,213 @@
-# 計畫：砌牆迴圈壓到每顆石頭 2 秒以內
+# 計畫：每顆石頭放置 < 2 秒，目標 0.5 秒
 
-讓 `run_wall` 的砌牆迴圈平均每放一顆石頭少於 2 秒，且每一面牆的決策與現在逐位元相同。
+把整個 run batch 的建牆邏輯加速到**每一顆放置都少於 2 秒**，其餘盡量壓到 0.5 秒，且**計算結果完全不變**。
 
-## 目標
+## 目標定義
 
-**指標**　秒/顆 = (`events.jsonl` 的 `build_return` − `build_enter`) ÷ `placed_rocks`。
+使用者已確認：
 
-開機（匯入、載入石頭、形狀因子，約 15–25 秒）與牆完成後的評估不算在內，另外記錄總時間。
-
-| 等級 | 場景 | 條件 |
-| --- | --- | --- |
-| 必達 | `thangavelu-noise80`、`fft-d2-0`、`bricks` | 完整牆、兩種政策、10 workers，兩次的較大值 < 2.0 秒/顆 |
-| 爭取 | `almeida-pr` | 同上；階段 2 結束時至少 ≤ 3.5 秒/顆 |
-| 記錄 | `almeida-r`、`almeida-ir`、`rubble`、`thangavelu-noise20` | 量出秒/顆，不設門檻 |
-
-**不變條件**　同場景、政策、順序、種子的牆，`check_run.compare_runs` 回報零差異（決策、篩選值、變換、`commits.jsonl`、每個事件 npz、`base.pkl` 三個矩陣）。
-
-## 現況
-
-### 秒/顆
-
-| 場景 | 石數 | 每批新 Pool | 持久 Pool | 紀錄（`research/runs/` 下） |
-| --- | --- | --- | --- | --- |
-| `bricks` code_original | 98 | 3.2 | 未量 | `bricks-code-original-trace-02` |
-| `fft-d2-0` code_original | 34 | 2.9 | 未量 | `fft-d2-0-code-original-notrace-01` |
-| `fft-d2-0` paper | 41 | 6.6（當時主機有其他負載） | 0.59 | `verify-perf-fft-d2-0-paperA-s20-tb`、`-pp` |
-| `thangavelu-noise80` code_original | 18 | 16.4 | 未量 | `thangavelu-noise80-code-original-full-01` |
-| `almeida-pr` code_original | 31 | 43.3 | 8.0（8 workers） | `pr-code-original-full-01`、`verify-perf-ap-code-s20-pp` |
-
-`almeida-r`、`almeida-ir`、`rubble`、`thangavelu-noise20` 沒有完整牆的時間紀錄。
-
-### 時間花在哪
-
-**重開 worker 是最大成本。**`build_wall.py:371-378` 每批開一個 `Pool`，Windows 的 spawn 要重新匯入 numpy、scipy、cv2、mosek。
-
-| `fft-d2-0` paper，每批 | 每批新 Pool | 持久 Pool |
-| --- | --- | --- |
-| 建 Pool | 0.56 秒 | 整面牆一次 1.46 秒 |
-| `starmap`（含計算） | 4.55 秒 | 0.35 秒 |
-| 整面牆的迴圈 | 272 秒 | 24 秒 |
-| worker 合計忙碌 | 50.8 秒（156 個行程） | 36.7 秒（10 個行程） |
-
-**`almeida-pr` 卡在批次等待與 worker 計算。**持久 Pool 下：
-
-- 迴圈 248 秒，其中 `starmap` 241 秒，分 382 批，每顆 12.3 批。
-- 3200 次 `place_one_stone`，worker 合計 770 秒，每顆 24.8 worker-秒。
-- 平均只有 3.2 個 worker 在忙（共 8 個）：每批要等最慢的一個 pose。
-
-| `almeida-pr` worker 區段 | 秒 | 佔比 |
-| --- | --- | --- |
-| `evaluate_kine` | 321 | 41.7% |
-| 　`solve_force_rigid`（每次評估解兩個 LP） | 121 | 15.7% |
-| 　`clear_contps` | 83 | 10.8% |
-| 　`pixel_to_mesh` | 57 | 7.4% |
-| 　`cal_Aglobal` | 46 | 6.0% |
-| `evaluate_convolve` | 238 | 30.8% |
-| 未掛計時器（主要是 `place_stone.py:64-80` 的兩次卷積） | 至少約 170 | 22% |
-
-`fft-d2-0` 的 worker 時間有 87.6% 在 `evaluate_kine`，但每顆只有 4 個 pose，持久 Pool 後已低於目標。
-
-**主行程不是瓶頸。**`deepcopy`、`select`、`add_stone` 整面牆合計不到 1 秒。每步寫檔也小：把封存的事件 npz 重存一次，每顆 6–28 毫秒（`almeida-pr` 最多，每顆 4.4 個事件），文字檔每次追加 0.24 毫秒。
-
-### 傳輸量
-
-`place_one_stone` 的每個 task 都帶整份 `current_bricks, all_bricks, base, region`。下表由封存的 `base.pkl` 與單顆石頭的序列化大小估算，是牆尾的上限，平均約一半。
-
-| 場景 | `base.pkl` | 單顆石頭 | 每 pose | 每顆石頭的傳輸量 |
-| --- | --- | --- | --- | --- |
-| `thangavelu-noise80` | 9.6 MB | 0.11 MB | 約 14 MB | 約 330 MB（23 pose） |
-| `bricks` | 36.9 MB | 0.36 MB | 約 39 MB | 約 165 MB（4.2 pose） |
-| `almeida-pr` | 5.1 MB | 0.19 MB | 約 11 MB | 約 1.1 GB（103 pose） |
-| `fft-d2-0` | 1.5 MB | 0.06 MB | 約 2 MB | 約 8 MB（4 pose） |
-
-## 原則
-
-- 一個階段一個 commit；每階段過驗收才開始下一階段。
-- 每個加速都能關掉：`run_wall --fresh-pool` 回到每批新 Pool，供 A/B 量測與退路。
-- `Stonepacker2D/` 依 `.claude/PYTHON_CODING.md:9` 只為追蹤或控制而改。能從 `windows_case_runtime` 做到的就不動上游；非動不可的項目集中在階段 4，要使用者同意。
-- 同一件事一份程式：持久 Pool 只實作在 `windows_case_runtime.py`，`perf_runtime.py` 引用它再加計時。
-- 時間一律成對量（見「驗收」），單次差距不算證據。
-
-## 不做
-
-- 不跳過任何 pose 的 kinematic 評估：`filter.txt` 與 trace 的值會變。
-- 不讓同一批的 task 共用解封後的物件：`place_one_stone` 不修改參數只有靜態稽核，沒有實測。
-- 不做石頭或牆的磁碟快取：多一層會過期的狀態，收益也還沒量到。
-- 不把 `place_one_stone` 改成執行緒：理由見階段 6。
-- 不改候選生成、篩選順序、卷積語意、LLC 閘門。
-- 不改 `research/runs/`。不推送、不合併到 `main`。
-
-## 階段總覽
-
-| 階段 | 內容 | 動到 | 進入條件 | 預期結果（估計） |
-| --- | --- | --- | --- | --- |
-| 0 | 補基準量測、抓 task 樣本、修測試環境 | `research/perf`、`research/tests` | 案例 I/O 改動已提交 | 上表「未量」全部補齊 |
-| 1 | 持久 worker 進 `run_wall` | 外圍 | 階段 0 完成 | T80 1–2、FFT 0.5、bricks < 1、PR 8 |
-| 2 | 一步一次送出全部 pose | 外圍 | 階段 1 通過 | PR 約 3–3.6（8 workers）；T80 再降 |
-| 3 | 每步只序列化一次 | 外圍 | 階段 0 量到傳輸佔迴圈 ≥ 10% | T80、bricks 牆尾變快 |
-| 4 | worker 熱點 | 上游為主 | 使用者同意、PR 仍未達標 | PR < 2 |
-| 5 | 開機固定成本 | 視項目 | 使用者要求總時間 | 總時間少 15–20 秒 |
-| 6 | 步驟輸出移到寫檔執行緒 | 外圍 | 使用者決定（D6） | 每顆少 6–28 毫秒（≤ 1.5%） |
-
-## 階段 0：補量測
-
-本階段不改 `Stonepacker2D/` 與登記的執行路徑。
-
-**前置**
-
-1. 提交目前工作樹的案例 I/O 改動，之後所有基準以該 commit 為準。
-2. 修測試環境：`test_order_controller`、`test_campaign_quality` 從唯讀封存複製後，複本仍是唯讀而報 `PermissionError`。測試要自己把複本改成可寫（`runs/_smoke/rerun_tests.py` 的 `make_writable` 做法）。完成後全套測試才有判讀價值。
-
-**工具補強（`research/perf/`）**
-
-| 項目 | 位置 | 內容 |
-| --- | --- | --- |
-| 秒/顆 | `profile_report.py` | 由 `events.jsonl` 算秒/顆並列在報告最上面 |
-| 傳輸量 | `perf_runtime.py` `TimedPool.starmap` | 記每批第一個 task 的 `len(pickle.dumps(task, 5))` 與耗時，標籤 `main.payload.bytes`、`main.payload.pickle` |
-| 記憶體 | `perf_runtime.py` `wrap_place_one_stone` | 每筆紀錄加 `psutil.Process().memory_info().peak_wset` |
-| task 樣本 | `perf_runtime.py`，環境變數 `PERF_DUMP_TASKS=N` | 把 N 組真實輸入存成 `perf/tasks/*.pkl`，供階段 4 不跑牆就能比對 |
-
-**量測矩陣**（`profile_case`，輸出到 `research/perf/runs/`，10 workers，主機無其他 CPU 票）
-
-| 組 | 場景 | 模式 | 取得 |
-| --- | --- | --- | --- |
-| A | T80、bricks、rubble、PR、FFT | 每批新 Pool、持久 Pool 各一 | 秒/顆、傳輸量、busy worker |
-| B | 同上 | 持久 Pool + `--cprofile` | 函式層級熱點，尤其 PR 那 22% 未計時區段 |
-| C | T80、PR | 持久 Pool，`--pool-size` 8、10、14 | workers 擴展性（主機 16 邏輯核心） |
-| D | T80、PR | 用 `run_wall` 開、關追蹤 | 追蹤寫檔佔迴圈多少 |
-
-組 A 兩種模式也跑 `compare_runs`，順便補上 T80、bricks、rubble 持久 Pool 的等價證據。
-
-**微觀量測**（用 task 樣本，單行程）
-
-- `mosek.Env()` 建立耗時；`solve_force_rigid` 內建模與 `optimize` 各佔多少。
-- MOSEK `num_threads` 預設與 1 的耗時，以及 `round(min(...), get_kine_precision())` 後結果是否相同。
-- 每次 `ndimage.convolve`、`minimum_filter` 的耗時。
-
-**產出**　更新本檔「現況」的表格，並依數字定案階段 3、4 要做哪些項目。
-
-## 階段 1：持久 worker 進 run_wall
-
-**改動**
-
-| 檔案 | 改動 |
+| 項目 | 內容 |
 | --- | --- |
-| `research/validation/windows_case_runtime.py` | 新增 `SharedPool`、`_run_task`；`configure` 依 `BASELINE_PERSISTENT_POOL` 選 `SharedPool` 或 `_pool` |
-| `research/runner/run_wall.py` | 新增 `--fresh-pool`；環境變數預設 `1`；receipt 加 `worker_pool`（不進 `case_id.spec`，因為不決定牆） |
-| `research/perf/perf_runtime.py` | `PersistentPool` 改成繼承 `SharedPool` 再加計時 |
-| `research/perf/README.md`、`readme.md` | 更新說明 |
-| `research/tests/test_worker_pool.py` | 新增 |
+| 硬目標 | 8 種牆（`BR`、`AL_R`、`AL_PR`、`AL_IR`、`FF_D20`、`RB`、`TH_T20`、`TH_T80`）的每一顆放置，第二顆起**最大值** < 2 秒 |
+| 努力目標 | 第二顆起每一顆 < 0.5 秒 |
+| 不計入 | 第一顆放置（含 worker 啟動）、開機（載入石頭、形狀因子）、牆蓋完後的收尾搜尋與評估。這些另外記錄，屬批次總時間 |
+| 不變條件 | 同場景、政策、順序、種子的牆，`check_run.compare_runs` 零差異：決策、篩選值、變換、`commits.jsonl`、每個事件 npz、`base.pkl`。`mechanism.csv` 相對差 < 1e-12（MOSEK 重跑本身就有末位差） |
+| 手段 | 結果不變就都可以，包含修改 `Stonepacker2D/` |
 
-**設計**
+會改變結果的選項（少評估 pose、只算一側、降解析度、放寬 LP 精度）一律不做，不列入決策。
 
-```python
-class SharedPool:
-    """build_wall's `with Pool(n) as p: p.starmap(...)` over workers that live until the case process exits."""
+## 一顆的時間怎麼量
 
-    executor = None
+**定義**　一顆的時間 = 這顆 `placed` 那次提交的時刻，減去上一顆 `placed` 提交的時刻。中間的 probe 與 `no_placement` 重抽都算在這顆內。
 
-    def __init__(self, processes):
-        if SharedPool.executor is None:
-            state = _worker_state()
-            SharedPool.executor = ProcessPoolExecutor(
-                state[0]["NUMBER_CPU"], initializer=_start_worker, initargs=(_restore_worker, *state))
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc_info):
-        return None
-
-    def starmap(self, function, inputs):
-        constants = _constants()
-        futures = [SharedPool.executor.submit(_run_task, constants, function, task) for task in inputs]
-        return [future.result() for future in futures]
-```
-
-| 議題 | 決定 | 依據 |
+| 來源 | 用途 | 限制 |
 | --- | --- | --- |
-| Pool 實作 | `concurrent.futures.ProcessPoolExecutor` | worker 異常死亡時丟 `BrokenProcessPool`；`multiprocessing.Pool` 會補新 worker 但遺失 task，`starmap` 永遠等不到 |
-| 常數 | 每個 task 前同步大寫常數 | `set_dump` 等會在 Pool 建立後改變 |
-| RNG | 不重送 | `place_stone.py:60` 每個 task 都先 `seed_everything()` |
-| Pool 大小 | 首次建立時的 `NUMBER_CPU` | `build_wall` 傳入的 `min(cpu, nb_poses)` 只影響批次大小 |
-| 結束 | 交給 `concurrent.futures` 的退出流程；`starmap` 出錯時先取消同一步未開始的 task | 正常結束時沒有未完成的 task，中途錯誤最多等正在跑的 pose |
-| 父行程被單獨砍掉 | worker 內一條執行緒等父行程結束後 `os._exit` | executor 的 worker 自己也握著佇列的寫入端，讀不到 EOF，不會自行結束 |
+| `events.jsonl` 的 `step_commit`（`run_wall` 有 trace 時） | 正式指標，與 batch 相同路徑 | 每次抽樣一筆，要依 `outcome` 累加成每顆；`sample_twice` 每顆 2 筆 |
+| `perf/place_*.jsonl` 的 `t_end`（`profile_case`） | 區段拆解 | 不開 trace；一顆 = 相鄰 `placed` 群組最後結束時刻之差 |
+| 封存牆的 `receipt` | 不可用 | 只有總時間除以顆數，得不到最大值 |
 
-worker 跨 task 的狀態已靜態稽核，結果在 `.claude/plans/verify-perf-core-report.md` §5。
+- `time.monotonic` 在 Windows 的解析度約 15.6 毫秒，對 0.5 秒的門檻足夠。
+- `derived/steps.csv` 的 `wall_time_s` 是每次抽樣，不是每顆；階段 0 加每顆彙總。
 
-**測試（`test_worker_pool.py`，不跑牆）**
+## 基準
 
-- 兩次 `with Pool(n)` 用同一組 PID。
-- Pool 建立後改常數，下一批 worker 看得到。
-- 結果順序等於輸入順序；task 內的例外傳回主行程。
-- worker 用 `os._exit(1)` 死亡時，`starmap` 在 30 秒內丟 `BrokenProcessPool`。
-- `run_wall.terminate` 能收掉整棵行程樹，`terminate` 紀錄顯示全部 PID 已消失。
+2026-11-08，`a59e6a8`，pc2（Ryzen 9 5900HX，8 實體核心、16 邏輯），`code_original`，預設種子，10 workers，持久 worker，`profile_case` 不開 trace，每種牆一面完整牆。秒，第一顆不計。
 
-**驗收**　L1、L2、L3、L4（見「驗收」），另加：
+| 牆 | 放置顆數 | 平均 | 中位 | p90 | 最大 | > 2 秒 | > 0.5 秒 | pose/顆 平均（最大） | 最慢單一 pose |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `FF_D20` | 34 | 0.07 | 0.06 | 0.11 | 0.13 | 0 | 0 | 4（4） | 0.12 |
+| `BR` | 98 | 0.36 | 0.36 | 0.60 | 0.65 | 0 | 25 | 4（4） | 0.54 |
+| `AL_PR` | 31 | 2.29 | 1.88 | 3.58 | 3.85 | 14 | 30 | 102（208） | 0.35 |
+| `AL_R` | 33 | 2.27 | 2.04 | 3.51 | 4.27 | 16 | 32 | 95（232） | 0.45 |
+| `RB` | 88 | 3.45 | 3.57 | 4.19 | 4.41 | 87 | 87 | 28（28） | 2.91 |
+| `TH_T20` | 18 | 4.83 | 4.79 | 6.18 | 6.58 | 16 | 17 | 23（28） | 3.41 |
+| `TH_T80` | 18 | 4.92 | 4.47 | 6.67 | 6.82 | 16 | 17 | 23（28） | 3.63 |
+| `AL_IR` | 55 | 7.08 | 7.33 | 9.03 | 9.75 | 54 | 54 | 167（296） | 0.83 |
 
-- `--controller` 迴路測試（loopback）與 `--worker-venv` 牆都能跑完。
-- `--placements 3` 停牆後沒有殘留行程。全套測試出現過 `TerminationFailed`（10 個行程在 `taskkill` 加 30 秒後仍在），持久 worker 不得使它更常發生。
-- 完整牆 worker 的 `peak_wset`，牆尾不超過第一步的 1.5 倍。
+- `RB`、`TH_*` 的單一 pose 就超過 2 秒，靠平行度救不了，必須降低單一 pose 的成本。
+- `BR`、`FF_D20` 每顆只有 4 個 pose，worker 用不滿，每顆時間約等於最慢的 pose。
+- 其餘牆平均 7–8 個 worker 忙碌，已達實體核心數。
+- `BR`、`FF_D20` 隨牆變高而變慢：前三分之一平均 0.18、0.04 秒，後三分之一 0.55、0.10 秒。
+- `AL_*` 的每顆時間由當顆的 pose 數決定（相關係數 0.76–0.93），最慢一顆都在牆的前半。
 
-## 階段 2：一步一次送出全部 pose
+**還缺**：trace 開啟時的正式數字、`paper` 政策、重複量測。由階段 0 補。
 
-`build_wall.py:371-378` 把一步的 pose 切成多批，每批等最慢的一個。`place_one_stone` 每次呼叫都自己重設 RNG，互相獨立，所以整步一起排程不影響結果。
+## 時間花在哪
 
-**做法（預設）**　只改 `SharedPool.starmap`，上游不動。收到一步的第一批（`j == 0`）時送出該步全部 pose，之後各批直接取結果：
+worker 時間佔比（%），`evaluate_kine` 內含其下四項：
 
-```python
-def starmap(self, function, inputs):
-    first, common = inputs[0][0], inputs[0][1:]
-    if first == 0:
-        constants = _constants()
-        SharedPool.common = common
-        SharedPool.step = [SharedPool.executor.submit(_run_task, constants, function, (j, *common))
-                           for j in range(len(common[1]))]
-    assert all(a is b for task in inputs for a, b in zip(task[1:], SharedPool.common))
-    return [SharedPool.step[task[0]].result() for task in inputs]
-```
+| 牆 | 秒/pose | `evaluate_convolve` | `evaluate_kine` | 其中 LP | `clear_contps` | `pixel_to_mesh` | `base_to_elements` | `add_stone` | `deepcopy` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `FF_D20` | 0.055 | 7.0 | 80.7 | 57.2 | 13.1 | 5.0 | 3.6 | 5.0 | 2.0 |
+| `BR` | 0.263 | 16.3 | 72.9 | 45.9 | 13.5 | 8.5 | 3.6 | 1.0 | 3.4 |
+| `AL_R` | 0.169 | 32.9 | 52.3 | 28.7 | 11.8 | 7.6 | 2.8 | 4.8 | 2.0 |
+| `AL_PR` | 0.156 | 43.1 | 41.7 | 25.6 | 7.8 | 4.7 | 2.6 | 5.2 | 1.7 |
+| `AL_IR` | 0.332 | 51.8 | 34.4 | 20.3 | 6.6 | 3.9 | 2.8 | 5.3 | 1.6 |
+| `RB` | 0.924 | 61.1 | 26.7 | 16.7 | 4.1 | 2.5 | 2.9 | 5.4 | 1.2 |
+| `TH_T20` | 1.656 | 89.8 | 4.1 | 2.0 | 0.5 | 1.0 | 0.4 | 2.2 | 0.2 |
+| `TH_T80` | 1.680 | 89.8 | 4.1 | 2.0 | 0.5 | 1.0 | 0.5 | 2.2 | 0.2 |
 
-主行程在全部 `result()` 拿到前都停在迴圈內，不會修改 `base`，因此背景序列化看到的內容不變。`assert` 保證上游呼叫形式改變時大聲失敗。
+函式層級（cProfile，全部 worker 合計秒數）：
 
-**替代做法**　直接改 `build_wall.py:371-385` 成一次 `starmap`，約 8 行，意圖更清楚，但動到上游（見「待決定」D2）。
-
-**測試**
-
-- 同步驟多批的結果與逐批相同。
-- 第 2 批的物件不是同一份時 `assert` 失敗。
-- 下一步第一批（`j == 0`）會換掉上一步的 future。
-
-**驗收**　L1、L2、L3、L4；PR ≤ 3.5 秒/顆，平均 busy worker 明顯高於 3.2。
-
-## 階段 3：每步只序列化一次
-
-**進入條件**　階段 0 量到必達場景的傳輸（序列化＋管線）≥ 迴圈時間 10%；否則跳過。
-
-**做法**（只改 `windows_case_runtime.py`）
-
-1. 主行程把 `common` 用 `pickle.dumps(common, 5)` 序列化一次，寫入 `multiprocessing.shared_memory.SharedMemory`。
-2. task 只帶 `(name, size, j)`。
-3. worker 連上共享記憶體，對每個 task 重新 `pickle.loads`，得到獨立物件，語意與現在相同。
-4. 一步結束後主行程 `close()` 並 `unlink()`；行程被砍時 Windows 在最後一個 handle 關閉後自動回收。
-
-**測試**　解封結果與直接傳遞相等；同一步兩個 task 拿到不同物件；一步結束後共享記憶體已釋放。
-
-**驗收**　L1、L2、L3、L4；`main.payload.pickle` 降為約 1/pose 數。
-
-## 階段 4：worker 熱點
-
-**進入條件**　PR 在階段 2 後仍 > 2 秒/顆，且使用者同意改上游（D3）。
-
-**預算**　目標 62 秒迴圈（31 顆）需要 worker 總量 ≤ 62 × workers × 效率。
-
-| workers | 效率 | 上限 | 相對現在的 770 秒 |
+| 項目 | `TH_T80`（忙碌 668） | `AL_PR`（539） | `BR`（148） |
 | --- | --- | --- | --- |
-| 10 | 100% | 620 秒 | −20% |
-| 10 | 85% | 527 秒 | −32% |
-| 8 | 85% | 422 秒 | −45% |
+| `ndimage.convolve`（`_nd_image.correlate`） | 479 | 155 | 15 |
+| `ndimage.minimum_filter` | 98 | 24 | 1 |
+| MOSEK `optimize` | 11 | 78 | 16 |
+| `solve_force_rigid` 本體（Python 建模、`mosek.Env`） | 2 | 39 | 43 |
+| `numpy.nonzero` | 17 | 27 | 5 |
+| `clear_contps` 本體 | 2 | 19 | 10 |
+| `cv2.filter2D` | 10 | 12 | 2 |
 
-項目依序做，達標即停：
+主行程不是瓶頸。每 task 的序列化內容：`TH_T80` 35 MB、`BR` 21 MB、`AL_PR` 12 MB；worker 每個 task 解封一次，這段不在上表內，階段 0 補量。
 
-| 項 | 位置 | 做法 | 潛在節省（PR） | 風險 |
+## 手段
+
+每項都不改變數值。「驗證」欄是 scratchpad 原型在基準牆的真實 task 上跑出來的結果（`TH_T80` 28 pose、`AL_PR` 96、`BR` 34，共 158 pose），不是推論。
+
+### 卷積
+
+| 項 | 位置 | 做法 | 驗證 | 毫秒/pose（`TH_T80` / `AL_PR` / `BR`） |
 | --- | --- | --- | --- | --- |
-| 4a | `kine_2d.py:290` | 每個 worker 重用一個 `mosek.Env`；在 `_restore_worker` 把 `mosek.Env` 換成不關閉的單例，上游不動 | 階段 0 微觀量測決定 | 低 |
-| 4b | `kine_2d.py:78` `cal_Aglobal` | 每個接觸點只影響兩個元素，改成向量化填值，免掉 elements × contacts 迴圈與 `np.matrix` | 約 40 秒 | 低，運算順序相同 |
-| 4c | `tilting_angle.py:418` `clear_contps` | 只走有接觸的元素對；每對的法向量與座標一次取陣列；`(cand, anta)` 順序與編號維持原雙迴圈順序 | 約 60 秒 | 中，接觸點順序決定 LP 欄位 |
-| 4d | `place_stone.py:69,75`、`local_void.py:261,267` | 這些卷積只看 `== 0` 或 `!= 0`，輸入非負，改用二值化＋ `cv2.filter2D` 或 FFT 卷積，閾值 0.5；`cval`、`origin` 用補邊重現 | 最多約 300 秒（待 cProfile 拆分） | 中，邊界語意 |
-| 4e | `tilting_angle.py:241` `pixel_to_mesh` | 向量化索引，最後才建 `ContPoint` | 約 30 秒 | 中 |
-| 4f | `kine_2d.py:398-417` | `putcj`、`putvarbound`、`putacol` 迴圈改批次 API，索引順序不變 | 視建模佔比 | 低 |
-| 4g | `kine_2d.py:292` 之後 | `num_threads=1`，只在階段 0 量到超訂時做 | 視量測 | 中，求解路徑改變，靠 `round` 吸收末位差 |
+| A1 候選點求和 | `local_void.py:363-365` | 分數只在 `region_potential` 與 `mason_criteria` 都成立的點被讀。改成只在這些點，照 `ndimage.convolve` 的順序從左到右累加（`np.add.accumulate`）。候選點只佔全圖 0.3–1.1% | 158/158 逐位元相同；候選點全在圖內 | 635→24 / 20.6→3.4 / 29.7→1.6 |
+| A2 最小值濾波 | `local_void.py:309-332` | 單點與單欄 footprint 改成補邊的一維 `minimum_filter1d` 加平移 | 158/158 陣列相同 | 106→4.8 / 3.0→1.0 / 2.8→1.4 |
+| A3 牆面共用圖 | `local_void.py:259-362` | `contour_dilated`、距離圖、`base_phi`、`base_height` 只跟牆有關，每步（每側）算一次，不是每 pose 一次 | 階段 1 驗 | 階段 0 量 |
 
-**每項的驗證**
+A1 若有候選點讓石頭超出圖外，該 pose 退回原本的 `ndimage.convolve`。
 
-1. 用階段 0 的 task 樣本比對：中間陣列（遮罩、`Aglobal`、接觸點序列）`np.array_equal`，`place_one_stone` 回傳值完全相同。
-2. 過了才跑 L2、L3。
+### 穩定性評估
 
-**驗收**　L1、L2、L3、L4；PR < 2.0 秒/顆。
+| 項 | 位置 | 做法 | 驗證 |
+| --- | --- | --- | --- |
+| A4 LP 欄位 | `kine_2d.py:362-391` | 列×欄的 Python 雙迴圈改 `np.nonzero(Aglobal.T)`，順序不變 | 158/158 相同；毫秒/解：`BR` 33.8→4.2、`AL_PR` 0.48→0.13、`TH_T80` 1.11→1.84（接觸少時略慢，絕對值可忽略） |
+| A5 重用 `mosek.Env` | `kine_2d.py:296` | 每個 worker 一個 Env | 158/158 `limit_force` 相同；每解省約 7 毫秒：`TH_T80` 10.8→3.3、`AL_PR` 9.1→2.0、`BR` 54.2→47.0 |
+| A6 接觸增量 | `tilting_angle.py:241-467` | 已放石頭之間的接觸每步算一次，每個 pose 只補新石頭的接觸對；接觸順序照舊 | 階段 2 驗 |
+| A7 少建物件 | `tilting_angle.py`、`kine_2d.py:152` | `ContPoint` 改陣列；`np.cross` 改明算；最後才組回順序相同的物件 | 階段 2 驗 |
+| A8 其餘全圖操作 | `place_stone.py` | `np.nonzero` 等改在石頭的 bounding box 內算；`deepcopy(base)` 改成只複製會變動的欄位 | 階段 2 驗 |
 
-## 階段 5：開機固定成本
+### 傳輸與排程
 
-只影響總時間，不影響秒/顆。使用者要求時才做。
-
-| 項 | 目前 | 做法 |
+| 項 | 做法 | 驗證 |
 | --- | --- | --- |
-| `rotate_min_shape_factor`（`stone.py:401`） | FFT 18 秒、PR 11 秒，每顆算 92 次形狀因子 | 用持久 worker 平行計算，10 workers 預期降到 2–3 秒；不做磁碟快取 |
-| worker 啟動 | 第一批多等約 4–5 秒（估計） | `configure` 時就建立 executor，與主行程載入石頭同時進行 |
-| 完成後評估 | 約 4.5 秒 | 量過 `plot_failure_mec` 的繪圖耗時後，只保留 `mechanism.csv` 所需的計算 |
+| B1 零複製傳參 | pickle protocol 5 的 out-of-band buffer 放進 `SharedMemory`，陣列唯讀；worker 不再每 task 複製 12–35 MB | 階段 3 驗；寫入唯讀陣列會直接報錯 |
+| B2 worker 數 | 量 8、10、12、16；worker 數不影響決策 | 階段 3 量 |
+| B3 重複 pose | `sample_twice` 的 probe 與 place 在同一步、同一側重複評估同一 pose：`AL_PR` 16%。除了第 0 欄（取決於同批石頭的高度中位數）其餘可直接重用 | 樣本中只有第 0 欄不同；階段 4 全牆驗 |
+| B4 兩個 LP 同時解 | 只用於 `BR`、`FF_D20` 這種 worker 用不滿的牆，兩個方向各佔一個 worker | 階段 5，條件式 |
 
-## 階段 6：步驟輸出移到寫檔執行緒
+### 批次層（不計入目標，縮短整批時間）
 
-主迴圈不等磁碟：每步的輸出送進佇列，由一條執行緒依序寫出。
-
-**分工**
-
-| 工作 | 跑在 | 內容 |
+| 項 | 位置 | 做法 |
 | --- | --- | --- |
-| 核心計算 | worker 行程，已與主行程分開 | `place_one_stone` |
-| 主迴圈 | 主行程的主執行緒 | 等結果、`select`、更新 `base`，把輸出送進佇列 |
-| 寫檔 | 主行程的一條執行緒 | trace npz、`commits.jsonl`、`filter.txt`、`decisions.txt`、`base.pkl` |
+| C1 worker 預熱 | `windows_case_runtime.configure` | 開機時就建好 worker，第一顆不再等；`rotate_min_shape_factor` 的平行分支隨之啟用（`RB` 開機 57 秒、`AL_IR` 23 秒） |
+| C2 牆間固定成本 | `run_wall.run` | `verify_environment` 子行程、`code_fingerprint`、複製 `data/` 改為每批一次或硬連結 |
+| C3 收尾 | `run_wall.run` | `time.sleep(2)` 輪詢改等待行程結束；`partial_quality` 每顆重算指標的成本先量 |
+| C4 多牆並行 | `batch.py` | 量同時跑 2–3 面的整批吞吐。會拉高每顆時間，只在使用者要衝整批總量時啟用 |
 
-**核心計算維持多行程，不改執行緒**
+### 不採用
 
-- `evaluate_kine` 大多是 Python 迴圈，受 GIL 限制，執行緒不會平行。
-- `place_stone.py:60` 每個 task 重設全域 `random`、`np.random`，`tilting_angle.py:39-41` 是模組層物件。執行緒共用這些狀態，決策會變。
-- 主迴圈等 worker 時不佔 CPU。下一步要看這一步全部 pose 的結果，這段等待省不掉。
-
-**預期效益**（封存事件重存到暫存目錄量得）
-
-| 場景 | 事件/顆 | 存一個事件 | 每顆 | 佔 2 秒 |
-| --- | --- | --- | --- | --- |
-| `thangavelu-noise80` | 1.00 | 10.1 毫秒 | 10 毫秒 | 0.5% |
-| `bricks` | 1.06 | 8.9 毫秒 | 9 毫秒 | 0.5% |
-| `almeida-pr` | 4.39 | 6.5 毫秒 | 28 毫秒 | 1.4% |
-| `fft-d2-0` | 1.18 | 5.2 毫秒 | 6 毫秒 | 0.3% |
-
-這一階段不是達成 2 秒的手段，作用是磁碟忙碌時不拖慢迴圈。
-
-**設計**
-
-```python
-class StepWriter:
-    """One thread writes every step output in call order; the building loop never waits for the disk."""
-
-    def __init__(self, depth=32):
-        self.jobs = queue.Queue(depth)
-        self.error = None
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def submit(self, job):
-        self._raise_if_failed()
-        self.jobs.put(job)
-
-    def flush(self):
-        self.jobs.join()
-        self._raise_if_failed()
-
-    def _run(self):
-        while True:
-            job = self.jobs.get()
-            try:
-                if self.error is None:
-                    job()
-            except BaseException as error:
-                self.error = error
-            finally:
-                self.jobs.task_done()
-```
-
-| 規則 | 原因 |
+| 想法 | 原因 |
 | --- | --- |
-| 全部步驟輸出走同一條佇列、一條執行緒 | `run_wall.check_commits` 要求被砍的牆是 `build_wall` 寫入順序的前綴；只移走 npz，`decisions.txt` 會跑到事件前面 |
-| 送出時快照：陣列與 bytes 當場複製，路徑當場算好 | 主迴圈會繼續更新 `base` |
-| 寫檔時用原本的 mode 重開 | Windows 文字模式的換行與編碼逐位元不變 |
-| 佇列上限 32 項，滿了主迴圈等待 | 記憶體有上限 |
-| 寫檔錯誤在下一次送出或 flush 時丟出 | 案例非零結束，receipt 為 `FAILED`，不完整的資料不會被當成成功 |
-| `build()` 在 `build_return` 前 flush，`atexit` 再保險 | `build_return` 之後牆的輸出必須完整 |
-| 有 `--controller` 的牆維持同步 | `order_controller.append_trace` 同步寫 `controller.jsonl`，順序要一致；LLM 等待遠大於寫檔，也沒有省的必要 |
+| 石頭疊成多通道一次卷積，或用 FFT | 分數是浮點累加，FFT 的捨入不同，`distance` 與平手順序會變。卷積的成本在「全圖 × 石頭像素」，A1 已降到「候選點 × 石頭像素」，比批次化更省。其中「牆面只算一次」的部分由 A3 做 |
+| 只算頂層固定列帶 | 真正選中的位置可能在較深的空隙：列帶 = 頂層往下一顆石高 + buffer 時，`TH_T80` buffer 10 有 2/28、`BR` buffer 20 有 4/34 的 pose 選在帶外。A1 用實際候選點，範圍更小且不會漏 |
+| 少評估 pose、略過 probe、只算一側 | 改變結果 |
+| numba、Cython | 不在凍結環境內，改環境要使用者決定（D3） |
 
-**上游不動**　`windows_case_runtime.configure` 換掉 `build_wall` 模組裡的兩個名字：
+## 每種牆可達到什麼
 
-- `write_trace`：複製陣列後送進佇列。
-- 注入模組全域 `open`：`build_wall.py:58,435,652,656,726` 都會先解析到它。模式 `a`、`a+`、`wb` 先收進記憶體，關閉時送進佇列；其他模式交給內建 `open`。
+要達門檻，單一 pose 平均要低於「門檻 × 7 ÷ 最大 pose 數」（有效平行度約 7），且最慢的單一 pose 也要低於門檻：
 
-**開關**　`run_wall --sync-output` 關閉；receipt 加 `step_writer`（不進 `case_id.spec`）。
+| 牆 | 現在 秒/pose | 2 秒需要 | 0.5 秒需要 | 階段 1 後最大（估計） | 階段 2–4 後最大（估計） | 2 秒 | 0.5 秒 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `FF_D20` | 0.055 | 已達 | 已達 | 0.13 | < 0.1 | 已達 | 已達 |
+| `BR` | 0.263（牆尾 0.54） | 已達 | 單 pose < 0.5 | 0.6 | 0.3–0.4 | 已達 | 可達 |
+| `TH_T20`、`TH_T80` | 1.7 | 0.5 | 0.125 | 1.2 | 0.6–0.9 | 可達 | 接近，不保證 |
+| `RB` | 0.92 | 0.5 | 0.12 | 2.3 | 1.4–1.9 | 可達 | 不可達 |
+| `AL_PR` | 0.156 | 0.067 | 0.017 | 2.7 | 1.3–1.7 | 可達 | 不可達 |
+| `AL_R` | 0.169 | 0.060 | 0.015 | 3.3 | 1.5–2.0 | 可達，餘裕小 | 不可達 |
+| `AL_IR` | 0.332 | 0.047 | 0.012 | 5.9 | 2.5–3.5 | **不保證** | 不可達 |
 
-**測試（`research/tests/test_step_writer.py`，不跑牆）**
+估計以「基準最大值 × 拿掉對應區段後的比例」算；A1–A2 的比例已在原型量過，其餘是區段上限。各階段實測後覆寫本表。
 
-- npz、文字、pkl 混合寫入，落地順序等於呼叫順序。
-- 送出後改陣列，檔案內容是改之前的。
-- 寫檔失敗時，下一次送出或 flush 丟出例外。
-- 佇列滿時主執行緒等待，資料不遺失。
-- 寫檔停在第 k 項時，磁碟上是前 k 項，`check_commits(stopped=True)` 無問題。
-- 文字模式輸出與直接寫檔逐位元相同。
+`AL_IR` 最大一顆有 296 個 pose，結果不變的前提下每個都得評估，是最難的。全部做完仍未達 2 秒時，由 D3 決定。
 
-**驗收**　L1、L2、L3。L2 的 `--placements 3` 由父行程砍牆，正好驗前綴規則。效益小於時間量測的雜訊，不做 L4，改量主迴圈每次送出 < 2 毫秒。
+## 階段
 
-## 驗收
+一個階段過驗收才進下一個。每個階段可獨立還原：一個 commit 一項手段，`perf:` 的 body 附實測數字。
 
-| 層級 | 內容 | 通過標準 | 機器時間（估計） |
-| --- | --- | --- | --- |
-| L1 | `research.tests` 全套 | 全過 | 約 25 分鐘 |
-| L2 | 8 場景 × 2 政策，`--placements 3`，與同 commit 的 `--fresh-pool` 比 | 共同的前幾顆石頭零差異（被停的牆可能多放幾顆，比 `decisions.txt`、`filter.txt`、`trace/commits.jsonl` 的共同前綴）；`check_run` 為 ok | 約 15 分鐘（基準只跑一次，約 25 分鐘） |
-| L3 | T80、FFT、bricks、PR 完整牆，2 政策，與同 commit 的 `--fresh-pool` 比；code_original 再與封存牆比 | 同上；`mechanism.csv` 相對差 < 1e-12 | 每階段約 30 分鐘（基準只跑一次，約 1.5 小時） |
-| L4 | 時間成對量 | 每場景依序「舊、新、舊、新」；報告每一次；主機無其他 CPU 票；10 workers | 約 1 小時 |
+| 階段 | 內容 | 動到 | 進入條件 | 離開條件 |
+| --- | --- | --- | --- | --- |
+| 0 | 等價基線與量測工具 | `research/` | 計畫核准 | 金牌牆齊備；正式基準表寫入本檔 |
+| 1 | A1、A2、A3 | 上游卷積 | 階段 0 | `TH_*` 最大 < 2 秒；L1–L4 通過 |
+| 2 | A4–A8 | 上游評估 | 階段 1 | `BR` 最大 < 0.5 秒；L1–L4 |
+| 3 | B1、B2 | 外圍 | 階段 2 | L1–L4；傳輸時間佔比 < 5% |
+| 4 | B3 | 外圍 | 階段 3 | `AL_*` 再降；L1–L4 |
+| 5 | B4 與剩餘熱點 | 視量測 | 仍有牆 > 2 秒，或停止規則未觸發 | 所有牆 < 2 秒，或由 D3 定案 |
+| 6 | C1–C4 | `research/` | 階段 5 | 整批時間實測；不影響每顆指標 |
 
-- `mechanism.csv` 不要求逐位元：`kine_2d.py:290` 的 MOSEK 預設求解路徑在重跑間有末位差，基準對基準也會出現。
-- `--placements 3` 的牆只驗決策，不驗速度：牆矮時成本低，`bricks` 的成本隨牆變大而增加。
-- 驗證牆輸出到 `runs/speedup/<階段>/`（已被排除版控）；由 `research/runner/verify_speedup.py` 跑矩陣、寫結果 JSON，比對的定義在 `research/perf/verify_speedup.py`，邏輯取自 `runs/_smoke/smoke_matrix.py` 與 `verify_io.py`。階段 0 新增。
-- 階段 0–2 的驗收不分 L1–L4，只跑一次比較：T80、FFT、bricks、PR 完整牆，2 政策，每批新 Pool 與持久 worker 各建一次，10 workers，輸出到 `runs/speedup/final/`。硬體調度員下線，直接執行，不送票。
-- 階段 3、4b–4f、`rotate_min_shape_factor` 與階段 6 已實作，完整牆比較尚未跑；未做的項目與待驗證事項見 `docs/TODO.md`。
+**階段 0 內容**
 
-## 送票
+1. 跑未完成的全牆比較：`python -B -m research.runner.verify_speedup final --scenes thangavelu-noise80,fft-d2-0,bricks,almeida-pr --timeout 3600`。其餘 4 種牆比 fresh 與持久的前 5 顆。出現差異時從 `6886b87` 查起，查清才進階段 1。
+2. 建金牌牆：8 種牆 × `code_original`、`paper`，共 16 面完整牆（有 trace），放 `runs/speedup/golden/`。之後每階段都和它比。
+3. `wall_metrics` 加每顆彙總（第一顆與收尾分開），寫進 `derived/`，`batch` 的進度輸出顯示最大值。
+4. `verify_speedup` 加「與金牌牆比」模式。
+5. task 樣本庫：8 種牆各取牆頭、牆中、牆尾，2 種政策，`--dump-tasks`。
+6. 等價比對工具：同一批樣本，舊函式與新函式的中間陣列與回傳值 `bytes` 相等。
+7. 量 worker 解封成本、牆間固定成本。
 
-CPU 工作一律經硬體調度員（`cfd-lbm-4rhgh/roso/runner/hwqueue.py`），`--who` 用本 session 標題，只管理「[周周]」開頭的 session。
+機器時間估計約 3 小時，在 Terminal 分頁前景跑，有進度列。
 
-- 白天（08:30–18:00）CPU 道上限 8 執行緒。L2、L3 用 8 workers 即可：T80 完整牆以 4 workers 與 10 workers 跑出的 `decisions.txt`、`transformation.txt` 逐位元相同。
-- L4 與階段 0 組 A–C 的時間要 10 workers，排夜間。
-- `--threads`、`--ram-gb`、`--est-min` 要填實際值。
+## 等價怎麼驗證
+
+| 層級 | 內容 | 通過標準 |
+| --- | --- | --- |
+| L1 | `research.tests` 全套，加新函式的單元測試 | 全過 |
+| L2 | 樣本庫逐函式比對 | 中間陣列與回傳值 `bytes` 相等 |
+| L3 | 16 面金牌牆完整重建，`compare_runs` 加 `check_run`；`code_original` 再與封存牆比 | 零差異；`mechanism.csv` 相對差 < 1e-12 |
+| L4 | 時間成對量：舊、新、舊、新，主機無其他負載 | 報告每一次，取較慢的一次判定 |
+
+先 L2 再 L3：L2 幾分鐘就能抓到差異，L3 約 1 小時（隨加速縮短）。量時間一律用 trace 開啟的 `run_wall`，10 workers（B2 另定）。
 
 ## 風險
 
 | 風險 | 偵測 | 處理 |
 | --- | --- | --- |
-| worker 跨 task 留下狀態 | L2、L3 | 關掉持久模式回到 `--fresh-pool`，定位後再開 |
-| worker 記憶體增長 | `peak_wset` | 每 N 步重建 executor（Python 3.10 的 executor 沒有 `max_tasks_per_child`） |
-| worker 崩潰卡住 | `test_worker_pool` | `BrokenProcessPool` 使案例失敗，receipt 記失敗 |
-| 停牆後殘留行程 | `terminate` 紀錄、L2 | 先修 `TerminationFailed` 的根因，再開持久模式 |
-| 上游呼叫形式改變 | 階段 2 的 `assert` | 大聲失敗，改用替代做法 |
-| MOSEK 授權被長時間占用 | 同時跑多面牆時觀察 | 階段 4a 才有此風險；受影響時回到每次建 Env |
-| 共享記憶體外洩 | 階段 3 測試 | 依賴 Windows 在 handle 關閉後回收 |
-| 寫檔執行緒失敗或落後 | 階段 6 測試 | 錯誤在下一次送出或 flush 時丟出，案例失敗；佇列滿時主迴圈等待 |
+| A1 的累加順序在某種核形狀下不同 | L2 | 退回全圖卷積，定位後再開 |
+| A1 候選點數量極大時記憶體暴增 | 分塊累加，L4 看 `peak_wset` | 調整分塊大小 |
+| `mosek.Env` 長期佔授權 | 多牆同時跑時觀察 | 回到每次新建 |
+| 接觸順序改變使 LP 欄位改變（A6、A7） | L2 比接觸序列與 `Aglobal` | 維持原順序組回；不通過就不合併 |
+| 唯讀陣列被寫入（B1） | 直接報錯 | 該欄位改傳複本 |
+| 筆電降頻造成時間雜訊 | L4 成對量 | 看兩次中較慢者 |
 
 ## 待決定
 
 | 編號 | 問題 | 建議 |
 | --- | --- | --- |
-| D1 | 目前的案例 I/O 改動是否提交，作為階段 0 的基準 | 提交 |
-| D2 | 階段 2 改在外圍還是直接改上游 8 行 | 外圍，符合 `.claude/PYTHON_CODING.md:9`，可用 `--fresh-pool` 關閉 |
-| D3 | 階段 4 能否改 `Stonepacker2D/` | PR 要達標就需要；階段 2 後看數字再決定 |
-| D4 | PR 是否一定要 < 2 秒 | 先做到階段 2，用實測決定 |
-| D5 | workers 是否超過 10（主機 16 邏輯核心） | 看階段 0 組 C；worker 數不影響決策 |
-| D6 | 階段 6 要不要做 | 目前估計省不到 1.5%；等階段 0 組 D 的實測，佔迴圈 ≥ 5% 再做 |
-
-## 提交順序
-
-| 階段 | commit message |
-| --- | --- |
-| 前置 | `feat(walls): keep only data files in a case folder` |
-| 0 | `test: make the copies of the read-only archive writable` |
-| 0 | `feat(perf): record seconds per stone, payload size, peak memory and task samples` |
-| 1 | `feat(walls): reuse one set of workers for a whole case` |
-| 2 | `feat(walls): schedule every pose of a step at once` |
-| 3 | `feat(walls): serialize the shared task arguments once per step` |
-| 4 | 每項一個，例如 `perf(core): vectorize cal_Aglobal without changing its values` |
-| 6 | `feat(walls): write the step outputs on a background thread` |
+| D1 | 核准本計畫，從階段 0 開始 | 核准 |
+| D2 | 0.5 秒何時停止追 | 所有牆 < 2 秒後，下一項手段的估計省幅 < 5% 就停，其餘牆記錄實測值 |
+| D3 | `AL_IR` 做完階段 5 仍 > 2 秒時 | 屆時用實測決定：加 numba（要改環境清單）或接受 `AL_IR` 的實測值 |
+| D4 | 合併到 `main` 的時機 | 階段 5 完成且 L3 全過後由使用者決定；pc1 的 `al-th-all-orders` 用 `main`，不受影響 |
 
 ## 完成後
 
-- 仍成立的規格（`worker_pool`、`step_writer` 欄位，`--fresh-pool`、`--sync-output` 語意）搬進 `docs/specs/`，本檔刪除。
-- 最終秒/顆寫進 `research/findings.md`，其他文件只引用。
-- `research/runs/verify-perf-*` 與 `.claude/plans/verify-perf-core-report.md` 的處理由使用者決定。
+- 最終每顆時間寫進 `research/findings.md`，其他文件只引用。
+- 仍成立的規格（每顆指標、金牌牆比對）搬進 `docs/specs/`，本檔刪除。
