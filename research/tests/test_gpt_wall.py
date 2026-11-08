@@ -23,6 +23,7 @@ KEY = g.LOOPBACK_KEY + 'k' * 40
 SEED = 66794912  # development seed A
 CLEAN = {k: v for k, v in os.environ.items() if k.upper() not in {'OPENAI_API_KEY', llm_adapter.PAID_GATE, *llm_adapter.CONNECTION_ENV}}
 VENV = controller_worker.VENV_MANIFEST.exists() and not controller_worker.venv_problems()
+BASELINE = Path(sys.prefix).resolve() == g.run_case.ENV_PREFIX  # run_case builds walls only there
 
 
 def scratch(test):
@@ -142,7 +143,6 @@ class Rules(unittest.TestCase):
 
 class Launcher(unittest.TestCase):
     """run_case: children other than the case never get the key; an exception never leaves a case running."""
-    BASELINE = Path(sys.prefix).resolve() == g.run_case.ENV_PREFIX
 
     def test_other_children_get_no_key(self):
         with mock.patch.dict(os.environ, {'OPENAI_API_KEY': KEY, 'ANTHROPIC_API_KEY': 'a', 'PATH': 'p'}):
@@ -183,7 +183,7 @@ class Launcher(unittest.TestCase):
         self.assertIsNotNone(receipt['returncode'])  # the case is gone
 
 
-@unittest.skipUnless(VENV, 'the registered worker venv is absent or changed')
+@unittest.skipUnless(VENV and BASELINE, 'needs the registered worker venv, and the baseline environment to build walls')
 class LoopbackWalls(unittest.TestCase):
     """Live walls of 4 placements: Wang's process -> venv worker -> real SDK -> a mock on 127.0.0.1."""
 
