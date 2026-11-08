@@ -1,7 +1,9 @@
 """Process-local Windows compatibility and observation for original test scripts."""
 from concurrent.futures import ProcessPoolExecutor
 import importlib
+import itertools
 import json
+import mmap
 import multiprocessing
 from multiprocessing.shared_memory import SharedMemory
 import os
@@ -60,16 +62,32 @@ def _run_task(constants, function, arguments):
 _step_arguments = (None, None)  # (step number, the step's shared arguments) this worker unpickled last
 
 
-def _run_shared_task(constants, function, step, name, size, pose):
+def _share_step(shared):
+    """(block, sizes): the pickle of a step's arguments followed by their arrays, which pickling did not copy."""
+    buffers = []
+    payload = pickle.dumps(shared, 5, buffer_callback=buffers.append)
+    pieces = [payload, *(buffer.raw() for buffer in buffers)]
+    sizes = tuple(len(piece) for piece in pieces)
+    block = SharedMemory(create=True, size=max(sum(sizes), 1))
+    offset = 0
+    for piece, size in zip(pieces, sizes):
+        block.buf[offset : offset + size] = piece
+        offset += size
+    return block, sizes
+
+
+def _load_step(name, sizes):
+    """The step's arguments over a copy-on-write view of its block: an array that gets written becomes a private copy."""
+    view = memoryview(mmap.mmap(-1, sum(sizes), tagname=name, access=mmap.ACCESS_COPY))
+    ends = list(itertools.accumulate(sizes))
+    return pickle.loads(view[: ends[0]], buffers=[view[start:end] for start, end in zip(ends, ends[1:])])
+
+
+def _run_shared_task(constants, function, step, name, sizes, pose):
     """The arguments are unpickled once per step in each worker: place_one_stone only reads them."""
     global _step_arguments
     if _step_arguments[0] != step:
-        block = SharedMemory(name=name)
-        try:
-            with block.buf[:size] as payload:
-                _step_arguments = step, pickle.loads(payload)
-        finally:
-            block.close()
+        _step_arguments = step, _load_step(name, sizes)
     return _run_task(constants, function, (pose, *_step_arguments[1]))
 
 
@@ -80,6 +98,7 @@ def _exit_with_parent():
 
 
 def _start_worker(initializer, *state):
+    cv2.setNumThreads(1)  # the workers already use every core
     threading.Thread(target=_exit_with_parent, daemon=True).start()
     initializer(*state)
 
@@ -133,7 +152,7 @@ class SharedPool:
 
     @staticmethod
     def release():
-        """Windows frees the block when its last handle closes; a worker holds one only while it unpickles."""
+        """Windows frees the block when its last handle closes; a worker holds a view until the next step's first task."""
         if SharedPool.block is not None:
             SharedPool.block.close()
             SharedPool.block.unlink()
@@ -142,15 +161,13 @@ class SharedPool:
     def _submit_step(self, function, shared):
         SharedPool.release()
         constants = _constants()
-        payload = pickle.dumps(shared, 5)
-        block = SharedMemory(create=True, size=len(payload))
-        block.buf[: len(payload)] = payload
+        block, sizes = _share_step(shared)
         poses = range(len(shared[1]))
         SharedPool.block, SharedPool.shared, SharedPool.waiting = block, shared, set(poses)
         SharedPool.step += 1
         SharedPool.futures = [
             SharedPool.executor.submit(
-                _run_shared_task, constants, function, SharedPool.step, block.name, len(payload), pose
+                _run_shared_task, constants, function, SharedPool.step, block.name, sizes, pose
             )
             for pose in poses
         ]

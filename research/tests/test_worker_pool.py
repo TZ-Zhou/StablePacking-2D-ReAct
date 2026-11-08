@@ -145,13 +145,11 @@ class SharedPool(unittest.TestCase):
             self.assertEqual(poses, task[2])
 
     def test_a_worker_unpickles_the_arguments_of_a_step_once(self):
-        payload = pickle.dumps(step_with_arrays(2)[0][1:], 5)
-        block = SharedMemory(create=True, size=len(payload))
+        block, sizes = runtime._share_step(step_with_arrays(2)[0][1:])
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
-        block.buf[: len(payload)] = payload
-        first, second = (runtime._run_shared_task({}, arguments_seen, 7, block.name, len(payload), j) for j in (0, 1))
-        next_step = runtime._run_shared_task({}, arguments_seen, 8, block.name, len(payload), 0)
+        first, second = (runtime._run_shared_task({}, arguments_seen, 7, block.name, sizes, j) for j in (0, 1))
+        next_step = runtime._run_shared_task({}, arguments_seen, 8, block.name, sizes, 0)
         self.assertIs(first[1], second[1])
         self.assertIsNot(first[1], next_step[1])
         self.assertTrue(np.array_equal(first[1][0], next_step[1][0]))
@@ -160,11 +158,8 @@ class SharedPool(unittest.TestCase):
         tasks = one_step(4)
         with runtime.SharedPool(2) as pool:
             pool.starmap(pose_index, tasks[:2])
-            name = runtime.SharedPool.block.name
             pool.starmap(pose_index, tasks[2:])
         self.assertIsNone(runtime.SharedPool.block)
-        with self.assertRaises(FileNotFoundError):
-            SharedMemory(name=name)
 
     def test_an_error_in_a_task_reaches_the_case(self):
         with self.assertRaises(KeyError):
@@ -231,12 +226,10 @@ class RealStepPayload(unittest.TestCase):
             base = pickle.load(stream)
         rocks = list(base.placed_rocks)
         self.shared = (rocks, rocks, base, np.arange(12.0).reshape(6, 2), False, True, (0, 10, 0, 10))
-        payload = pickle.dumps(self.shared, 5)
-        block = SharedMemory(create=True, size=len(payload))
+        block, sizes = runtime._share_step(self.shared)
         self.addCleanup(block.unlink)
         self.addCleanup(block.close)
-        block.buf[: len(payload)] = payload
-        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, 9, block.name, len(payload), 0)))
+        self.received = list(leaves(runtime._run_shared_task({}, all_arguments, 9, block.name, sizes, 0)))
 
     def test_it_equals_what_a_per_task_pickle_delivers(self):
         expected = list(leaves(pickle.loads(pickle.dumps(self.shared, 4))))
@@ -247,6 +240,14 @@ class RealStepPayload(unittest.TestCase):
         arrays = [leaf for leaf in self.received if isinstance(leaf, np.ndarray)]
         self.assertTrue(arrays)
         self.assertTrue(all(array.flags.writeable for array in arrays))
+
+    def test_writing_to_an_array_of_a_worker_leaves_the_block_as_it_was(self):
+        block, sizes = runtime._share_step((np.zeros(4), 1))
+        self.addCleanup(block.unlink)
+        self.addCleanup(block.close)
+        first = runtime._load_step(block.name, sizes)
+        first[0][:] = 7.0
+        self.assertEqual(runtime._load_step(block.name, sizes)[0].tolist(), [0.0, 0.0, 0.0, 0.0])
 
 
 if __name__ == "__main__":
