@@ -16,6 +16,7 @@
 | `placement_preview_study.py` | P0：在已記錄牆上研究上述預覽 |
 | `myopia_tables.py` | 從封存的 TH_T80 牆建每步、每牆與去重後的表 |
 | `batch_tables.py` | 從一個 batch 資料夾（`runs/batch/<名稱>/`）建每牆、每步與去重表，寫到 `research/datasets/<名稱>/` |
+| `b3_ceiling.py` | B3 粗估：每個種子 × 場景，Paper 對 120 種順序的中位數與事後最好的順序（描述，不做檢定） |
 | `myopia_report.py` | 由上述表重算研究結論裡的 Temporal myopia 數字 |
 | `surface_fit.py` | 「剩餘石頭和新頂面還配不配」的候選 heuristic（純函式，未接進控制器） |
 | `surface_fit_check.py` | 垂直落下模型與實際放置的比對，以及各 heuristic 的耗時 |
