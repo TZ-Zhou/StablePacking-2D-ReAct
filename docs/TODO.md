@@ -53,7 +53,7 @@
 
 | 項目 | 決定 |
 | --- | --- |
-| surface-fit 第一版預測對象 | 完成度＋牆高，`F_LR` 當次要檢查 |
+| surface-fit 與 C 組分析的預測對象 | 主要 `F_SF`、`F_AH`、`F_AV`、`F_LR`，判定同 `docs/plans/simulation-to-llm-agent.md` E3；次要牆高、完成數 |
 | 控制器可否直接選候選 | 可以 |
 | 離線建牆批次 | 可以 |
 | 第二個驗證場景 | `TH_T20` |
