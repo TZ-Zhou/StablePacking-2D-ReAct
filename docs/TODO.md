@@ -2,9 +2,8 @@
 
 ## batch
 
-- 在 pc1 跑 `al-th-all-orders`（`research/walls/batch_al_th.yaml`：`AL_R`、`AL_PR`、`AL_IR`、`TH_T20`、`TH_T80`，121 面）。pc1 的 hostname 要先加進 `research/storage/case_id.py` 的 `PCS`，代碼 `pc1`。
-- 輸出在 pc1 的 `runs/batch/al-th-all-orders/`，不進 git。
-- 濾波順序的完整交叉批次：規模由 pc1 決定，見 `docs/plans/factorial-filter-order-batch.md`。
+- 濾波順序的完整交叉批次（factorial）：pc1 以 tag `factorial-v1` 依 `docs/plans/simulation-to-llm-agent.md` 第一部分的 S1–S3 執行，輸出在 pc1 的 `runs/batch/factorial-*/`，不進 git。
+- `al-th-all-orders`（121 面）已在 pc1 完成，輸出在 pc1 的 `runs/batch/al-th-all-orders/`，不進 git；收尾檢查見同一計畫的 S0。
 
 ## 待驗證
 
