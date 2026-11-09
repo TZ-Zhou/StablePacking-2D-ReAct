@@ -10,3 +10,4 @@ SPEEDUP_RUNS = REPO / "runs" / "speedup"  # acceptance walls of research/perf/ve
 BATCH_RUNS = REPO / "runs" / "batch"  # batches of research/runner/batch.py: each with its plan, status and walls
 VALIDATION = REPO / 'research' / 'validation'
 QUALITY_DIR = REPO / 'research' / 'quality'
+DATASETS_DIR = REPO / 'research' / 'datasets'  # tables derived from batches of walls (research/analysis/batch_tables.py)

@@ -56,12 +56,12 @@ def git(*args):
     return subprocess.run(['git', *args], cwd=REPO, capture_output=True, text=True, check=True).stdout
 
 
-def sources():
-    """Git blob hash at HEAD of every source file (Stonepacker2D: of its tracked files), and the
+def sources(paths=SOURCES):
+    """Git blob hash at HEAD of every source file (a folder: of its tracked files), and the
     paths whose working copy differs from HEAD or is untracked (the hashes hold for the files
     evaluated only when that list is empty)."""
-    hashes = {line.split('\t')[1]: line.split()[2] for line in git('ls-tree', '-r', 'HEAD', '--', *SOURCES).splitlines()}
-    dirty = [line[3:] for line in git('status', '--porcelain', '--untracked-files=all', '--', *SOURCES).splitlines()]
+    hashes = {line.split('\t')[1]: line.split()[2] for line in git('ls-tree', '-r', 'HEAD', '--', *paths).splitlines()}
+    dirty = [line[3:] for line in git('status', '--porcelain', '--untracked-files=all', '--', *paths).splitlines()]
     return hashes, dirty
 
 

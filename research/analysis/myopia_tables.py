@@ -279,10 +279,10 @@ def extract_tables():
     return pd.DataFrame(steps), pd.DataFrame([wall for _, wall in extracted])
 
 
-def quality_row(wall_id, result):
+def quality_row(wall_id, run, result):
     """The quality columns of one wall, or its error message; rendering can fail on a single wall."""
     try:
-        quality = wm.wall_quality(LEGACY_RUNS / wall_id, Path(result), QUALITY_CANVAS)
+        quality = wm.wall_quality(run, Path(result), QUALITY_CANVAS)
         left_out = sum(1 for stone in quality["render"]["stones"] if stone.get("left_out"))
         return {"wall": wall_id, **{key: quality[key] for key in QUALITY_COLUMNS}, "n_left_out": left_out}
     except Exception as error:
@@ -292,7 +292,9 @@ def quality_row(wall_id, result):
 def quality_table(walls):
     """Quality columns of the finished walls; this is the slow step."""
     finished = walls[walls["status"] == FINISHED_STATUS]
-    return pd.DataFrame([quality_row(wall, result) for wall, result in zip(finished["wall"], finished["result"])])
+    return pd.DataFrame(
+        [quality_row(wall, LEGACY_RUNS / wall, result) for wall, result in zip(finished["wall"], finished["result"])]
+    )
 
 
 def main(argv=None):
