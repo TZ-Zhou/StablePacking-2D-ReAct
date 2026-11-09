@@ -50,7 +50,7 @@ foreach ($Scene in 'TH_T20', 'TH_T80', 'AL_R', 'AL_PR', 'AL_IR') {
 | 4 空間 | `cases/` 每個場景平均每面幾 MB；確認磁碟剩餘空間至少有 31 GB 加 20% | 3,000 面約 31 GB |
 | 5 凍結版本 | 在 pc1 要用的 commit 上打 tag `factorial-v1`，pc1 checkout 這個 tag | 同一個研究的牆必須用同一份程式建。中途更新 `Stonepacker2D/`、`research/runner/`、`research/walls/`，會讓前後區塊不能比較 |
 | 6 保留種子與場景 | 見下方「保留集」，factorial 與所有分析都不能用 | 最後評估 LLM agent 時，要用從沒看過的種子與場景，才不會高估（見 E3） |
-| 7 機器設定 | 插電時不睡眠、不休眠，電源模式「最佳效能」；暫停 Windows 更新；用 `Start-Transcript` 留下終端機紀錄 | 中途重開機會浪費整面牆 |
+| 7 機器設定 | 插電時不睡眠、不休眠，電源模式「最佳效能」；基線 python 不受節能降速（系統管理員 PowerShell：`powercfg /powerthrottling disable /path <python.exe>`，還原用 `reset`）；暫停 Windows 更新；用 `Start-Transcript` 留下終端機紀錄 | 中途重開機會浪費整面牆；batch 視窗在背景時 Windows 會降速，pc1 的 `TH_T20` 由每面 21 秒變成 46 秒 |
 
 **pc1 的結果。** 121 面全部 `PROCESS_PASS`，`git_head` 都是 `a59e6a8`（不含加速），`code_sha256` 只有 1 種，workers 10。每個場景與 `random` 控制器各重建 1 面（`factorial-v1` 的程式、workers 8），與原牆比對沒有差異；`mechanism.csv` 的相對差最多 4e-16（浮點加總順序），`random` 牆的 `transport.jsonl` 只差在 worker 的 PID。所以 121 面與 factorial 的牆是同一份建牆行為，但種子不重疊，不能配對。
 
@@ -63,7 +63,7 @@ foreach ($Scene in 'TH_T20', 'TH_T80', 'AL_R', 'AL_PR', 'AL_IR') {
 | `AL_IR` | 68.0 | 17.9 |
 | **5 個場景** | **166.9** | **50.6** |
 
-秒數是重建的那 1 面（電源模式「最佳效能」），約為 pc2 的 0.6 倍；MB 是 121 面的平均。一個種子 5.6 小時、30 GB 共 3,000 面，C 槽剩 1,149 GB。
+秒數是重建的那 1 面（電源模式「最佳效能」），約為 pc2 的 0.6 倍；S1 在 python 不受節能降速後，`TH_T20` 連續 8 面為 20.8–21.0 秒，與重建相同；MB 是 121 面的平均。一個種子 5.6 小時、30 GB 共 3,000 面，C 槽剩 1,149 GB。
 
 ### 保留集
 
