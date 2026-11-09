@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -103,6 +104,13 @@ class BuildTables(unittest.TestCase):
         self.assertIn("demo", error)
         self.assertNotIn(root, error)
         self.assertNotIn(repr(root)[1:-1], error)
+
+    def test_walls_that_all_have_quality_keep_an_empty_error(self):
+        row = {"wall": "w1", **dict.fromkeys(batch_tables.mt.QUALITY_COLUMNS, 0.5), "n_left_out": 0}
+        walls = pd.DataFrame([dict(wall="w1", status="PROCESS_PASS", result="cases/w1/result")])
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(batch_tables.mt, "quality_row", return_value=row):
+            table = batch_tables.quality_columns(Path(root), walls)
+        self.assertEqual(table.loc[0, "quality_err"], "")
 
 
 if __name__ == "__main__":

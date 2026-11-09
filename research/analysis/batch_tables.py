@@ -82,6 +82,7 @@ def quality_columns(folder, walls):
     rows = [mt.quality_row(wall, folder / "cases" / wall, folder / result)
             for wall, result in zip(finished["wall"], finished["result"])]
     table = pd.DataFrame(rows, columns=["wall", *mt.QUALITY_COLUMNS, "n_left_out", "err"])
+    table["err"] = table["err"].fillna("")  # all NaN when every wall has quality, and .str needs strings
     for absolute in (str(folder), repr(str(folder))[1:-1]):  # no absolute path in a dataset, also as an error's repr
         table["err"] = table["err"].str.replace(absolute, folder.name, regex=False)
     return table.rename(columns={"err": "quality_err"})
