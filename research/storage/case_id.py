@@ -32,6 +32,7 @@ SCENES = {  # run_wall case -> scene code
 }
 PCS = {  # host name (upper case) -> pc code; pc1 is added on that computer before it builds a wall
     'GIAAIL-STRIX': 'pc2',
+    'MSI': 'pc1',
 }
 SUFFIXES = ('',) + tuple(string.ascii_lowercase[1:])  # '', 'b', ..., 'z'
 PATTERN = re.compile(r'(?P<minute>\d{8}-\d{4})(?P<suffix>[b-z]?)-(?P<scene>[A-Z][A-Z0-9_]*)-(?P<pc>pc\d+)')
