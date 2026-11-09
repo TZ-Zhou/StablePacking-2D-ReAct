@@ -95,6 +95,15 @@ class BuildTables(unittest.TestCase):
         self.assertTrue({"F_SF", "F_AH", "F_AV", "F_LR", "quality_err", "unique_id"} <= set(walls.columns))
         self.assertEqual((len(steps), len(unique)), (0, 3))
 
+    def test_quality_errors_name_no_absolute_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = batch_folder(root, [{"case": 1, "status": "PROCESS_PASS", "case_id": "w1"}])
+            walls = pd.DataFrame([dict(wall="w1", status="PROCESS_PASS", result="cases/w1/result")])
+            error = batch_tables.quality_columns(folder, walls).loc[0, "quality_err"]
+        self.assertIn("demo", error)
+        self.assertNotIn(root, error)
+        self.assertNotIn(repr(root)[1:-1], error)
+
 
 if __name__ == "__main__":
     unittest.main()
