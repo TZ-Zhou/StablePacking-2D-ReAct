@@ -117,17 +117,24 @@ def best_iou(mask, placed):
     return float(best)
 
 
+def world_wall(meta, arrays):
+    """The trace event's wall in the wall frame: a trace stores it in the evaluation frame, mirrored (np.fliplr)
+    when the course is built from the right (Stonepacker2D/stack/build_wall.py trace_event)."""
+    return np.fliplr(arrays["wall"]) if meta["side"] == "right" else arrays["wall"]
+
+
 def placements(case):
-    """(t, event, wall before, wall after, trace arrays) of each placed row of the case's derived/steps.csv."""
+    """(t, event, wall before, wall after, trace arrays) of each placed row of the case's derived/steps.csv; both
+    walls in the wall frame, so a state does not depend on the side its next placement is evaluated from."""
     result = next(case.glob("result*"))
     events = sorted(result.glob("trace/e*.npz"))
     placed = pd.read_csv(case / "derived" / "steps.csv").query("outcome == 'placed'")["event"].astype(int).tolist()
     with open(result / "base.pkl", "rb") as file:
         final = pickle.load(file).matrix
-    walls = [load_trace(events[event])[1] for event in placed]
-    for t, (event, arrays) in enumerate(zip(placed, walls), start=1):
-        after = walls[t]["wall"] if t < len(walls) else final
-        yield t, event, arrays["wall"], after, arrays
+    traces = [load_trace(events[event]) for event in placed]
+    walls = [world_wall(meta, arrays) for meta, arrays in traces]
+    for t, (event, (_, arrays)) in enumerate(zip(placed, traces), start=1):
+        yield t, event, walls[t - 1], walls[t] if t < len(walls) else final, arrays
 
 
 def placement_state(before, after, arrays, poses_of, masks):

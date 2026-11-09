@@ -46,6 +46,13 @@ class PlacementState(unittest.TestCase):
 S1 = BATCH_RUNS / "factorial-s313-AL_IR"
 
 
+class WorldFrame(unittest.TestCase):
+    def test_a_wall_evaluated_from_the_right_is_mirrored_back(self):
+        wall = wall_with([(2, 2, 5, 1, 4)])
+        np.testing.assert_array_equal(ph.world_wall({"side": "left"}, {"wall": wall}), wall)
+        np.testing.assert_array_equal(ph.world_wall({"side": "right"}, {"wall": np.fliplr(wall)}), wall)
+
+
 @unittest.skipUnless((S1 / "plan.csv").exists(), "needs S1's AL_IR walls")
 class RecordedWalls(unittest.TestCase):
     def test_rebuilt_stones_are_the_scene_inventory_and_match_the_placed_stones(self):
