@@ -50,7 +50,7 @@
 
 ## 不進版控
 
-- `research/runs/`、`research/cases/`、`Tests/*/result*/`、`.venv/`、`__pycache__/`、`.env`
+- `research/runs/`、`research/cases/`、`runs/`（batch 與 speedup 的牆）、`Tests/*/result*/`、`Tests/*/finished_*.txt`、`.venv/`、`__pycache__/`、`.env`
 - API 金鑰與 token
 - 超過 10 MB 的檔案一律先問過再加
 

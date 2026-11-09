@@ -163,10 +163,13 @@ cython_debug/
 /Tests/*/result*/
 /Tests/*/*/result*/
 /Tests/*/*/*/result*/
+/Tests/*/finished_runs.txt
+/Tests/*/finished_time.txt
 
 # Research experiment outputs (Phase 1+)
 research/runs/
 research/cases/
+/runs/
 research/perf/runs/
 research/studies/*/.lock
 
