@@ -100,7 +100,8 @@ def concordance(folders, family, baselines, h_suffix="-h"):
         walls = walls[walls.status == "PROCESS_PASS"]
         steps = pd.read_csv(folder / "steps.csv", usecols=["wall", "event", "outcome", "stone", "rot", "x", "y"]
                             + [s for s in scores if s.startswith("c_")])
-        h = pd.read_csv(Path(f"{folder}{h_suffix}") / "h.csv", usecols=["wall", "event", *h_scores]) if h_scores else None
+        h_file = Path(f"{folder}{h_suffix}") / "h.csv"
+        h = pd.read_csv(h_file, usecols=["wall", "event", *h_scores]) if h_scores else None
         blocks.append((walls, steps, h))
     every = pd.concat([w for w, _, _ in blocks])
     z = pd.concat([(every[m] - every.groupby("wall_type")[m].transform("mean"))
