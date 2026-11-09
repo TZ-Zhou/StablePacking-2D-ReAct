@@ -93,7 +93,8 @@ class BuildTables(unittest.TestCase):
         self.assertEqual(walls["wall"].tolist(), ["w1", "w2", "w3"])
         self.assertEqual(walls["n_steps"].tolist(), [0, 0, 0])
         self.assertEqual(walls.loc[2, ["filter_policy", "controller_seed", "git_head"]].tolist(), ["random", 99, "abc"])
-        self.assertTrue({"F_SF", "F_AH", "F_AV", "F_LR", "quality_err", "unique_id"} <= set(walls.columns))
+        columns = {"F_SF", "F_AH", "F_AV", "F_LR", "F_LR_formal", "quality_err", "unique_id"}
+        self.assertTrue(columns <= set(walls.columns))
         self.assertEqual((len(steps), len(unique)), (0, 3))
 
     def test_quality_errors_name_no_absolute_path(self):
@@ -104,6 +105,17 @@ class BuildTables(unittest.TestCase):
         self.assertIn("demo", error)
         self.assertNotIn(root, error)
         self.assertNotIn(repr(root)[1:-1], error)
+
+    def test_grid_metrics_come_from_the_last_placed_row_of_derived_steps(self):
+        steps = "step,F_SF,F_AH,F_AV,F_LR\n1,0.1,,,0.5\n2,0.2,3.0,9.0,0.4\n3,,,,\n"  # the last row placed nothing
+        with tempfile.TemporaryDirectory() as root:
+            folder = batch_folder(root, [{"case": 1, "status": "PROCESS_PASS", "case_id": "w1"},
+                                         {"case": 2, "status": "PROCESS_PASS", "case_id": "w2"}])
+            (folder / "cases" / "w1" / "derived").mkdir()
+            (folder / "cases" / "w1" / "derived" / "steps.csv").write_text(steps, encoding="utf-8")
+            table = batch_tables.grid_columns(folder, pd.DataFrame({"wall": ["w1", "w2"]}))
+        self.assertEqual(table.loc[0, ["F_SF", "F_AH", "F_AV", "F_LR"]].tolist(), [0.2, 3.0, 9.0, 0.4])
+        self.assertTrue(table.loc[1, ["F_SF", "F_LR"]].isna().all())
 
     def test_walls_that_all_have_quality_keep_an_empty_error(self):
         row = {"wall": "w1", **dict.fromkeys(batch_tables.mt.QUALITY_COLUMNS, 0.5), "n_left_out": 0}

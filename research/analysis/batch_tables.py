@@ -5,15 +5,17 @@ Usage: python -B -m research.analysis.batch_tables <batch folder> [--out DIR] [-
 <batch folder> is runs/batch/<name> of the checkout that built it (it is only read; no wall is built). Writes once,
 to <out> (default research/datasets/<name>):
 - walls.csv: one row per case of status.jsonl: its plan fields (scene, seed, filter_policy, controller_seed), status,
-  git_head, wall_metrics values, the formal quality F_SF, F_AH, F_AV, F_LR of wall_quality(..., 'corrected') for
-  PROCESS_PASS walls (quality_err when it cannot be computed, e.g. a scene without an original-resolution label
-  image) and unique_id.
+  git_head, wall_metrics values, F_SF, F_AH, F_AV, F_LR on the simulation grid after the last placement (the study's
+  metrics, every scene), the formal F_*_formal of wall_quality(..., 'corrected') for PROCESS_PASS walls
+  (quality_err when it cannot be computed: only Thangavelu walls have an original-resolution label image) and
+  unique_id.
 - steps.csv: one row per traced sampling attempt, the columns of myopia_tables.step_row (candidate and feasible
   counts, what the 120 filter orders reach, the wall state, the chosen candidate and its scores), keyed by wall.
 - unique.csv: one row per distinct wall, keyed by scene, seed and placement sequence (stone, rot, x, y): the walls
   and filter policies that built it. Which analysis deduplicates is decided per analysis
   (docs/plans/llm-agent-design-questions.md Q5).
-- dataset.json: the source batch (sha256 of status.jsonl, plan.csv, config.yaml and the receipts), the code's git
+- dataset.json: the source batch (sha256 of status.jsonl, plan.csv, config.yaml, the receipts and the walls'
+  derived/steps.csv), the code's git
   head and source blobs, and counts. No time and no absolute path, so a rerun writes the same bytes.
 Refuses an existing <out> and source files that differ from git HEAD. A wall that cannot be read is reported on
 stderr and kept with empty columns.
@@ -76,8 +78,21 @@ def extract_case(folder, row, record):
     return steps, wall_row(folder, row, record, result, len(steps), mt.readable_metrics(wall_id, run, result))
 
 
+def grid_columns(folder, walls):
+    """F_SF, F_AH, F_AV, F_LR on the simulation grid after the last placement: the last row of the wall's
+    derived/steps.csv with an F_LR (wall_metrics.partial_quality, written while the wall was built). The study's
+    metrics (docs/plans/preregistration.md); empty for a wall without derived/steps.csv."""
+    rows = []
+    for wall in walls["wall"]:
+        path = folder / "cases" / wall / "derived" / "steps.csv"
+        placed = pd.read_csv(path).dropna(subset=["F_LR"]) if path.exists() else pd.DataFrame()
+        rows.append({"wall": wall, **(placed.iloc[-1][list(mt.QUALITY_COLUMNS)].to_dict() if len(placed) else {})})
+    return pd.DataFrame(rows, columns=["wall", *mt.QUALITY_COLUMNS])
+
+
 def quality_columns(folder, walls):
-    """Quality columns of the PROCESS_PASS walls (the slow step); quality_err holds why a wall has none."""
+    """Formal quality of the PROCESS_PASS walls (the slow step), as F_*_formal; quality_err holds why a wall has
+    none."""
     finished = walls[(walls["status"] == mt.FINISHED_STATUS) & (walls["result"] != "")]
     rows = [mt.quality_row(wall, folder / "cases" / wall, folder / result)
             for wall, result in zip(finished["wall"], finished["result"])]
@@ -85,7 +100,7 @@ def quality_columns(folder, walls):
     table["err"] = table["err"].fillna("")  # all NaN when every wall has quality, and .str needs strings
     for absolute in (str(folder), repr(str(folder))[1:-1]):  # no absolute path in a dataset, also as an error's repr
         table["err"] = table["err"].str.replace(absolute, folder.name, regex=False)
-    return table.rename(columns={"err": "quality_err"})
+    return table.rename(columns={"err": "quality_err", **{c: f"{c}_formal" for c in mt.QUALITY_COLUMNS}})
 
 
 def unique_table(walls, steps):
@@ -115,6 +130,7 @@ def build_tables(folder, numbers=None, quality=True):
     extracted = [extract_case(folder, row, record) for row, record in case_records(folder, numbers)]
     steps = pd.DataFrame([step for rows, _ in extracted for step in rows])
     walls = pd.DataFrame([wall for _, wall in extracted])
+    walls = walls.merge(grid_columns(folder, walls), on="wall", how="left")
     if quality:
         walls = walls.merge(quality_columns(folder, walls), on="wall", how="left")
     walls, unique = unique_table(walls, steps)
@@ -125,10 +141,13 @@ def provenance(folder, walls, steps, unique, quality):
     """dataset.json: what the tables were made from and by which code."""
     hashes, dirty = cq.sources(SOURCES)
     receipts = "".join(f"{wall} {cq.sha256(folder / 'cases' / wall / 'receipt.json')}\n" for wall in walls["wall"])
+    derived = [folder / "cases" / wall / "derived" / "steps.csv" for wall in walls["wall"]]
+    derived = "".join(f"{p.parent.parent.name} {cq.sha256(p) if p.exists() else '-'}\n" for p in derived)
     return {
         "batch": folder.name,
         "batch_files_sha256": {name: cq.sha256(folder / name) for name in BATCH_FILES if (folder / name).exists()},
         "receipts_sha256": sha256_text(receipts),
+        "derived_steps_sha256": sha256_text(derived),
         "cases": walls["case"].tolist(),
         "git_head": cq.git("rev-parse", "HEAD").strip(),
         "sources_git_blob": hashes,
@@ -137,7 +156,8 @@ def provenance(folder, walls, steps, unique, quality):
         "n_walls": len(walls),
         "n_steps": len(steps),
         "n_unique": len(unique),
-        "n_quality": int(walls["F_LR"].notna().sum()) if quality else 0,
+        "n_grid": int(walls["F_LR"].notna().sum()),
+        "n_quality": int(walls["F_LR_formal"].notna().sum()) if quality else 0,
         "columns": {"walls": list(walls.columns), "steps": list(steps.columns), "unique": list(unique.columns)},
     }
 
