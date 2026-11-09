@@ -1,11 +1,11 @@
 """C2 and C4 of docs/plans/preregistration.md: do scores of the children at a branch point agree with the final walls?
 
 Usage: python -B -m research.analysis.branch_concordance <dataset folder>... [--family H2b,H3b,H4a]
-       [--baselines c_GDS,H0_unlevel] [--out FILE]
+       [--baselines c_GDS,H0_unlevel] [--h-suffix -h] [--out FILE]
 
 Each <dataset folder> is research/datasets/<name>/ of batch_tables.py (walls.csv, steps.csv) for one seed x scene
-block; scores named H* are read from the h.csv of placement_h.py in <dataset folder>-h, the others (c_NHR, c_GDS,
-c_IWR, c_LLC, c_LFR: the placed candidate's raw scores at the branch point) from steps.csv.
+block; scores named H* are read from the h.csv of placement_h.py in <dataset folder><h suffix>, the others (c_NHR,
+c_GDS, c_IWR, c_LLC, c_LFR: the placed candidate's raw scores at the branch point) from steps.csv.
 
 Per block (A3): the prefix tree of the PROCESS_PASS walls' placement sequences (stone, rot, x, y of each placed row
 of steps.csv). A branch point is a node with two or more children; a child's score is the one of its placement (h
@@ -90,7 +90,7 @@ def holm(p):
     return out
 
 
-def concordance(folders, family, baselines):
+def concordance(folders, family, baselines, h_suffix="-h"):
     """One row per score and metric over the blocks in folders, with the per-block D_b."""
     scores = list(family) + list(baselines)
     h_scores = [s for s in scores if s.startswith("H")]
@@ -100,7 +100,7 @@ def concordance(folders, family, baselines):
         walls = walls[walls.status == "PROCESS_PASS"]
         steps = pd.read_csv(folder / "steps.csv", usecols=["wall", "event", "outcome", "stone", "rot", "x", "y"]
                             + [s for s in scores if s.startswith("c_")])
-        h = pd.read_csv(Path(f"{folder}-h") / "h.csv", usecols=["wall", "event", *h_scores]) if h_scores else None
+        h = pd.read_csv(Path(f"{folder}{h_suffix}") / "h.csv", usecols=["wall", "event", *h_scores]) if h_scores else None
         blocks.append((walls, steps, h))
     every = pd.concat([w for w, _, _ in blocks])
     z = pd.concat([(every[m] - every.groupby("wall_type")[m].transform("mean"))
@@ -137,9 +137,11 @@ def main(argv=None):
     parser.add_argument("folders", nargs="+", help="research/datasets/<name> folders, one per seed x scene block")
     parser.add_argument("--family", default="H2b,H3b,H4a", help="scores tested and Holm-corrected together")
     parser.add_argument("--baselines", default="c_GDS,H0_unlevel", help="scores reported without a test")
+    parser.add_argument("--h-suffix", default="-h", help="h tables in <dataset folder><suffix>")
     parser.add_argument("--out", type=Path, help="CSV of the score x metric rows")
     args = parser.parse_args(argv)
-    table, blocks = concordance(args.folders, args.family.split(","), [s for s in args.baselines.split(",") if s])
+    baselines = [s for s in args.baselines.split(",") if s]
+    table, blocks = concordance(args.folders, args.family.split(","), baselines, args.h_suffix)
     if args.out:
         table.round(6).to_csv(args.out, index=False)
     pd.set_option("display.width", 200)
