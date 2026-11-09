@@ -44,7 +44,7 @@
 
 **h**　H2b、H3b、H4a，定義見 `docs/plans/surface-fit-heuristic.md`；H3b、H4a 用全部剩餘石頭的形狀（Q7）。h 的程式 commit 之前，不看任何 factorial 指標的比較，包含 B3 的粗估與 S2 的初篩；commit hash 寫進本節，之後改 h 要另開 commit，報告兩版的結果。
 
-**h 程式的 commit**　（尚未實作）
+**h 程式的 commit**　`5e10ac9713e3d6d7ae3e213e1c8370e00bad482e`（分支 `feat/c4-h`，以 fast-forward 合併以保留這個 hash）：`research/analysis/surface_fit.py` 的 `h_scores`（H2b 的參考寬度是剩餘石頭窄邊的 25% 分位數，`a = 1`；H3b 是 `scarcity`；H4a 依序比較未放數、預估牆高、空隙，壓成一個數），以及 `research/analysis/placement_h.py`（每次放置後的狀態：放下後的頂面、石頭下方的空隙、全部剩餘石頭的四個直角姿態）。C4 的分支點上，每個子節點的 h 取該子節點那次放置後的值。
 
 **檢定**　與 C2 相同，把當下分數換成在分支點狀態上對各子節點候選算出的 h。3 個 h × 4 指標 = 12 個檢定。
 
@@ -72,4 +72,4 @@ LLM 若只是照抄 Paper 的順序，自然「不輸 Paper」。以下規則適
 
 | 項目 | 狀態 |
 | --- | --- |
-| C4 的 h 程式 commit hash | 尚未實作；在那之前不看 factorial 指標的比較 |
+| C4 的 h 程式 commit hash | 已填入 C4（`5e10ac9`）；之後才可以看 factorial 指標的比較 |
