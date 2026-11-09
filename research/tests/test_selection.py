@@ -188,6 +188,30 @@ class PaperSemantics(unittest.TestCase):
                 select(self.RAW, np.ones(6), 'paper', order)
 
 
+class DirectPick(unittest.TestCase):
+    RAW = PaperSemantics.RAW
+
+    def test_a_pick_selects_its_row_after_the_gate(self):
+        sel = select(self.RAW, np.ones(6), 'paper', PAPER_ORDER, pick=4)
+        self.assertEqual((sel.index, sel.branch, [s.tolist() for s in sel.stages]), (4, 'pick', [[1, 2, 3, 4]]))
+
+    def test_infeasible_or_malformed_picks_raise(self):
+        for bad in (0, 5, 6, -1, 2.0, np.int64(2), True):
+            with self.assertRaises(ValueError, msg=bad):
+                select(self.RAW, np.ones(6), 'paper', pick=bad)
+        with self.assertRaises(ValueError):
+            select(self.RAW, np.ones(6), 'code_original', pick=2)
+
+    def test_no_pick_is_the_cascade(self):
+        rng = np.random.default_rng(7)
+        for _ in range(200):
+            raw, weights = random_matrix(rng)
+            for policy in ('paper', 'code_original'):
+                a, b = select(raw, weights, policy), select(raw, weights, policy, pick=None)
+                self.assertEqual((a.index, a.branch, [s.tolist() for s in a.stages]),
+                                 (b.index, b.branch, [s.tolist() for s in b.stages]))
+
+
 class AllOrders(unittest.TestCase):
     def test_every_order_returns_a_feasible_candidate(self):
         rng = np.random.default_rng(7)

@@ -201,6 +201,17 @@ class ControlledPolicy(unittest.TestCase):
                 setattr(constant, k, copy.deepcopy(v) if k.isupper() else v)
         self.assertIs(controlled_policy(constant.get_filter_policy(), lambda p, c: p, context()), constant.get_filter_policy())
 
+    def test_a_pick_of_a_feasible_row_is_passed_on(self):
+        self.assertEqual(controlled_policy(PAPER, lambda p, c: {**p, 'pick': 1}, two_outcomes()), {**PAPER, 'pick': 1})
+        self.assertIs(controlled_policy(PAPER, lambda p, c: {**p, 'pick': None}, two_outcomes()), PAPER)
+        for bad in (2, -1, 1.0, np.int64(1), '1', True):
+            with self.assertRaises(ValueError, msg=bad):
+                controlled_policy(PAPER, lambda p, c: {**p, 'pick': bad}, two_outcomes())
+        infeasible = two_outcomes()
+        infeasible['features_raw'] = infeasible['features_raw'] * [1, 1, 1, 0, 1, 1]
+        with self.assertRaises(ValueError):
+            controlled_policy(PAPER, lambda p, c: {**p, 'pick': 0}, infeasible)
+
     def test_s6_orders_equal_to_the_base_are_type_checked_too(self):
         for bad in ({'order': (3.0, 0.0, 2.0, 1.0, 4.0)}, {'order': [3.0, 0.0, 2.0, 1.0, 4.0]},
                     {'order': tuple(np.array([3, 0, 2, 1, 4]))}, {'tol': np.float64(1e-9)}, {'policy': np.str_('paper')}):
