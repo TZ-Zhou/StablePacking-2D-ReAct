@@ -104,7 +104,7 @@ class Version2(unittest.TestCase):
     def test_spec(self):
         spec = order_controller.validate_spec(V2_SPEC)
         self.assertEqual(order_controller.observation_version(spec), 2)
-        for bad in (3, 0, '2', True, 2.0):
+        for bad in (4, 0, '2', True, 2.0):
             with self.assertRaises(ValueError):
                 order_controller.validate_spec({**V2_SPEC, 'observation_version': bad})
         with self.assertRaises(ValueError):  # react only

@@ -17,7 +17,14 @@ from pathlib import Path
 
 import numpy as np
 
-from Stonepacker2D.stack.selection import footprint, load_trace, published_events, select, to_world  # noqa: E402
+from Stonepacker2D.stack.selection import (  # noqa: E402
+    REMAINING_SHAPE_KEYS,
+    footprint,
+    load_trace,
+    published_events,
+    select,
+    to_world,
+)
 
 
 def result_dirs(run):
@@ -334,14 +341,15 @@ def compare_runs(a, b):
 
 
 def event_differences(ex, ey):
-    """Differences between the trace events two runs share; the id of the run is the only field allowed to differ."""
+    """Differences between the trace events two runs share; the id of the run is the only field allowed to differ,
+    and the arrays of observation version 3 (REMAINING_SHAPE_KEYS) may be missing from a run built before it."""
     diffs = []
     for e in sorted(set(ex) & set(ey)):
         (mx, ax), (my, ay) = ex[e], ey[e]
         if {k: v for k, v in mx.items() if k != "run_id"} != {k: v for k, v in my.items() if k != "run_id"}:
             diffs.append(f"event {e}: meta differs")
-        if sorted(ax) != sorted(ay) or any(
-            not np.array_equal(ax[k], ay[k], equal_nan=ax[k].dtype.kind == "f") for k in ax
+        if (set(ax) ^ set(ay)) - set(REMAINING_SHAPE_KEYS) or any(
+            not np.array_equal(ax[k], ay[k], equal_nan=ax[k].dtype.kind == "f") for k in set(ax) & set(ay)
         ):
             diffs.append(f"event {e}: arrays differ")
     return diffs

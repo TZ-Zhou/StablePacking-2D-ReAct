@@ -17,9 +17,12 @@ maps a JSON request to a JSON reply; live walls run it in a worker process
 (controller_worker.ProcessTransport), offline evaluation and check() in this one (InlineTransport).
 
 Information boundary. A controller sees the current wall, the sampled stones' candidates and
-filter scores, how many stones remain, and what it saw at its own earlier calls. It does not see
-the RNG state, stone ids (stones are labelled S1, S2, ... in order of first sampling), the
-unsampled inventory, future samples, the downstream wall or the final evaluation (lambda).
+filter scores, how many stones remain, and what it saw at its own earlier calls; from observation
+version 3 also the bounding box and area of every stone not yet in the wall (the pile a mason
+sees; docs/plans/llm-agent-design-questions.md Q7). It does not see the RNG state, stone ids
+(stones are labelled S1, S2, ... in order of first sampling; unsampled stones have no label),
+future samples, the downstream wall or the final evaluation (lambda). Knowledge given to it
+offline comes only from seeds and scenes outside the held-out set (Q4).
 Geometry of an outcome (wall_state after pasting the candidate's pixels at its pose) is a
 pre-stabilization proxy and exists only live, where the stone pixels are at hand.
 
@@ -50,7 +53,8 @@ import numpy as np
 from research.analysis.unplaced_stones import FILTERS, wall_state
 
 from research.walls.check_run import chain_problems
-from Stonepacker2D.stack.selection import ALL_ORDERS, PAPER_ORDER, detached_inputs, footprint, load_trace, published_events, select  # noqa: E402
+from Stonepacker2D.stack.selection import (  # noqa: E402
+    ALL_ORDERS, PAPER_ORDER, REMAINING_SHAPE_KEYS, detached_inputs, footprint, load_trace, published_events, select)
 
 ORDER_TEXT = re.compile(r'[0-4](-[0-4]){4}')
 
@@ -74,13 +78,14 @@ def parse_order(value):
 def context_from_trace(meta, a):
     """The selection inputs of a trace event as a controller receives them live (detached, no stone
     pixels), plus the candidates' traced bounding-box width and height (read by observation version 2
-    only; live, it takes them from the bricks)."""
+    only; live, it takes them from the bricks) and the remaining stones' shapes where the trace has them."""
     return detached_inputs({'step': meta['step'], 'side': meta['side'], 'phase': meta['phase'],
                             'sample_trial': meta['sample_trial'], 'wall': a['wall'], 'all_bricks': None,
                             'sampled_ids': a['sampled_ids'].tolist(), 'inventory_ids': a['inventory_ids'].tolist(),
                             'x': a['x'], 'y': a['y'], 'distance': a['distance'],
                             'features_raw': a['features_raw'], 'weights': a['weights'],
-                            'width': a['width'], 'height': a['height']})
+                            'width': a['width'], 'height': a['height'],
+                            **{k: a[k] for k in REMAINING_SHAPE_KEYS if k in a}})
 
 
 def plain(v):
@@ -154,8 +159,10 @@ class Observer:
     weights, the wall size, each outcome's bounding box (shape), which geometry exists
     (geometry_available: pixels live, summary offline, none) with its note, the remaining stones
     (sizes of those already sampled, the count never seen), up to 10 earlier calls (history) and
-    the change since the last one (trend). Every stone-keyed list or mapping is in label order, so
-    the serialized observation is the same under any renaming of the stone ids."""
+    the change since the last one (trend). version 3 adds remaining.shapes: the bounding box and area
+    of every stone not in the wall (labelled ones in label order, then the never-sampled ones, which
+    have no label, largest first), and their total area. Every stone-keyed list or mapping is in label
+    order, so the serialized observation is the same under any renaming of the stone ids."""
 
     def __init__(self, geometry=None, version=1):
         self.labels, self.stones, self.recent = {}, {}, []
@@ -208,8 +215,10 @@ class Observer:
                                      if s in self.labels and self.label(s) in self.stones},
                           'recent': list(self.recent)},
                'outcomes': outcomes}
-        if self.version == 2:
+        if self.version >= 2:
             obs = self.version_2(obs, ctx, classes, sampled, remaining, feasible, raw)
+        if self.version == 3:
+            obs = self.version_3(obs, ctx)
         obs = plain(obs)  # also detaches the memory entries updated below
         if self.geometry is not None:
             self.geometry.fill(obs, classes)
@@ -219,7 +228,7 @@ class Observer:
                      last_feasible_rotations=s['feasible_rotations'], last_best_llc=s['best_llc'],
                      min_feasible_rotations=min(m['min_feasible_rotations'], s['feasible_rotations']))
         self.recent = (self.recent + [{'step': obs['step'], **obs['now']}])[-3:]
-        if self.version == 2:
+        if self.version >= 2:
             self.history = (self.history + [{'step': obs['step'], 'side': obs['side'], **obs['now'],
                                              'n_outcomes': len(classes)}])[-10:]
         info = {'classes': classes, 'by_index': by_index, 'paper': paper, 'base': base, 'stone_ids': stone, 'tol': tol,
@@ -254,6 +263,21 @@ class Observer:
                 'trend': {'since_step': None if last is None else last['step'],
                           'feasible_share': delta('feasible_share'), 'mean_feasible_llc': delta('mean_feasible_llc')}}
 
+    def version_3(self, obs, ctx):
+        """obs with the version 3 fields: the shapes of every stone not in the wall, or None on a wall
+        whose trace predates them."""
+        if ctx.get('remaining_ids') is None:
+            remaining = {**obs['remaining'], 'shapes': None, 'total_area': None}
+            return {**obs, 'observation_version': 3, 'remaining': remaining}
+        shapes = [{'stone': self.labels.get(int(s)), 'width': int(w), 'height': int(h), 'area': int(a)}
+                  for s, w, h, a in zip(*(ctx[k] for k in REMAINING_SHAPE_KEYS))]
+        def seen_first(e):  # labelled stones in label order, then the never-sampled ones largest first
+            return (0, int(e['stone'][1:]), 0, 0) if e['stone'] else (1, -e['area'], -e['width'], -e['height'])
+
+        shapes.sort(key=seen_first)
+        return {**obs, 'observation_version': 3,
+                'remaining': {**obs['remaining'], 'shapes': shapes, 'total_area': sum(e['area'] for e in shapes)}}
+
 
 def decision_key(record):
     """Identifies one selection across walls: probe and place of a sample_twice step share step and trial."""
@@ -276,8 +300,9 @@ SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_dro
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
                            'llm_timeout': 60.0, 'max_llm_failures': 3}}
 # max_total_tokens, max_cost_usd, observation_version, first_step (react, optional): only in specs that
-# set them, so earlier walls keep their spec; observation_version 1 (the default) or 2 (Observer,
-# SYSTEM_V2, TOOLS_V2); first_step: decision points of earlier steps are skip:before_first_step
+# set them, so earlier walls keep their spec; observation_version 1 (the default), 2 (Observer,
+# SYSTEM_V2, TOOLS_V2) or 3 (also the remaining stones' shapes, SYSTEM_V3); first_step: decision points of
+# earlier steps are skip:before_first_step
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
              'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'}}
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
@@ -320,8 +345,8 @@ def validate_spec(spec):
         make_policy(spec)
     else:
         llm_identity(spec['llm'])
-        if spec.get('observation_version', 1) not in (1, 2) or type(spec.get('observation_version', 1)) is not int:
-            raise ValueError(f"observation_version is 1 or 2, got {spec['observation_version']!r}")
+        if spec.get('observation_version', 1) not in PROMPTS or type(spec.get('observation_version', 1)) is not int:
+            raise ValueError(f"observation_version is one of {sorted(PROMPTS)}, got {spec['observation_version']!r}")
         if 'first_step' in spec and not (type(spec['first_step']) is int and spec['first_step'] >= 1):
             raise ValueError(f"first_step is a step number >= 1, got {spec['first_step']!r}")
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
@@ -344,7 +369,7 @@ def validate_spec(spec):
 
 
 def observation_version(spec):
-    """The observation and prompt version of a full spec: 1 unless a react spec sets 2."""
+    """The observation and prompt version of a full spec: 1 unless a react spec sets 2 or 3."""
     return spec.get('observation_version', 1) if spec['kind'] == 'react' else 1
 
 
@@ -677,7 +702,14 @@ TOOLS_V2 = [{'name': 'list_order_outcomes',
              'parameters': {'type': 'object', 'additionalProperties': False, 'required': ['order'],
                             'properties': {'order': {'type': 'string'}}}},
             COMMIT_V2]
-PROMPTS = {1: (SYSTEM, TOOLS, COMMIT), 2: (SYSTEM_V2, TOOLS_V2, COMMIT_V2)}
+# Version 3: version 2 and the shapes of every stone not in the wall (Observer.version_3).
+V2_CLOSING = "Before committing, compare the main candidates on all five filters"
+SYSTEM_V3 = SYSTEM_V2.replace(V2_CLOSING, (
+    "remaining.shapes lists every stone not yet in the wall, sampled or not: its bounding-box width and height in "
+    "pixels as it lies in the pile (unturned) and its area in pixels; stones you have seen carry their label, the "
+    "others have none and are listed largest first. remaining.total_area is their sum. Which of them will be sampled "
+    "next is not known.\n") + V2_CLOSING)
+PROMPTS = {1: (SYSTEM, TOOLS, COMMIT), 2: (SYSTEM_V2, TOOLS_V2, COMMIT_V2), 3: (SYSTEM_V3, TOOLS_V2, COMMIT_V2)}
 
 
 def reply_problem(reply, tools):

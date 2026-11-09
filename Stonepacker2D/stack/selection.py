@@ -209,6 +209,17 @@ def to_world(side, x, rotation, width, world_width):
     return np.where(x < 0, x, world_width - x - np.asarray(width)), (360 - rotation) % 360
 
 
+# Observation version 3: every stone not in the wall, sampled ones first. Walls built before it lack these arrays.
+REMAINING_SHAPE_KEYS = ('remaining_ids', 'remaining_width', 'remaining_height', 'remaining_area')
+
+
+def remaining_shapes(stones):
+    """Ids, bounding-box widths and heights and pixel areas of stones as they lie in the inventory (unturned),
+    from the attributes Stone already holds: the arrays of REMAINING_SHAPE_KEYS."""
+    values = ([s.id for s in stones], [s.width for s in stones], [s.height for s in stones], [s.area for s in stones])
+    return {key: np.array(v, dtype=int) for key, v in zip(REMAINING_SHAPE_KEYS, values)}
+
+
 def footprint(matrix, side):
     """Shape fingerprint of a candidate's pixels in the world frame (position excluded).
 
