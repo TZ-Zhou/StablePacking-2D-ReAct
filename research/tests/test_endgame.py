@@ -3,7 +3,9 @@
 import unittest
 
 import numpy as np
+import pandas as pd
 
+from research.analysis import endgame_arena
 from research.controller import endgame
 from research.walls import batch_plan
 
@@ -49,6 +51,21 @@ class Picker(unittest.TestCase):
                      {"kind": "endgame", "mode": "best"}, {"kind": "endgame", "mode": "llc", "extra": 1}):
             with self.subTest(spec), self.assertRaises(ValueError):
                 endgame.full_spec(spec)
+
+
+class ArenaReading(unittest.TestCase):
+    def test_reading(self):
+        def table(pct, better):
+            return pd.DataFrame({"cascade_percentile": pct, "better_exists": better})
+
+        self.assertEqual(endgame_arena.reading(table([0.95] * 7 + [0.2] * 2, [False] * 7 + [True] * 2)), "no room")
+        self.assertEqual(endgame_arena.reading(table([0.95] * 7 + [0.2] * 2, [True] * 3 + [False] * 6)), "room")
+        self.assertEqual(endgame_arena.reading(table([0.5] * 5 + [0.95] * 4, [False] * 9)), "no floor")
+
+    def test_prefix_stops_at_seven_left(self):
+        steps = pd.DataFrame({"wall": "a", "outcome": ["placed", "no_placement", "placed", "placed"],
+                              "n_remaining": [9, 8, 8, 7], "stone": [1, 2, 2, 3], "rot": 0, "x": [0, 5, 5, 9], "y": 0})
+        self.assertEqual(endgame_arena.prefix(steps, "a"), [(1, 0, 0, 0), (2, 0, 5, 0)])
 
 
 class PlanLevel(unittest.TestCase):
