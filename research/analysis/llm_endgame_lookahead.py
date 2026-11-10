@@ -15,7 +15,8 @@ read adds the LLM walls of the lookahead-walls study (lookahead-walls-loopback w
 script), one per state of lookahead_wall.STATES with a finished journal, and the rule, read once: stop first (as in
 step 3), then go ((a), (b), (c) of step 3 and (d), (e)), else 'no endgame contribution shown'. Scores as in
 endgame_arena: z in the seed's factorial TH_T80 block, F_AH negated, the mean over the four grid metrics. A state
-loses stones when fewer than its 18 stones are placed.
+loses stones when fewer than its 18 stones are placed. After the reading, an exploratory comparison with pick_safe
+(per state and mean z), asked for by the user with the paid approval; it is not part of the rule.
 """
 
 import argparse
@@ -205,6 +206,13 @@ def main(argv=None):
           f"below random median {(t.llm_mean_z < t.random_median).sum()}/9, "
           f"fewer stones than cascade {(t.llm_n_placed < t.cascade_n_placed).sum()}/9")
     print("reading:", reading(t))
+    print("exploratory, not in the rule: LLM against pick_safe")
+    print(t.assign(better=np.where(t.llm_mean_z > t.pick_safe_mean_z, "LLM",
+                                   np.where(t.llm_mean_z < t.pick_safe_mean_z, "pick_safe", "tie")))
+          [["seed", "order", "llm_mean_z", "pick_safe_mean_z", "llm_n_placed", "pick_safe_n_placed", "better"]]
+          .round(3).to_string(index=False))
+    print(f"mean z LLM {t.llm_mean_z.mean():.3f}, pick_safe {t.pick_safe_mean_z.mean():.3f}; LLM above in "
+          f"{(t.llm_mean_z > t.pick_safe_mean_z).sum()}/9")
     return 0
 
 
