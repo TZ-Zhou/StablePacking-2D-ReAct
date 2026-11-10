@@ -1,3 +1,6 @@
 # Same bytes on every computer: checkouts are LF whatever core.autocrlf says
 * text=auto eol=lf
 *.bat text eol=crlf
+# wall records keep the bytes their run manifest hashed (Windows writes them CRLF)
+research/cases/** -text
+research/studies/** -text

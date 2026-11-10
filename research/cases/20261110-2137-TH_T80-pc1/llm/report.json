@@ -1,0 +1,210 @@
+{
+ "check": {
+  "decision_points": 7,
+  "incomplete": [],
+  "ok": true,
+  "problems": [],
+  "records": 18,
+  "switches": 3,
+  "verdict": "PASS"
+ },
+ "cost_usd": 0.038931,
+ "decision_points": 7,
+ "elapsed_seconds": 75.015,
+ "gpt_complete": true,
+ "http_requests": 7,
+ "http_requests_exact": true,
+ "key_scan": [],
+ "llm_decisions": 7,
+ "requests": [
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0082955,
+   "decision": [
+    12,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 11,
+   "latency_s": 7.344,
+   "outcome": "reply",
+   "request_id": "req_6cde3563a73b4519bbf0b39a421c1ddc",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2521,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 398,
+    "reasoning_tokens": 41
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0081805,
+   "decision": [
+    13,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 12,
+   "latency_s": 8.734,
+   "outcome": "reply",
+   "request_id": "req_89b35c7c235a419aa3529c7c03d35b0c",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2147,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 562,
+    "reasoning_tokens": 102
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.007483,
+   "decision": [
+    14,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 13,
+   "latency_s": 8.562,
+   "outcome": "reply",
+   "request_id": "req_7ae9ff8739274b88939a2e184292e87e",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1950,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 521,
+    "reasoning_tokens": 117
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.006598,
+   "decision": [
+    15,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 14,
+   "latency_s": 8.031,
+   "outcome": "reply",
+   "request_id": "req_ccf925391d154680a9c9eef44b84bf1a",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1570,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 534,
+    "reasoning_tokens": 44
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.004718,
+   "decision": [
+    16,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 15,
+   "latency_s": 6.469,
+   "outcome": "reply",
+   "request_id": "req_16cd4e5012394241bdc44c70431713f2",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1284,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 301,
+    "reasoning_tokens": 39
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.001829,
+   "decision": [
+    17,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 16,
+   "latency_s": 3.844,
+   "outcome": "reply",
+   "request_id": "req_b1f495a0022a4c6d838c3a823193d010",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 909,
+    "output_tokens": 184,
+    "reasoning_tokens": 30
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.001827,
+   "decision": [
+    18,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 17,
+   "latency_s": 4.219,
+   "outcome": "reply",
+   "request_id": "req_cd49c34b90534db0bac5d26c3eaead65",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 907,
+    "output_tokens": 184,
+    "reasoning_tokens": 31
+   }
+  }
+ ],
+ "skips_and_fallbacks": [],
+ "status": "PROCESS_PASS",
+ "switches": 3,
+ "tokens": 13987,
+ "unknown_usage": 0,
+ "worker_failures": [],
+ "workers_reaped": true
+}

@@ -168,7 +168,21 @@ cython_debug/
 
 # Research experiment outputs (Phase 1+)
 research/runs/
-research/cases/
+research/cases/*
+# the paid LLM endgame pick walls (study pick-walls): their small records are kept; the wall files
+# (base.pkl, trace arrays) only on the E: backup, as runs/batch
+!research/cases/20261110-2134-TH_T80-pc1/
+!research/cases/20261110-2136-TH_T80-pc1/
+!research/cases/20261110-2137-TH_T80-pc1/
+!research/cases/20261110-2138-TH_T80-pc1/
+!research/cases/20261110-2140-TH_T80-pc1/
+!research/cases/20261110-2141-TH_T80-pc1/
+!research/cases/20261110-2143-TH_T80-pc1/
+!research/cases/20261110-2144-TH_T80-pc1/
+!research/cases/20261110-2146-TH_T80-pc1/
+research/cases/*/result_*/base.pkl
+research/cases/*/result_*/trace/*.npz
+!research/cases/*/execution.log
 /runs/
 research/perf/runs/
 research/studies/*/.lock
