@@ -1,0 +1,11 @@
+# python -B -m research.runner.batch plan research/walls/endgame/endgame-arena-s717-TH_T80.yaml
+# docs/plans/endgame-arena.md: 3 seven-left states x (none, random 1-20, llc, borda, low_top)
+name: endgame-arena-s717-TH_T80
+samples: 72
+sampler_seed: 20
+wall_type: {TH_T80}
+filter_policy: ["30214+none", "30214+random:1", "30214+random:2", "30214+random:3", "30214+random:4", "30214+random:5", "30214+random:6", "30214+random:7", "30214+random:8", "30214+random:9", "30214+random:10", "30214+random:11", "30214+random:12", "30214+random:13", "30214+random:14", "30214+random:15", "30214+random:16", "30214+random:17", "30214+random:18", "30214+random:19", "30214+random:20", "30214+llc", "30214+borda", "30214+low_top", "40123+none", "40123+random:1", "40123+random:2", "40123+random:3", "40123+random:4", "40123+random:5", "40123+random:6", "40123+random:7", "40123+random:8", "40123+random:9", "40123+random:10", "40123+random:11", "40123+random:12", "40123+random:13", "40123+random:14", "40123+random:15", "40123+random:16", "40123+random:17", "40123+random:18", "40123+random:19", "40123+random:20", "40123+llc", "40123+borda", "40123+low_top", "14032+none", "14032+random:1", "14032+random:2", "14032+random:3", "14032+random:4", "14032+random:5", "14032+random:6", "14032+random:7", "14032+random:8", "14032+random:9", "14032+random:10", "14032+random:11", "14032+random:12", "14032+random:13", "14032+random:14", "14032+random:15", "14032+random:16", "14032+random:17", "14032+random:18", "14032+random:19", "14032+random:20", "14032+llc", "14032+borda", "14032+low_top"]
+seed: [717]
+placements: 0
+timeout: 1800
+workers: 8

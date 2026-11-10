@@ -445,7 +445,8 @@ def selection_columns(result, side):
     """The step_rows columns held by the trace event of a sampling attempt's chosen side."""
     meta, a = load_trace(result / "trace" / f"e{side['event']:05d}.npz")
     p, raw = meta["policy"], a["features_raw"]
-    sel = select(raw, a["weights"], p["policy"], p["order"], p["tol"])
+    sel = select(raw, a["weights"], p["policy"], p["order"], p["tol"], p.get("pick"))
+    ties = 1 if sel.branch == "pick" else tie_count(raw, a["weights"], sel, p["policy"], p["order"], p["tol"])
     used = p["order"] or (PAPER_ORDER if p["policy"] == "paper" else CODE_ORIGINAL_ORDER)
     columns = {
         "event": side["event"],
@@ -456,7 +457,7 @@ def selection_columns(result, side):
         "n_stones": len(set(a["stone_id"].tolist())),
         "n_feasible": int((raw[:, 3] > 0).sum()),
         "branch": meta["branch"],
-        "final_ties": tie_count(raw, a["weights"], sel, p["policy"], p["order"], p["tol"]),
+        "final_ties": ties,
     }
     i = side.get("index")
     if i is not None:

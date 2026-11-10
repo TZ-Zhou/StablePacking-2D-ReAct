@@ -974,6 +974,9 @@ def make_controller(spec, sink=None, transport='process', ledger=None, worker_ve
     runs in the registered venv (controller_worker.worker_python, checked here), with only the
     environment worker_env gives it; the API key variables then leave this process's environment,
     so nothing this process starts later (Wang's Pool) inherits them."""
+    if isinstance(spec, dict) and spec.get('kind') == 'endgame':  # a direct pick in the endgame, no transport
+        from research.controller import endgame
+        return endgame.EndgamePicker(spec, sink)
     validate_spec(spec)
     if transport == 'inline':
         return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
@@ -1306,6 +1309,9 @@ def check(result, records=None, spec=None, stopped=None):
     if spec is None:
         return {'ok': False, 'verdict': 'FAIL', 'problems': ['the receipt names no controller'], 'records': len(records),
                 'decision_points': None, 'switches': None}
+    if isinstance(spec, dict) and spec.get('kind') == 'endgame':
+        from research.controller import endgame
+        return endgame.check(result, records, spec, stopped)
     base, full, events = base_policy(run), full_spec(spec), list(trace_events(result))
     llm, transport = None, 'inline'
     if full['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API
