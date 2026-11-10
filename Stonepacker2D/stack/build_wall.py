@@ -10,7 +10,7 @@ from .place_stone import place_one_stone
 from multiprocessing import Pool
 import pickle
 from ..utils.constant import get_record_detail,get_record_time,get_cut_id,get_wedge_id,set_stabalize_method,get_selection_weights, get_ignore_pixel_value, get_number_cpu, get_rotate_state, get_dilation, get_erosion, get_dump, get_dir, get_plot_placement, get_filter_policy, get_trace, get_filter_controller
-from .selection import select, filter_log, write_trace, next_event, to_world, footprint, controlled_policy, FEATURE_NAMES
+from .selection import select, filter_log, write_trace, next_event, to_world, footprint, controlled_policy, paper_feasible, FEATURE_NAMES
 from ..utils.logger import get_main_logger
 from ..utils.plot import save_matrix_plot, save_matrix
 from ..evaluate import evaluate_kine
@@ -21,7 +21,7 @@ import os
 import pandas as pd
 sequential_run = False
 
-def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection, policy=None):
+def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distances, features, weights, selection, policy=None, after=None):
     """Snapshot of one selection decision (inputs + live result) for offline replay; returns its event id.
 
     x, y, rotation and wall are in the evaluation frame (np.fliplr for side='right');
@@ -49,8 +49,66 @@ def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distance
                 wall=base.matrix, inventory_ids=np.array(list(vendor.stones.keys())),
                 sampled_ids=np.array([b.id for b in current_bricks]),
                 np_rng_keys=np_state[1], py_rng_state=np.array(py_state[1]),
-                selected=np.array(-1 if selection.index is None else selection.index))
+                selected=np.array(-1 if selection.index is None else selection.index),
+                **({} if after is None else {'after': after}))
     return event
+
+def feasible_counts(base, bricks):
+    """{stone id: feasible poses} of a selection on base with bricks on offer, built from the left: the rotations and
+    the pose search of build_wall_vendor's construct_one_step, every pose through the same pool."""
+    if not bricks:
+        return {}
+    rotated = [[], [], []]
+    if get_rotate_state():
+        for b in bricks:
+            r = b
+            for k in range(3):
+                r = r.rotated_by_90()
+                r.rotate_from_ori = -90 * (k + 1)
+                rotated[k].append(r)
+    all_bricks = deepcopy(bricks + rotated[0] + rotated[1] + rotated[2])
+    locations = np.asarray([[0, 0]])
+    region = np.zeros(base.matrix.shape)
+    region[0, 0] = 1
+    nb_poses = len(all_bricks)
+    filters_matrix = np.zeros((nb_poses, 6))
+    if not sequential_run:
+        _nb_processor = min(get_number_cpu(), nb_poses)
+        for brick_index in range(0, nb_poses, _nb_processor):
+            inputs = [(j, bricks, all_bricks, base, locations, False, True, region)
+                      for j in range(brick_index, min(brick_index + _nb_processor, nb_poses))]
+            with Pool(_nb_processor) as p:
+                x_y_dist = p.starmap(place_one_stone, inputs)
+            for j in range(len(inputs)):
+                filters_matrix[brick_index + j, :] = x_y_dist[j][3]
+    else:
+        for brick_index in range(nb_poses):
+            filters_matrix[brick_index, :] = place_one_stone(
+                brick_index, bricks, all_bricks, base, locations, False, True, region)[3]
+    feasible = paper_feasible(filters_matrix)
+    return {b.id: int(feasible[k::len(bricks)].sum()) for k, b in enumerate(bricks)}
+
+
+def feasible_after(base, bricks, poses, xs, ys, features):
+    """The check_after table of docs/plans/llm-endgame-lookahead.md: row r, column k = the feasible poses stone bricks[k]
+    has at the next selection if pose r (of poses, at xs[r], ys[r]) is placed now, as build_wall would place it;
+    -1 for an infeasible row and for the placed stone. Only for a controller that asks (its lookahead attribute), on
+    copies of the base and the bricks; both global RNGs must be unchanged afterwards."""
+    np_state, py_state = np.random.get_state(), random.getstate()
+    feasible = paper_feasible(features)
+    after = -np.ones((len(poses), len(bricks)), dtype=int)
+    for r in np.flatnonzero(feasible):
+        placed = deepcopy(base)
+        placed.add_stone(deepcopy(poses[r]), [xs[r], ys[r]])
+        gone = {poses[r].id + angle * 100 for angle in range(-80, 90, 10)}  # as build_wall removes the placed stone
+        counts = feasible_counts(placed, [deepcopy(b) for b in bricks if b.id not in gone])
+        after[r] = [counts.get(b.id, -1) for b in bricks]
+    now = np.random.get_state()
+    if not (np_state[0] == now[0] and np.array_equal(np_state[1], now[1]) and np_state[2:] == now[2:]
+            and py_state == random.getstate()):
+        raise RuntimeError('the lookahead changed the global RNG state')
+    return after
+
 
 def trace_commit(record):
     """One line per sampling attempt in trace/commits.jsonl: joins its filter events to the outcome."""
@@ -416,12 +474,18 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             filters_matrix_ori = filters_matrix.copy()
             selection_weights = get_selection_weights()
             weights = [selection_weights[name] for name in FEATURE_NAMES]
+            _after = None  # the check_after table, for a controller that asks in the endgame (empty inventory)
+            if getattr(get_filter_controller(), 'lookahead', False) and not vendor.stones \
+                    and paper_feasible(filters_matrix_ori).sum() >= 2:
+                if from_right:
+                    raise NotImplementedError('the lookahead is defined for walls built from the left')
+                _after = feasible_after(base, current_bricks, all_bricks, min_x_list, min_y_list, filters_matrix_ori)
             _policy = controlled_policy(get_filter_policy(construction_step_i), get_filter_controller(), {
                 'step': construction_step_i, 'side': 'right' if from_right else 'left', 'phase': _phase,
                 'sample_trial': sample_trial, 'wall': base.matrix, 'all_bricks': all_bricks,
                 'sampled_ids': [b.id for b in current_bricks], 'inventory_ids': list(vendor.stones.keys()),
                 'x': min_x_list, 'y': min_y_list, 'distance': min_distance_list,
-                'features_raw': filters_matrix_ori, 'weights': weights})
+                'features_raw': filters_matrix_ori, 'weights': weights, **({} if _after is None else {'after': _after})})
             selection = select(filters_matrix_ori, weights, **_policy)
             if get_trace() is not None:
                 _side = 'right' if from_right else 'left'
@@ -429,7 +493,7 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
                              'phase': _phase, 'sample_trial': sample_trial, 'vendor_type': vendor_type,
                              'construction_order': construction_order, 'nb_stones': nb_stones},
                             base, vendor, current_bricks, all_bricks, min_x_list, min_y_list,
-                            min_distance_list, filters_matrix_ori, weights, selection, _policy)
+                            min_distance_list, filters_matrix_ori, weights, selection, _policy, _after)
             filters_matrix = selection.weighted
             min_index = selection.index
             with open(get_dir()+"filter.txt", "a+") as f:

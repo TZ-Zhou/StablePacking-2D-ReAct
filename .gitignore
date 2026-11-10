@@ -180,6 +180,16 @@ research/cases/*
 !research/cases/20261110-2143-TH_T80-pc1/
 !research/cases/20261110-2144-TH_T80-pc1/
 !research/cases/20261110-2146-TH_T80-pc1/
+# the paid lookahead pick walls (study lookahead-walls), kept the same way
+!research/cases/20261111-0106-TH_T80-pc1/
+!research/cases/20261111-0108-TH_T80-pc1/
+!research/cases/20261111-0110-TH_T80-pc1/
+!research/cases/20261111-0112-TH_T80-pc1/
+!research/cases/20261111-0113-TH_T80-pc1/
+!research/cases/20261111-0115-TH_T80-pc1/
+!research/cases/20261111-0117-TH_T80-pc1/
+!research/cases/20261111-0118-TH_T80-pc1/
+!research/cases/20261111-0120-TH_T80-pc1/
 research/cases/*/result_*/base.pkl
 research/cases/*/result_*/trace/*.npz
 !research/cases/*/execution.log
