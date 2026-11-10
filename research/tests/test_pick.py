@@ -13,6 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_gpt_smoke  # noqa: E402
 
+from research.analysis import llm_endgame_pick  # noqa: E402
 from research.controller import (
     llm_api,  # noqa: E402
     pick,  # noqa: E402
@@ -115,6 +116,23 @@ class Harness(unittest.TestCase):
         every = {n: {"state": "finished", "started_at": n} for n in names}
         with mock.patch.object(gpt_wall, "journals", return_value=every):
             self.assertIsNone(pick_runner.next_state(False))
+
+
+class Reading(unittest.TestCase):
+    def table(self, llm, n=18, complete=True, switches=2):
+        import pandas as pd
+        return pd.DataFrame({"llm_mean_z": llm, "cascade_mean_z": 0.0, "low_top_mean_z": 0.2, "random_median": -0.3,
+                             "llm_n_placed": n, "cascade_n_placed": 18, "complete": complete,
+                             "switches": switches, "llm_decisions": 7})
+
+    def test_rule(self):
+        r = llm_endgame_pick.reading
+        self.assertEqual(r(self.table([0.5] * 7 + [-0.1] * 2)), "go")
+        self.assertEqual(r(self.table([0.1] * 9)), "no endgame contribution shown")  # (b): below low_top
+        self.assertEqual(r(self.table([0.5] * 9, switches=1)), "no endgame contribution shown")  # (c): 9 of 63
+        self.assertEqual(r(self.table([0.5] * 9, complete=[True] * 6 + [False] * 3)), "no endgame contribution shown")
+        self.assertEqual(r(self.table([-0.5] * 5 + [0.5] * 4)), "stop direct pick")
+        self.assertEqual(r(self.table([0.5] * 9, n=[17] * 3 + [18] * 6)), "stop direct pick")
 
 
 VENV = controller_worker.VENV_MANIFEST.exists() and not controller_worker.venv_problems()
