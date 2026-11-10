@@ -1,6 +1,6 @@
-# Research findings: Observation V3 signals (P0–P2), 2026-11-08
+# Research findings
 
-All offline, on the 50 walls of `thangavelu-5arms-10seeds` (formal quality: `wang-quality-v1`) and
+Observation V3 signals (P0–P2), 2026-11-08. All offline, on the 50 walls of `thangavelu-5arms-10seeds` (formal quality: `wang-quality-v1`) and
 the 6 counterfactual branch points (`paper-hardstone-01`, `smoke-001-cf`). Exploratory: few walls,
 few branch points. Decision: these directions are paused; none is wired into a controller or
 into Observation V2.
@@ -137,3 +137,89 @@ T = 3 / 6 / 9 / 12 / 15:
 - Cost per candidate in ms, one process, one wall, 17 / 11 / 5 stones left, one run on a busy machine: skyline envelope
   0.12 / 0.11 / 0.11; fit of every remaining stone 11.2 / 7.4 / 3.4; largest-first drop rollout 11.9 / 7.3 / 3.6; best-fit
   rollout 105 / 43 / 12; 2-D convolution of all poses 277 / 202 / 103. Predictive value of these heuristics is not tested.
+
+## Factorial: filter order (3,000 walls)
+5 seeds (313, 484, 717, 720, 761) × 5 scenes (`TH_T20`, `TH_T80`, `AL_R`, `AL_PR`, `AL_IR`) × 120 orders, built at
+`factorial-v1` (87f8843), all `PROCESS_PASS`. Tests and their rules: `docs/plans/preregistration.md`; per-block tables in
+`runs/batch/factorial-*.csv`. z is per scene, signed so that positive is better. B2 and B4 are not run.
+
+### B3: Paper (3,0,2,1,4) against the 120 orders (descriptive, 25 blocks)
+| Metric | Paper − median (median over blocks, SD) | Blocks where Paper beats the median | Best order − median |
+| --- | --- | --- | --- |
+| `F_SF` | −0.01 | 11/25 | 1.44 |
+| `F_AH` | −0.35 | 8/25 | 1.71 |
+| `F_AV` | −0.56 | 7/25 | 2.61 |
+| `F_LR` | +0.72 | 16/25 | 2.50 |
+- The best of 120 normal draws is expected 2.57 SD above the median, so the best order is what luck gives; the same
+  best order repeats across seeds in 2 of 25 scene × metric cells.
+
+### C2: does the score of a step predict the final wall (1,943 branch points, Holm over 24)
+| Score → metric | Concordance | p (Holm) | Blocks positive |
+| --- | --- | --- | --- |
+| `c_LLC` → `F_LR` | 0.593 | 0.014 | 19/25 |
+| `c_NHR` → `F_AH` | 0.536 | 0.036 | 18/25 |
+| the other 22 | 0.47–0.55 | not significant | — |
+
+### C4: surface-fit heuristics (H2b, H3b, H4a)
+- None passes, with either h version. The Holm-significant ones (H3b `F_AH` 0.542, H2b `F_AH` 0.537, H2b `F_AV` 0.531) are
+  below a trivial baseline (`F_AH` 0.551, `F_AV` 0.534).
+
+## Endgame: LLM direct pick (`TH_T80`, the last 7 placements)
+With 7 stones left every remaining stone is on offer at every step, so endings from one state differ only by the policy.
+States: seeds 313, 484, 717, 3 cascade walls each. Mean z: the four metrics, z in the seed's factorial `TH_T80` block.
+Cascade: Wang's selection, no control. Plans and rules: `docs/plans/endgame-arena.md`, `llm-endgame-pick.md`,
+`llm-endgame-lookahead.md`; tables `runs/batch/endgame-arena-th80.csv`, `llm-endgame-pick-th80.csv`,
+`llm-endgame-lookahead-opponents.csv`, `llm-endgame-lookahead-th80.csv`.
+
+### Free arena (9 states, 216 walls)
+- Reading "room": an admissible ending better than the cascade by 0.1 SD or more in 4/9 states; cascade at or above the
+  90th random percentile in 5/9.
+- Mean z: cascade 0.15, low_top 0.32, llc 0.16, borda 0.01, random median −0.32; 41 of 180 random endings lose a stone.
+
+### LLM pick, no lookahead (step 3, the same 9 states, gpt-6.1-terra, US$0.34)
+- Reading "no endgame contribution shown": above the cascade with no fewer stones 5/9 (needs 7), not below low_top 4/9
+  (needs 5), 24/59 decisions differ from the cascade.
+- Lost stones in 2/9 states (484/13204: 16 placed, 717/14032: 17). Forcing every option from step 17 on: an option loses
+  stones exactly when it leaves a remaining stone with 0 feasible poses at the next step (`llm-pick-step17-tree.csv`).
+- Mean z: LLM 0.25, cascade 0.15, low_top 0.32.
+
+### LLM pick with check_after (9 new states, US$0.47)
+check_after gives, per candidate, each remaining stone's feasible poses at the next step (no scores). The free opponents
+get the same table: low_top_safe and random_safe choose among the safe candidates (no remaining stone left at 0), pick_safe
+takes the highest LLC among them. The table was checked against 161 forced rebuilds, all equal.
+
+| Rule | Result | Bar |
+| --- | --- | --- |
+| (a) above the cascade, no fewer stones | 7/9 | ≥ 7 |
+| (b) not below low_top | 5/9 | ≥ 5 |
+| (c) decisions that differ from the cascade | 37/62 | ≥ 25% |
+| (d) states that lose stones | LLM 0, cascade 1 | LLM ≤ cascade |
+| (e) not below low_top_safe | 6/9 | ≥ 5 |
+- Reading "go", at the bar: one state of (a) by +0.003 (717/04123: −0.129 against −0.132).
+- check_after called in 53/62 decisions; no pick left a stone at 0.
+- Mean z: pick_safe 0.28, LLM 0.23, llc 0.19, cascade 0.04, low_top −0.01, low_top_safe −0.04, random median −0.27.
+  pick_safe loses no stone in the 9 new states, low_top_safe none in those nor in the 9 arena states; random loses
+  stones in 33/180 walls, random_safe in 2/180 (safety looks one step ahead only).
+
+### LLM against pick_safe (exploratory, not in the rule)
+| State | LLM mean z | pick_safe mean z | LLM − pick_safe, `F_LR` z |
+| --- | --- | --- | --- |
+| 313/13420 | 0.773 | 0.875 | −1.58 |
+| 313/14302 | 0.002 | 0.725 | −1.90 |
+| 313/03241 | −0.063 | −0.285 | +1.17 |
+| 484/02413 | 0.260 | −0.776 | +0.49 |
+| 484/10243 | 0.874 | 0.411 | +0.61 |
+| 484/01324 | −0.478 | −0.137 | −1.85 |
+| 717/04123 | −0.129 | 0.700 | −2.35 |
+| 717/23410 | 0.709 | 0.389 | +2.25 |
+| 717/20341 | 0.139 | 0.607 | −1.95 |
+- The LLM is below pick_safe in 5/9 states, and in all 5 its `F_LR` is lower by 1.6–2.4 SD (the largest metric gap in 4;
+  in 313/14302 `F_AH` −2.13 is larger).
+- In 14 of 62 decisions (13 of the 53 with check_after) the LLM did not take the highest LLC among the safe candidates,
+  each time one LLC step (0.17) lower; in 11 of the 14 its pick had a higher NHR than every highest-LLC safe candidate. The
+  prompt asks to compare all five scores and defines LLC and `F_LR` in near-identical words, but does not say that LLC
+  is the per-step form of `F_LR`.
+- The highest LLC is tied in 52 of 62 decisions; pick_safe then takes the first candidate, and the LLM chose another
+  candidate of the tie in 32. In 484/02413 (LLM +1.04 over pick_safe) 2–9 safe candidates tie at the top in every
+  decision; the LLM stayed within the tie in 6 of 7, a different one from pick_safe in 5, and gained mostly `F_AV`
+  (+2.67) and `F_AH` (+0.99).
