@@ -5,7 +5,8 @@ Usage: python -B -m research.analysis.branch_concordance <dataset folder>... [--
 
 Each <dataset folder> is research/datasets/<name>/ of batch_tables.py (walls.csv, steps.csv) for one seed x scene
 block; scores named H* are read from the h.csv of placement_h.py in <dataset folder><h suffix>, the others (c_NHR,
-c_GDS, c_IWR, c_LLC, c_LFR: the placed candidate's raw scores at the branch point) from steps.csv.
+c_GDS, c_IWR, c_LLC, c_LFR: the placed candidate's raw scores at the branch point, and c_SUM, their sum) from
+steps.csv.
 
 Per block (A3): the prefix tree of the PROCESS_PASS walls' placement sequences (stone, rot, x, y of each placed row
 of steps.csv). A branch point is a node with two or more children; a child's score is the one of its placement (h
@@ -16,8 +17,9 @@ of children whose scores differ and whose labels differ is comparable, and conco
 better label. D_b = concordant - discordant of block b; the statistic is sum_b D_b, two-sided block sign-flip test
 (100,000 flips, numpy default_rng(20261109), p = (1 + #|flipped| >= |observed|) / (1 + 100,000)). Holm runs over the
 family's score x metric tests; baselines get the same columns but no p. passes (C4's rule): Holm p < 0.05, a
-positive statistic and a rate above every baseline's rate on that metric. A child whose walls disagree on a score
-keeps its first wall's value and is counted in n_score_mismatch.
+positive statistic and a rate above every baseline's rate on that metric. A child whose walls give a score two values
+(AL: chosen from the left in one wall and from the right in another, whose scores are taken on the mirrored wall) is
+left out of that score's pairs (preregistration C2) and counted in n_score_mismatch.
 """
 
 import argparse
@@ -29,12 +31,14 @@ import numpy as np
 import pandas as pd
 
 METRICS = {"F_SF": 1, "F_AH": -1, "F_AV": 1, "F_LR": 1}  # sign of the better direction
+RAW_SCORES = ["c_NHR", "c_GDS", "c_IWR", "c_LLC", "c_LFR"]  # c_SUM is their sum (every selection weight is 1)
 FLIPS = 100_000
 FLIP_SEED = 20261109
 
 
 def block_children(walls, steps, h, scores):
-    """{node: {child: (score values, unique_ids below)}} of one block, and the number of score mismatches."""
+    """{node: {child: (score values, unique_ids below)}} of one block, and the number of score mismatches; a score
+    with two values in a child's walls is NaN there."""
     placed = steps[steps.outcome == "placed"]
     if h is not None:
         placed = placed.merge(h, on=["wall", "event"], how="left", validate="one_to_one")
@@ -48,12 +52,16 @@ def block_children(walls, steps, h, scores):
         for t, child in enumerate(sequence):
             node = tree.setdefault(tuple(sequence[:t]), {})
             if child in node:
-                kept, leaves = node[child]
-                mismatch += not np.array_equal(kept, values[t], equal_nan=True)
+                first, leaves, two_values = node[child]
+                differs = (first != values[t]) & ~(np.isnan(first) & np.isnan(values[t]))
+                mismatch += differs.any()
+                two_values |= differs
                 leaves.add(unique[wall])
             else:
-                node[child] = (values[t], {unique[wall]})
-    return {node: kids for node, kids in tree.items() if len(kids) > 1}, mismatch
+                node[child] = (values[t], {unique[wall]}, np.zeros(len(scores), dtype=bool))
+    return {node: {child: (np.where(two_values, np.nan, first), leaves)
+                   for child, (first, leaves, two_values) in kids.items()}
+            for node, kids in tree.items() if len(kids) > 1}, mismatch
 
 
 def block_counts(branches, z, scores):
@@ -99,7 +107,8 @@ def concordance(folders, family, baselines, h_suffix="-h"):
         walls = pd.read_csv(folder / "walls.csv", dtype={"filter_policy": str})
         walls = walls[walls.status == "PROCESS_PASS"]
         steps = pd.read_csv(folder / "steps.csv", usecols=["wall", "event", "outcome", "stone", "rot", "x", "y"]
-                            + [s for s in scores if s.startswith("c_")])
+                            + RAW_SCORES)
+        steps["c_SUM"] = steps[RAW_SCORES].sum(axis=1, skipna=False)
         h_file = Path(f"{folder}{h_suffix}") / "h.csv"
         h = pd.read_csv(h_file, usecols=["wall", "event", *h_scores]) if h_scores else None
         blocks.append((walls, steps, h))
