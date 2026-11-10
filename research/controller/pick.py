@@ -12,7 +12,9 @@ With "lookahead": true (docs/plans/llm-endgame-lookahead.md) the observation ver
 and the LLM also has check_after: for listed candidate ids, the feasible poses each other remaining stone has at the
 next placement if that candidate is placed (build_wall's table, traced as 'after'; the request carries it per
 candidate, so the tool only reads it). check() then also requires each placed candidate's row to equal the next
-selection (endgame.lookahead_problems).
+selection (endgame.lookahead_problems). With "llc_note": true as well (docs/plans/llm-endgame-llc-note.md) the
+observation version is 'pick-3': the system prompt of 'pick-2' plus one paragraph saying LLC and F_LR are the same
+kind of quantity (LLC_NOTE); nothing else changes.
 
 It is the order controller with its own observation, request and reply (PickClient over ControllerClient: the same
 worker, budget, ledger and LLM transcripts; PickPolicy over ReActPolicy: the same LLM call, retries on a rejected
@@ -58,6 +60,13 @@ LOOKAHEAD = (
     "can change again after later placements. It gives no scores.\n")
 SYSTEM_LOOKAHEAD = SYSTEM.replace("Compare the main candidates", LOOKAHEAD + "Compare the main candidates")
 assert SYSTEM_LOOKAHEAD.count(LOOKAHEAD) == 1
+LLC_NOTE = (
+    "LLC and F_LR are the same kind of quantity, a kinematic limit load of the wall divided by the friction "
+    "coefficient: LLC is that of the wall right after this placement, F_LR that of the finished wall. Giving up a "
+    "higher LLC now can therefore leave a lower F_LR at the end. Weigh this together with everything else; it is "
+    "not a rule.\n")
+SYSTEM_NOTE = SYSTEM_LOOKAHEAD.replace("Compare the main candidates", LLC_NOTE + "Compare the main candidates")
+assert SYSTEM_NOTE.count(LLC_NOTE) == 1
 CHECK = {"name": "check_after", "description": "For listed candidates: the feasible poses each other remaining stone "
          "would have at the next placement if that candidate were placed. No scores.",
          "parameters": {"type": "object", "additionalProperties": False, "required": ["candidates"],
@@ -71,6 +80,7 @@ COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to 
                                                       "and why this one."}}}}
 OBSERVATION_VERSION = "pick-1"
 OBSERVATION_VERSION_LOOKAHEAD = "pick-2"
+OBSERVATION_VERSION_NOTE = "pick-3"
 REPLY_KEYS = {"pick", "source", "prompt_sha256", "react", "transcripts", "restart"}
 ID_TEXT = re.compile(r"[0-9]{1,4}")
 
@@ -109,9 +119,11 @@ class PickPolicy(oc.ReActPolicy):
     """ReActPolicy with commit_pick as its only tool (and check_after with lookahead) and the whole observation in
     the first message."""
 
-    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False):
+    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False, llc_note=False):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
         self.system, self.tools = (SYSTEM_LOOKAHEAD, [CHECK, COMMIT]) if lookahead else (SYSTEM, [COMMIT])
+        if llc_note:
+            self.system = SYSTEM_NOTE
         self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
 
     def view(self, obs):
@@ -162,7 +174,9 @@ class PickClient(oc.ControllerClient):
     def __init__(self, spec, transport, sink=None, ledger=None):
         super().__init__(spec, transport, sink, ledger)
         self.lookahead = self.spec().get("lookahead", False)  # build_wall computes the check_after table if true
-        self.observer, self.n = Observer(OBSERVATION_VERSION_LOOKAHEAD if self.lookahead else OBSERVATION_VERSION), 0
+        version = (OBSERVATION_VERSION_NOTE if self.spec().get("llc_note") else OBSERVATION_VERSION_LOOKAHEAD
+                   if self.lookahead else OBSERVATION_VERSION)
+        self.observer, self.n = Observer(version), 0
 
     def request_of(self, obs, info):
         after = {"after": info["after"]} if self.lookahead else {}
@@ -245,7 +259,8 @@ def check(result, records, spec, stopped=False):
     receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
     base, full, events = oc.base_policy(run), oc.full_spec(spec), list(oc.trace_events(result))
     llm = oc.ReplayLLM(records, *oc.llm_identity(full["llm"]))
-    worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False)}
+    worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False),
+              "llc_note": full.get("llc_note", False)}
     transport = oc.ReplayedFailures(lambda: PickPolicy(llm, **worker), records)
     expected, ledger = [], []
     client = PickClient(spec, transport, expected.append, ledger.append)
