@@ -1,0 +1,21 @@
+{"event": "build_enter", "elapsed_seconds": 10.5, "input_stones": 18, "candidates_per_iteration": 7, "build_options": {"vendor_type": "variant"}, "constants": {"WORLD_WIDTH": 100, "WORLD_HEIGHT": 100, "EPS": -1e-05, "MAX_EDGE_LENGTH": 50, "WALL_WIDTH": 405, "WALL_HEIGHT": 279, "OPTIMIZATION": "Bbox_Ocontour_Void", "DILATION": 20, "EROSION": 1, "WEIGHT_FIRST_TO_ORIGIN_X": 0, "ALLOW_ROTATE": true, "DUMP_TO_FILE": true, "SAVE_ROOT": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0115-TH_T80-pc1/result_20261111-011538_wall0/", "LOCAL_WIDTH": 10, "INTER_WEIGHT": 0.1, "WIDTH_WEIGHT": 0.1, "STABALIZE_METHOD": "rotation", "WEDGE_ID": 257, "BASE_ID": 256, "CUT_ID": 258, "SELECTION_WEIGHTS": {"interlocking": 1, "kinematic": 1, "course_height": 1, "global_density": 1, "local_void": 1, "local_void_center": 1}, "PLACEMENT_OPTIMIZATION": "image_convolve", "PARTIAL_ENUMERATION_RATIO": 0.5, "MU": 0.58, "DENSITY": 18, "IGNORE_HEAD_JOINT": true, "KINEMATIC_RESULT_DECIMAL": 1, "IGNORE_VALUE": 255, "K_STEPS": 0, "KINEMATIC_OPTIMIZATION": true, "NUMBER_CPU": 10, "RECORD_TIME": false, "RECORD_SWITCHS": {"RECORD_PLACEMENT_VALUE": false, "RECORD_PLACEMENT_IMG": false, "RECORD_SELECTION_VALUE": false}, "FILTER_POLICY": {"policy": "paper", "order": [0, 1, 3, 2, 4], "tol": 1e-09}, "FILTER_SWITCH": {}, "TRACE_RUN_ID": "20261111-0115-TH_T80-pc1"}}
+{"event": "step_commit", "elapsed_seconds": 14.015, "step": 1, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 14.375, "step": 2, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 14.703, "step": 3, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 15.0, "step": 4, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 15.328, "step": 5, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 15.64, "step": 6, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 15.937, "step": 7, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 16.265, "step": 8, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 16.562, "step": 9, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 16.89, "step": 10, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 17.218, "step": 11, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 32.359, "step": 12, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 44.093, "step": 13, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 55.984, "step": 14, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 66.953, "step": 15, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 76.625, "step": 16, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 84.312, "step": 17, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 88.406, "step": 19, "outcome": "placed"}
+{"event": "build_return", "elapsed_seconds": 88.421, "placed_rocks": 18, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0115-TH_T80-pc1/result_20261111-011538_wall0/"}
+{"event": "final_evaluation_complete", "elapsed_seconds": 88.671, "placed_rocks": 18, "limit_force": 0.1, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0115-TH_T80-pc1/result_20261111-011538_wall0/"}

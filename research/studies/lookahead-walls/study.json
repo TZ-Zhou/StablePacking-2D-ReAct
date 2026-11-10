@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "id": "lookahead-walls",
+  "kind": "lookahead-walls",
+  "created": "2026-11-11T01:08:47+08:00",
+  "design": {
+    "runner": "research/llm_walls/lookahead_wall.py",
+    "mode": "paid",
+    "run_wall": [
+      "thangavelu-noise80",
+      "--policy",
+      "paper",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 10,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 100000,
+      "max_cost_usd": 0.2,
+      "lookahead": true
+    },
+    "wall_limits": {
+      "http_requests": 40,
+      "tokens": 100000,
+      "cost_usd": 0.2,
+      "seconds": 2400
+    },
+    "experiment_limits": {
+      "walls": 9,
+      "http_requests": 360,
+      "tokens": 900000,
+      "cost_usd": 2.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-0106-TH_T80-pc1",
+      "name": "look-s313-13420"
+    },
+    {
+      "case_id": "20261111-0108-TH_T80-pc1",
+      "name": "look-s313-14302"
+    },
+    {
+      "case_id": "20261111-0110-TH_T80-pc1",
+      "name": "look-s313-03241"
+    },
+    {
+      "case_id": "20261111-0112-TH_T80-pc1",
+      "name": "look-s484-02413"
+    },
+    {
+      "case_id": "20261111-0113-TH_T80-pc1",
+      "name": "look-s484-10243"
+    },
+    {
+      "case_id": "20261111-0115-TH_T80-pc1",
+      "name": "look-s484-01324"
+    },
+    {
+      "case_id": "20261111-0117-TH_T80-pc1",
+      "name": "look-s717-04123"
+    },
+    {
+      "case_id": "20261111-0118-TH_T80-pc1",
+      "name": "look-s717-23410"
+    },
+    {
+      "case_id": "20261111-0120-TH_T80-pc1",
+      "name": "look-s717-20341"
+    }
+  ]
+}
