@@ -40,9 +40,10 @@ RULES = ("llc", "borda", "low_top", "low_top_safe", "pick_safe")
 NEW = {s: [o for t, o in lookahead_wall.STATES if t == s] for s in (313, 484, 717)}
 
 
-def seed_walls(seed):
-    """The lookahead arena walls of a seed with z and kind, the factorial block with z, and the gate problems."""
-    name, factorial = f"lookahead-arena-s{seed}-TH_T80", f"factorial-s{seed}-TH_T80"
+def seed_walls(seed, arena="lookahead-arena"):
+    """The arena walls of a seed (batch <arena>-s<seed>-TH_T80) with z and kind, the factorial block with z, and the
+    gate problems."""
+    name, factorial = f"{arena}-s{seed}-TH_T80", f"factorial-s{seed}-TH_T80"
     walls = pd.read_csv(DATASETS_DIR / name / "walls.csv", dtype={"filter_policy": str})
     steps = pd.read_csv(DATASETS_DIR / name / "steps.csv")
     block = pd.read_csv(DATASETS_DIR / factorial / "walls.csv", dtype={"filter_policy": str})
@@ -83,6 +84,8 @@ def opponent_row(seed, order, walls, block):
     for rule in RULES:
         w = mine[mine.kind == rule].iloc[0]
         row.update({f"{rule}_mean_z": w.mean_z, f"{rule}_n_placed": int(w.n_placed)})
+    w = mine[mine.kind == "pick_safe"].iloc[0]
+    row.update({f"pick_safe_{c}": w[c] for c in step3.ZCOLS})
     row["cascade_percentile_random_safe"] = percentile(mine[mine.kind == "random_safe"].mean_z.to_numpy(),
                                                        cascade.mean_z)
     return row
@@ -115,7 +118,9 @@ def opponents():
 
 
 def decisions(case):
-    """Per LLM decision of a lookahead pick wall: tool used, ids checked, the pick unsafe, pick_safe's choice equal."""
+    """Per LLM decision of a lookahead pick wall: tool used, ids checked, the pick unsafe, pick_safe's choice equal; the
+    highest LLC among the safe candidates (all feasible if none is safe) given up, and then for a higher NHR than
+    every candidate with that LLC; that LLC tied, and the pick another candidate of the tie than pick_safe's."""
     result = next(Path(case).glob("result_*"))
     records = {json.loads(line)["event"]: json.loads(line)
                for line in (result / "trace" / "controller.jsonl").read_text(encoding="utf-8").splitlines()}
@@ -128,10 +133,14 @@ def decisions(case):
         raw, after, sel = np.asarray(a["features_raw"]), np.asarray(a["after"]), int(a["selected"])
         safe = paper_feasible(raw) & ~(after == 0).any(axis=1)
         pool = np.flatnonzero(safe) if safe.any() else np.flatnonzero(paper_feasible(raw))
+        top = pool[raw[pool, 3] == raw[pool, 3].max()]
+        gave_up = bool(raw[sel, 3] < raw[top[0], 3])
         out.append({"source": r["source"], "checked": len(checks),
                     "ids_checked": sum(len(s["arguments"]["candidates"].split(",")) for s in checks),
                     "unsafe_pick": bool(safe.any() and not safe[sel]),
-                    "as_pick_safe": sel == int(pool[np.argmax(raw[pool, 3])])})
+                    "as_pick_safe": sel == int(pool[np.argmax(raw[pool, 3])]),
+                    "gave_up_llc": gave_up, "for_nhr": gave_up and bool((raw[sel, 0] > raw[top, 0]).all()),
+                    "top_tie": len(top) > 1, "other_of_tie": len(top) > 1 and sel in top and sel != int(top[0])})
     return out
 
 
@@ -150,6 +159,8 @@ def state_row(seed, order, journal, walls, block):
             "decisions": llm["decisions"], "llm_decisions": llm["llm_decisions"], "switches": llm["switches"],
             "decisions_checked": int((d.checked > 0).sum()), "ids_checked": int(d.ids_checked.sum()),
             "unsafe_picks": int(d.unsafe_pick.sum()), "as_pick_safe": int(d.as_pick_safe.sum()),
+            "gave_up_llc": int(d.gave_up_llc.sum()), "gave_up_llc_for_nhr": int(d.for_nhr.sum()),
+            "top_tie_decisions": int(d.top_tie.sum()), "other_of_tie": int(d.other_of_tie.sum()),
             "tokens": spend.get("tokens"), "cost_usd": spend.get("cost_usd"), "llm_seconds": llm["llm_seconds"]}
 
 
