@@ -162,5 +162,18 @@ class Workers(unittest.TestCase):
             case_definition.with_workers("nothing here\n", 4)
 
 
+class VendorType(unittest.TestCase):
+    def test_none_keeps_the_script(self):
+        text = case_definition.source_text("almeida-ir")
+        self.assertIs(case_definition.with_vendor_type(text, None), text)
+
+    def test_every_case_gets_the_sampling_once(self):
+        for case in case_definition.CASES:
+            with self.subTest(case):
+                staged = case_definition.with_vendor_type(case_definition.source_text(case), "full")
+                self.assertEqual(staged.count("vendor_type = 'full'"), 1)
+                self.assertNotIn("data_config['vendor_type']", staged)
+
+
 if __name__ == "__main__":
     unittest.main()
