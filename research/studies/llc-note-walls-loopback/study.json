@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "id": "llc-note-walls-loopback",
+  "kind": "llc-note-walls",
+  "created": "2026-11-11T04:11:48+08:00",
+  "design": {
+    "runner": "research/llm_walls/llc_note_wall.py",
+    "mode": "loopback mock",
+    "run_wall": [
+      "thangavelu-noise80",
+      "--policy",
+      "paper",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 10,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 100000,
+      "max_cost_usd": 0.2,
+      "lookahead": true,
+      "llc_note": true
+    },
+    "wall_limits": {
+      "http_requests": 40,
+      "tokens": 100000,
+      "cost_usd": 0.2,
+      "seconds": 2400
+    },
+    "experiment_limits": {
+      "walls": 9,
+      "http_requests": 360,
+      "tokens": 900000,
+      "cost_usd": 2.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-0411-TH_T80-pc1",
+      "name": "llcn-s313-12403"
+    },
+    {
+      "case_id": "20261111-0412-TH_T80-pc1",
+      "name": "llcn-s313-41023"
+    },
+    {
+      "case_id": "20261111-0414-TH_T80-pc1",
+      "name": "llcn-s313-04231"
+    },
+    {
+      "case_id": "20261111-0415-TH_T80-pc1",
+      "name": "llcn-s484-43102"
+    },
+    {
+      "case_id": "20261111-0416b-TH_T80-pc1",
+      "name": "llcn-s484-40321"
+    },
+    {
+      "case_id": "20261111-0418-TH_T80-pc1",
+      "name": "llcn-s484-21430"
+    },
+    {
+      "case_id": "20261111-0420-TH_T80-pc1",
+      "name": "llcn-s717-14302"
+    },
+    {
+      "case_id": "20261111-0421-TH_T80-pc1",
+      "name": "llcn-s717-13204"
+    },
+    {
+      "case_id": "20261111-0422b-TH_T80-pc1",
+      "name": "llcn-s717-41203"
+    }
+  ]
+}
