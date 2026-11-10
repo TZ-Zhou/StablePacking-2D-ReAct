@@ -17,10 +17,12 @@ def block(folder, seed, flip=False):
                               status="PROCESS_PASS", unique_id=[f"{seed}a", f"{seed}b", f"{seed}c"],
                               F_SF=[3.0, 2.0, 1.0], F_AH=[1.0, 1.0, 1.0], F_AV=[np.nan, 1.0, 2.0], F_LR=1.0))
     pose = {"a": [(1, 0), (2, 0)], "b": [(1, 0), (3, 0)], "c": [(4, 0), (2, 0)]}
-    steps = pd.DataFrame([dict(wall=w, event=e, outcome="placed", stone=s, rot=r, x=0, y=0, c_GDS=float(s))
+    steps = pd.DataFrame([dict(wall=w, event=e, outcome="placed", stone=s, rot=r, x=0, y=0, c_GDS=float(s),
+                               c_NHR=0.0, c_IWR=0.0, c_LLC=1.0, c_LFR=0.0)
                           for w in "abc" for e, (s, r) in enumerate(pose[w])])
     good = {"a": 3.0, "b": 2.0, "c": 1.0}
-    h = pd.DataFrame([dict(wall=w, event=e, H2b=(-1 if flip else 1) * good[w], H0_unlevel=0.0)
+    first = {"a": 2.5, "b": 2.5, "c": 1.0}  # one value per child: a and b share theirs
+    h = pd.DataFrame([dict(wall=w, event=e, H2b=(-1 if flip else 1) * (good[w] if e else first[w]), H0_unlevel=0.0)
                       for w in "abc" for e in range(2)])
     folder.mkdir()
     Path(f"{folder}-h").mkdir()
@@ -45,6 +47,19 @@ class Concordance(unittest.TestCase):
         self.assertEqual(row.loc[("H2b", "F_AV"), "comparable"], 2)
         self.assertEqual(row.loc[("H0_unlevel", "F_SF"), "comparable"], 0)  # equal scores never compare
         self.assertTrue(np.isnan(row.loc[("c_GDS", "F_SF"), "p"]))  # baselines are not tested
+
+    def test_a_score_with_two_values_is_left_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = block(Path(tmp, "s1"), 1)
+            steps = pd.read_csv(folder / "steps.csv")
+            steps.loc[(steps.wall == "b") & (steps.event == 0), "c_GDS"] = 9.0  # a and b share this child
+            steps.to_csv(folder / "steps.csv", index=False)
+            table, blocks = bc.concordance([folder], ["c_GDS", "c_SUM"], [])
+        self.assertEqual(blocks.n_score_mismatch.tolist(), [1])
+        row = table.set_index(["score", "metric"])
+        # the root pair {a,b} vs {c} is gone; a (c_GDS 2) vs b (3) is left, and b is worse on F_SF
+        self.assertEqual((row.loc[("c_GDS", "F_SF"), "comparable"], row.loc[("c_GDS", "F_SF"), "concordant"]), (1, 0))
+        self.assertEqual(row.loc[("c_SUM", "F_SF"), "comparable"], 1)
 
     def test_sign_flip_and_holm(self):
         self.assertAlmostEqual(bc.sign_flip_p(np.zeros(5)), 1.0)
