@@ -19,7 +19,8 @@ from research.controller import (
 )
 from research.controller import order_controller as oc  # noqa: E402
 from research.controller import worker as controller_worker  # noqa: E402
-from research.llm_walls import gpt_smoke  # noqa: E402
+from research.llm_walls import gpt_smoke, gpt_wall, pick_wall  # noqa: E402
+from research.runner import pick_wall as pick_runner  # noqa: E402
 from research.runner import run_wall  # noqa: E402
 
 # 2 stones x 2 rotations; row 2 is infeasible (LLC 0). rows: NHR, GDS, IWR, LLC, LFR
@@ -94,6 +95,26 @@ class Pick(unittest.TestCase):
         for spec in ({"kind": "pick"}, {"kind": "pick", "llm": mock, "tool_feedback": False}):
             with self.subTest(spec), self.assertRaises((ValueError, NotImplementedError, TypeError)):
                 oc.validate_spec(spec)
+
+
+class Harness(unittest.TestCase):
+    def test_the_spec_fits_and_the_states_are_the_arena_states(self):
+        self.assertEqual(pick_wall.spec_problems(), [])
+        self.assertTrue(pick_wall.spec_problems({**pick_wall.SPEC, "max_cost_usd": 0.25}))
+        arena = Path(__file__).resolve().parents[2] / "docs" / "plans" / "endgame-arena.md"
+        rows = [line.split("|")[1:3] for line in arena.read_text(encoding="utf-8").splitlines()
+                if line.startswith("| 3") or line.startswith("| 4") or line.startswith("| 7")]
+        self.assertEqual(pick_wall.STATES, [(int(s), o.strip()) for s, o in rows])
+        self.assertEqual(pick_wall.wall_args("30214"), ["--order", "3,0,2,1,4"])
+
+    def test_next_state_resumes_after_the_finished_walls(self):
+        names = [pick_wall.name_of(*s) for s in pick_wall.STATES]
+        done = {names[0]: {"state": "finished", "started_at": "1"}, names[1]: {"state": "finished", "started_at": "2"}}
+        with mock.patch.object(gpt_wall, "journals", return_value=done):
+            self.assertEqual(pick_runner.next_state(False), (313, "34021", names[2], names[1]))
+        every = {n: {"state": "finished", "started_at": n} for n in names}
+        with mock.patch.object(gpt_wall, "journals", return_value=every):
+            self.assertIsNone(pick_runner.next_state(False))
 
 
 VENV = controller_worker.VENV_MANIFEST.exists() and not controller_worker.venv_problems()

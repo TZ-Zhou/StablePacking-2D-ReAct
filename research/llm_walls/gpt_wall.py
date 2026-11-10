@@ -41,6 +41,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 from research.llm_walls import gpt_smoke
 from research.controller import worker as controller_worker
@@ -50,6 +51,7 @@ from research.paths import LEGACY_RUNS, REPO
 from research.walls import case_definition
 
 STUDIES = {False: 'gpt-walls', True: 'gpt-walls-loopback'}  # loopback? -> the study of the mode's walls
+STUDY_KIND = 'gpt-walls'
 # the walls before research/cases; read only
 LEGACY = {False: LEGACY_RUNS / 'gpt-walls', True: LEGACY_RUNS / 'gpt-walls-loopback'}
 # run_wall's arguments of every GPT wall
@@ -91,41 +93,49 @@ def spec_problems(spec=SPEC):
     return [f'spec: needs {rule}' for rule, ok in rules.items() if not ok]
 
 
-def lock_of(loopback):
+def experiment(x):
+    """The module whose constants an experiment's walls use: this one (the GPT walls) by default; another
+    experiment (research/llm_walls/pick_wall.py) defines STUDIES, STUDY_KIND, LEGACY, WALL_ARGS, SPEC,
+    WALL_LIMITS, EXPERIMENT_LIMITS, FORMAL, EXECUTED, PRICE_CHECKED, PRICE_MAX_AGE and spec_problems."""
+    return sys.modules[__name__] if x is None else x
+
+
+def lock_of(loopback, x=None):
     """The lock of the mode's study: one wall at a time; it holds a wall's journal until the wall's case exists."""
-    return gpt_smoke.lock_of(STUDIES[loopback])
+    return gpt_smoke.lock_of(experiment(x).STUDIES[loopback])
 
 
-def walls(loopback):
+def walls(loopback, x=None):
     """{name: gpt_smoke.Records} of every wall of the mode: the archive's (LEGACY/<name>, its journal
     LEGACY/journals/<name>.json; a folder there without a journal included), then the study's cases."""
-    legacy = LEGACY[loopback]
+    x = experiment(x)
+    legacy = x.LEGACY[loopback]
     names = {p.stem for p in (legacy / 'journals').glob('*.json')} | \
         {d.name for d in (legacy.iterdir() if legacy.is_dir() else []) if d.is_dir() and d.name != 'journals'}
     old = {n: gpt_smoke.Records(legacy / n, legacy / 'journals' / f'{n}.json', legacy / n / 'report.json')
            for n in sorted(names)}
-    return {**old, **gpt_smoke.study_runs(STUDIES[loopback])}
+    return {**old, **gpt_smoke.study_runs(x.STUDIES[loopback])}
 
 
-def journals(loopback):
+def journals(loopback, x=None):
     """{name: journal} of every wall of the mode; None for a wall without a journal."""
-    return {n: gpt_smoke.read_journal(w.journal) for n, w in walls(loopback).items()}
+    return {n: gpt_smoke.read_journal(w.journal) for n, w in walls(loopback, x).items()}
 
 
-def spent(loopback):
+def spent(loopback, x=None):
     """The reported spend of the mode's finished walls (a wall not finished blocks instead)."""
-    done = [j.get('spend') or {} for j in journals(loopback).values() if j and j.get('state') == 'finished']
+    done = [j.get('spend') or {} for j in journals(loopback, x).values() if j and j.get('state') == 'finished']
     return {'walls': len(done), **{k: sum(s.get(k) or 0 for s in done) for k in ('http_requests', 'tokens', 'cost_usd')}}
 
 
-def journal_problems(name, after, loopback, holding=False):
+def journal_problems(name, after, loopback, holding=False, x=None):
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,40}', name):
         return [f'run: the name {name!r} is not [a-z0-9-]']
-    lock = lock_of(loopback)
+    lock, limits, wall = lock_of(loopback, x), experiment(x).EXPERIMENT_LIMITS, experiment(x).WALL_LIMITS
     if not holding and lock.exists():
         return [f'run: {lock} exists: another run is starting or running, or one ended without releasing it '
                 '(a wall whose case is unknown leaves its journal there); inspect it']
-    found = journals(loopback)
+    found = journals(loopback, x)
     runs = {n: j for n, j in found.items() if j is not None}
     problems = [f'run: {n} is {j.get("state")}: inspect it (its billing may be unknown) before any new run'
                 for n, j in runs.items() if j.get('state') != 'finished']
@@ -137,10 +147,10 @@ def journal_problems(name, after, loopback, holding=False):
         problems.append(f'run: the latest wall is {latest}: name it with --after {latest}')
     if after is not None and after not in runs:
         problems.append(f'run: --after {after} names no run')
-    s = spent(loopback)
-    room = {'walls': s['walls'] + 1 <= EXPERIMENT_LIMITS['walls'],
-            **{k: s[k] + WALL_LIMITS[k] <= EXPERIMENT_LIMITS[k] for k in ('http_requests', 'tokens', 'cost_usd')}}
-    problems += [f'experiment: {k} spent {s[k]} + a wall {WALL_LIMITS.get(k, 1)} exceeds {EXPERIMENT_LIMITS[k]}' for k, ok in room.items() if not ok]
+    s = spent(loopback, x)
+    room = {'walls': s['walls'] + 1 <= limits['walls'],
+            **{k: s[k] + wall[k] <= limits[k] for k in ('http_requests', 'tokens', 'cost_usd')}}
+    problems += [f'experiment: {k} spent {s[k]} + a wall {wall.get(k, 1)} exceeds {limits[k]}' for k, ok in room.items() if not ok]
     return problems
 
 
@@ -173,8 +183,8 @@ def git(*args):
     return subprocess.run(['git', *args], capture_output=True, text=True, cwd=REPO, check=True, env=case_definition.quiet_env()).stdout.strip()
 
 
-def code_dirty():
-    return git('status', '--porcelain', '--', *EXECUTED)
+def code_dirty(x=None):
+    return git('status', '--porcelain', '--', *experiment(x).EXECUTED)
 
 
 def head():
@@ -184,16 +194,17 @@ def head():
     return sha
 
 
-def preflight(name, seed, after=None, loopback=False, holding=False, today=None):
-    problems = (spec_problems() + journal_problems(name, after, loopback, holding) + env_problems(loopback)
+def preflight(name, seed, after=None, loopback=False, holding=False, today=None, x=None):
+    e = experiment(x)
+    problems = (e.spec_problems() + journal_problems(name, after, loopback, holding, x) + env_problems(loopback)
                 + controller_worker.venv_problems())
-    if seed in json.loads(FORMAL.read_text(encoding='utf-8'))['seeds']:
+    if seed in json.loads(e.FORMAL.read_text(encoding='utf-8'))['seeds']:
         problems.append(f'seed: {seed} is a seed of the formal campaign; a development wall uses another')
     if not loopback:
-        if code_dirty():
+        if code_dirty(x):
             problems.append('code: the executed files differ from the commit: commit them before a paid wall')
-        if ((today or datetime.date.today()) - PRICE_CHECKED).days > PRICE_MAX_AGE:
-            problems.append(f'price: PRICE was checked {PRICE_CHECKED}; check it again and update PRICE_CHECKED')
+        if ((today or datetime.date.today()) - e.PRICE_CHECKED).days > e.PRICE_MAX_AGE:
+            problems.append(f'price: PRICE was checked {e.PRICE_CHECKED}; check it again and update PRICE_CHECKED')
     return problems
 
 
@@ -223,8 +234,9 @@ def accounting(run, spec, stopped=False):
             'gpt_complete': bool(decisions) and all(r['source'] == 'llm' for r in decisions), 'requests': rows}
 
 
-def study_design(loopback):
+def study_design(loopback, x=None):
     """The design a study of GPT walls is created with, by its first wall."""
-    return {'runner': 'research/llm_walls/gpt_wall.py', 'mode': 'loopback mock' if loopback else 'paid',
-            'run_wall': WALL_ARGS, 'spec': order_controller.full_spec(SPEC), 'wall_limits': WALL_LIMITS,
-            'experiment_limits': EXPERIMENT_LIMITS}
+    x = experiment(x)
+    return {'runner': f'research/llm_walls/{x.__name__.rpartition(".")[2]}.py', 'mode': 'loopback mock' if loopback else 'paid',
+            'run_wall': x.WALL_ARGS, 'spec': order_controller.full_spec(x.SPEC), 'wall_limits': x.WALL_LIMITS,
+            'experiment_limits': x.EXPERIMENT_LIMITS}
