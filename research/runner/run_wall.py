@@ -283,6 +283,9 @@ def run(argv=None, root=None, label=None):
         "--sync-output", action="store_true", help="write step outputs in the building loop, not a thread"
     )
     parser.add_argument('--seed', type=int, help='seed_everything(seed) instead of the source default (20)')
+    parser.add_argument('--vendor-type', choices=['random', 'similar', 'variant', 'same', 'full', 'full_replace',
+                                                  'sample_twice'],
+                        help="build_wall_vendor's sampling instead of the scene's own (full: the whole pile)")
     parser.add_argument('--switch', action='append', default=[], metavar='STEP=a,b,c,d,e',
                         help='paper policy only: use this order at construction step STEP (every sampling trial of that step), the --order elsewhere; repeatable')
     parser.add_argument('--worker-venv', action='store_true',
@@ -324,7 +327,8 @@ def run(argv=None, root=None, label=None):
 
     source_name, replicates = case_definition.CASES[args.case]
     original = REPO / source_name
-    source = case_definition.with_workers(case_definition.source_text(args.case), args.workers)
+    source = case_definition.with_vendor_type(
+        case_definition.with_workers(case_definition.source_text(args.case), args.workers), args.vendor_type)
     filter_policy = {'policy': args.policy, 'order': args.order, 'tol': args.tol}
     if args.switch:
         filter_policy['switch'] = case_definition.parse_switch(args.switch)
@@ -367,6 +371,7 @@ def run(argv=None, root=None, label=None):
         "worker_pool": "per_batch" if args.fresh_pool else "persistent",
         "step_writer": not sync_output,
         **({"workers": args.workers} if args.workers else {}),
+        **({"vendor_type": args.vendor_type} if args.vendor_type else {}),
         "seed": "seed_everything() default in source (20)" if args.seed is None else args.seed,
         "python_hash_seed_launcher": 20,
         "placements_limit": args.placements,

@@ -120,6 +120,17 @@ def with_workers(source, workers):
     return text
 
 
+def with_vendor_type(source, vendor_type):
+    """The entry script with build_wall_vendor's vendor_type replaced (e.g. 'full': the whole remaining pile is the
+    candidate set at every step, Wang EJOR 2024 Fig. 16c); None keeps the scene's own sampling."""
+    if vendor_type is None:
+        return source
+    pattern = r"vendor_type\s*=\s*(data_config\['vendor_type'\]|'\w+')"
+    text, replaced = re.subn(pattern, f"vendor_type = {vendor_type!r}", source)
+    assert replaced == 1, replaced
+    return text
+
+
 def code_fingerprint(root=REPO):
     """SHA256 of every executed source file, tracked or not, so a run is tied to its code."""
     files = (
