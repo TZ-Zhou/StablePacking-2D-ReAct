@@ -49,7 +49,7 @@ def selected(meta, a):
     """(index, weighted GDS) the traced policy selects in an event; (None, -1.0) without a feasible
     candidate, as build_wall's construct_one_step returns it."""
     p = meta['policy']
-    s = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'])
+    s = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'], p.get('pick'))
     return (None, -1.0) if s.index is None else (int(s.index), float(s.weighted[s.index, 1]))
 
 
@@ -263,7 +263,7 @@ def check_result(result):
     events, commits = load_result(result)
     for meta, a in events.values():
         p = meta['policy']
-        s = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'])
+        s = select(a['features_raw'], a['weights'], p['policy'], p['order'], p['tol'], p.get('pick'))
         if (-1 if s.index is None else s.index) != int(a['selected']):
             problems.append(f"event {meta['event']}: replay differs from live selection")
     base = pickle.load(open(Path(result) / 'base.pkl', 'rb'))

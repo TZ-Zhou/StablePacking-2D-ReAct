@@ -34,10 +34,19 @@ ALL_ORDERS = tuple(itertools.permutations(range(5)))
 Selection = namedtuple('Selection', 'index stages branch weighted')
 
 
-def select(raw, weights, policy='code_original', order=None, tol=1e-9):
+def select(raw, weights, policy='code_original', order=None, tol=1e-9, pick=None):
+    """pick (paper policy only): a controller's direct choice of one feasible candidate row instead of
+    the cascade; stages is then the LLC>0 gate alone and branch 'pick'. Without pick nothing changes."""
     if order is not None and sorted(order) != [0, 1, 2, 3, 4]:
         raise ValueError(f'order must be a permutation of 0..4, got {order}')
     weights = np.asarray(weights, dtype=float)
+    if pick is not None:
+        if policy != 'paper':
+            raise ValueError(f'a direct pick needs the paper policy, got {policy}')
+        feasible = paper_feasible(raw)
+        if type(pick) is not int or not 0 <= pick < len(raw) or not feasible[pick]:
+            raise ValueError(f'a direct pick must be the row of a feasible candidate, got {pick!r}')
+        return Selection(pick, [np.flatnonzero(feasible)], 'pick', raw * weights)
     if policy == 'code_original':
         # The author's matmul: a non-finite value in any column spreads to the whole row (0*NaN).
         weighted = np.matmul(raw, np.diag(weights))
@@ -90,6 +99,11 @@ def _code_original(filters_matrix_ori, filters_matrix, filter_order):
     stages.append(result_4)
     return result_4[np.argmax(
         filters_matrix[result_4, 3]+filters_matrix[result_4, 0]+filters_matrix[result_4, 2]+filters_matrix[result_4, 1]+filters_matrix[result_4, 4])], stages, 'full'
+
+
+def paper_feasible(raw):
+    """Rows the paper policy can select: LLC > 0 and all five filter scores finite (its stage 0)."""
+    return (raw[:, 3] > 0) & np.isfinite(raw[:, :5]).all(axis=1)
 
 
 def _paper(raw, weighted, order, tol):
@@ -155,7 +169,8 @@ def controlled_policy(policy, controller, context):
 
     The controller gets a read-only copy of the base policy and detached copies of the selection
     inputs (detached_inputs) and returns a mapping equal to the base in every key but 'order', whose
-    order is a permutation of 0..4 given as ints. Afterwards the base policy object, the real
+    order is a permutation of 0..4 given as ints, and optionally 'pick': the row of a feasible
+    candidate to place instead of what the cascade selects (None: no pick). Afterwards the base policy object, the real
     inputs, the global numpy and Python RNGs (they drive stone sampling) and every global setting
     of utils.constant (rebound by a setter or edited in place) must be unchanged. Anything else
     raises. This catches mistakes; it is not a sandbox for in-process code.
@@ -182,8 +197,12 @@ def controlled_policy(policy, controller, context):
         raise RuntimeError('filter controller changed the selection inputs')
     if dict(policy) != base:
         raise RuntimeError('filter controller changed the base policy')
-    if not isinstance(new, Mapping) or set(new) != set(base) or any(not _same(new[k], base[k]) for k in base if k != 'order'):
-        raise ValueError(f'a filter controller may change only the order: {base} -> {new}')
+    if not isinstance(new, Mapping) or set(new) - {'pick'} != set(base) or any(not _same(new[k], base[k]) for k in base if k != 'order'):
+        raise ValueError(f'a filter controller may change only the order and add a pick: {base} -> {new}')
+    pick = new.get('pick')
+    if pick is not None:  # a direct choice: select() checks it is a feasible row and ignores the order
+        select(np.asarray(context['features_raw']), context['weights'], 'paper', None, base['tol'], pick)
+        return {**base, 'pick': pick}
     order = new['order']
     if order is base['order']:
         return policy
