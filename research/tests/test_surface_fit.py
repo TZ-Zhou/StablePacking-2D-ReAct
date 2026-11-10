@@ -315,5 +315,27 @@ class Timing(unittest.TestCase):
         self.assertTrue((table.drop(columns="stones_left").to_numpy() >= 0).all())
 
 
+class HScores(unittest.TestCase):
+    def test_reference_width_is_the_quarter_quantile_of_narrow_sides(self):
+        remaining = [sf.stone_poses(np.ones((r, c), bool)) for r, c in [(2, 9), (4, 9), (6, 9), (8, 9), (10, 9)]]
+        self.assertEqual(sf.reference_width(remaining), 4)
+        self.assertEqual(sf.reference_width([]), 1)
+
+    def test_a_flat_top_beats_a_slit_on_h2b(self):
+        stones = [sf.stone_poses(np.ones((10, 10), bool))]
+        flat, slit = np.full(30, 20), np.array([20] * 12 + [0] * 6 + [20] * 12)
+        self.assertGreater(sf.h_scores(flat, 0, stones)["H2b"], sf.h_scores(slit, 0, stones)["H2b"])
+        self.assertEqual(sf.h_scores(flat, 0, stones)["H0_unlevel"], 0.0)
+
+    def test_h4a_puts_unplaced_stones_before_height_and_height_before_void(self):
+        self.assertGreater(sf.h4a_score(0, 10**5 - 1, 10**7 - 1), sf.h4a_score(1, 0, 0))
+        self.assertGreater(sf.h4a_score(0, 5, 10**7 - 1), sf.h4a_score(0, 6, 0))
+        self.assertGreater(sf.h4a_score(0, 5, 3), sf.h4a_score(0, 5, 4))
+
+    def test_no_stone_left(self):
+        scores = sf.h_scores(np.array([5, 5, 9]), 3, [])
+        self.assertEqual((scores["H3b"], scores["H2b"]), (0.0, -(4 + 4 + 3)))
+
+
 if __name__ == "__main__":
     unittest.main()

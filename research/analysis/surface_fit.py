@@ -16,6 +16,9 @@ IGNORE_VALUE = 255  # the frame: top row and both side columns
 CONTACT_TOLERANCE = 2  # px between a stone's bottom and the skyline that still counts as contact
 GOOD_VOID_RATIO = 0.25  # sealed void / stone area of a seat worth counting; recorded placements: median 0.17
 VOID_WEIGHT = 1.0  # px of height one px of mean sealed void costs when ranking seats
+NARROW_QUANTILE = 0.25  # H2b: pocket width from the remaining stones' narrow sides
+H4A_HEIGHT_UNIT = 10**7  # H4a packing: a sealed void stays below 10**7 px, a wall below 10**5 px high
+H4A_UNPLACED_UNIT = 10**12
 
 
 class Pose(NamedTuple):
@@ -139,6 +142,35 @@ def rollout(s, remaining):
         s, sealed = place(s, seat[1], seat[2], seat[3])
         sealed_total += sealed
     return int(s.max()), unplaced, sealed_total
+
+
+def reference_width(remaining):
+    """H2b's pocket width: the 25th percentile of the remaining stones' narrow sides, 1 (no pocket) without stones."""
+    if not remaining:
+        return 1
+    narrow = [min(len(pose.bottom) for pose in poses) for poses in remaining]
+    return max(1, round(float(np.quantile(narrow, NARROW_QUANTILE))))
+
+
+def h4a_score(unplaced, height, void):
+    """H4a as one number, larger is better: fewer unplaced stones first, then a lower wall, then less sealed void
+    (each term stays far below the next one's unit)."""
+    return -float(unplaced * H4A_UNPLACED_UNIT + height * H4A_HEIGHT_UNIT + void)
+
+
+def h_scores(s_new, sealed, remaining):
+    """C4's h of one placement (docs/plans/preregistration.md), larger is better: H2b, H3b, H4a, and H0's unlevel.
+
+    s_new is the skyline after the placement, sealed the void it left under the placed stone, remaining the poses of
+    every stone still to place.
+    """
+    height, unplaced, void = rollout(s_new, remaining)
+    return dict(
+        H2b=float(envelope_h(s_new, sealed, reference_width(remaining))),
+        H3b=fit_scores(s_new, remaining)["scarcity"],
+        H4a=h4a_score(unplaced, height, void),
+        H0_unlevel=-float(s_new.max() - s_new.mean()),
+    )
 
 
 def rollout_best_fit(s, remaining):

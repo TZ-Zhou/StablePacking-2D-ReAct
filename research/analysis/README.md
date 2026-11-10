@@ -18,6 +18,7 @@
 | `batch_tables.py` | 從一個 batch 資料夾（`runs/batch/<名稱>/`）建每牆、每步與去重表，寫到 `research/datasets/<名稱>/` |
 | `myopia_report.py` | 由上述表重算研究結論裡的 Temporal myopia 數字 |
 | `surface_fit.py` | 「剩餘石頭和新頂面還配不配」的候選 heuristic（純函式，未接進控制器） |
+| `placement_h.py` | C4：一個 batch 每次放置後的 H2b、H3b、H4a（事先登記的 h），寫到 `research/datasets/<名稱>-h/` |
 | `surface_fit_check.py` | 垂直落下模型與實際放置的比對，以及各 heuristic 的耗時 |
 
 ## 使用
