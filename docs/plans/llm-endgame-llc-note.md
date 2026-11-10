@@ -24,7 +24,7 @@
 
 `pick-1`、`pick-2` 的提示文字不變（測試比對 SHA-256），舊紀錄照舊重播。
 
-**實作**（付費前做，不動 `build_wall.py`）：pick 控制器的 spec 加一個布林值 `llc_note`，只能和 `lookahead: true` 一起用；為 true 時觀察版本是 `pick-3`。預設是 false，舊紀錄的 spec 不變。批次等級 `+pick_safe` 不受影響。harness 另開一個研究名稱 `llc-note-walls`（loopback 用 `llc-note-walls-loopback`）。
+**實作**（付費前做，不動 `build_wall.py`）：pick 控制器的 spec 加一個布林值 `llc_note`，只能和 `lookahead: true` 一起用；為 true 時觀察版本是 `pick-3`。預設是 false，舊紀錄的 spec 不變。批次等級 `+pick_safe` 不受影響。harness 另開兩個研究名稱 `llc-note-walls`、`llc-control-walls`（loopback 各加 `-loopback`）。
 
 ## 狀態
 
@@ -56,13 +56,20 @@
 1. 單元測試：`pick-1`、`pick-2` 的提示 SHA-256 不變；`pick-3` 只比 `pick-2` 多上面那一段；`llc_note` 不和 `lookahead: true` 一起時，spec 會被拒絕。
 2. 舊牆不變：重蓋 factorial、arena、lookahead-arena 各 1 面，和原本完全相同；第 3 步與修法 2 的 18 面付費牆，控制器檢查仍是 PASS。
 3. 對手牆：414 面都是 `PROCESS_PASS`，閘門 G1 和 G2 都通過（定義見 `docs/plans/endgame-arena.md`）。
-4. loopback：9 面牆在本機假伺服器上走完整個 harness，判讀程式從頭到尾跑通。
+4. loopback：兩批各 9 面牆在本機假伺服器上走完整個 harness，判讀程式（含 (f)、(g)、(h)）從頭到尾跑通。
 
 ## 付費測試（另外批准）
 
-**LLM**　與修法 2 相同（`gpt-6.1-terra`，effort low，不重試，`lookahead: true`，`max_tool_calls` 4），只加 `llc_note: true`。
+兩批，都在上面 9 個狀態，各 9 面：
 
-**上限**　每面牆最多 40 個請求、100k tokens、US$0.20；整批最多 9 面、360 個請求、900k tokens、**US$2**。修法 2 整批花了 US$0.47，這次提示只多一段，估計差不多。
+- **加這段**（研究名稱 `llc-note-walls`）：與修法 2 相同（`gpt-6.1-terra`，effort low，不重試，`lookahead: true`，`max_tool_calls` 4），只加 `llc_note: true`，觀察版本 `pick-3`。
+- **對照，不加這段**（研究名稱 `llc-control-walls`）：設定與修法 2 完全相同，觀察版本 `pick-2`。
+
+兩批的差別只有 SYSTEM 那一段。
+
+**上限**　每面牆最多 40 個請求、100k tokens、US$0.20；每批最多 9 面、360 個請求、900k tokens、**US$2**，兩批合計最多 US$4。修法 2 一批花了 US$0.47，估計兩批合計約 US$1。
+
+**順序**　兩批交錯建牆：依狀態表的順序，每個狀態先建對照、再建加這段，這樣兩批承受相同的 API 狀況。
 
 **判定**（依序，只判定一次）
 
@@ -71,6 +78,15 @@
   - (f) 和 `pick_safe` 比：至少 5 個狀態中，LLM 結局的四項 z 平均不低於 `pick_safe` 的結局，而且放下的石頭不少於 `pick_safe`。
 - 結果寫成「繼續」、「停止直接選」或「沒有顯示殘局貢獻」三者之一。
 
+**這段提示的效果**（另一個結論，只判定一次）　每個狀態比較加這段與對照的牆：
+
+- (g) 至少 7 個狀態中，加這段的平均 z 高於對照（嚴格大於），而且放下的石頭不比對照少；
+- (h) 加這段的牆，「沒選 LLC 最高的安全候選」的決策數合計少於對照。
+
+(g) 和 (h) 都成立，寫成「這段提示有幫助」；只有 (h) 成立，寫成「LLM 改變了選法，但牆沒有顯示變好」；其他情況寫成「沒有顯示這段提示的效果」。另外報告每個狀態兩批的平均 z 差、`F_LR` z 差與其平均。
+
+對照批也照 (a)–(f) 判讀一次，當作修法 2 在新狀態上的重做，只報告，不影響上面兩個結論。
+
 **另外報告**（探索性，不進判定）
 
 - 每個狀態 LLM 和 `pick_safe` 的四項 z 差，特別是 `F_LR`。
@@ -78,8 +94,8 @@
 - 最高 LLC 並列的決策中，LLM 選在並列之內的比例，以及和 `pick_safe` 選得不同的次數。
 - 修法 2 報告的各項（工具使用次數、選的候選會不會讓某塊石頭變 0，以及在 `random`、`random_safe` 結局中的百分位）。
 
-**限制**　這批牆和修法 2 用的是不同狀態，所以「加了這段提示有沒有幫助」只能和 `pick_safe` 對照，不能直接和修法 2 的 LLM 比。結果只當探索：仍然只有 `TH_T80`、只有開發種子，而且只能看一步。
+**限制**　每個狀態每批只有一面牆，同一個狀態重跑時 LLM 也可能選得不同，所以 (g) 的差別含有 LLM 本身的變異。結果只當探索：仍然只有 `TH_T80`、只有開發種子，而且只能看一步。
 
 ## 紀錄
 
-開始、結束時間與檢查結果寫進 `runs/batch/factorial-log.csv`；每個狀態的表寫到 `runs/batch/llm-endgame-llc-note-th80.csv`。
+開始、結束時間與檢查結果寫進 `runs/batch/factorial-log.csv`；每個狀態的表寫到 `runs/batch/llm-endgame-llc-note-th80.csv`（兩批並列）。
