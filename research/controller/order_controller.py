@@ -274,16 +274,21 @@ def tool_table(info, label):
 
 SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_drop': 0.2},
                  'react': {'llm': None, 'tool_feedback': True, 'max_tool_calls': 4, 'max_decisions': 25,
-                           'llm_timeout': 60.0, 'max_llm_failures': 3}}
+                           'llm_timeout': 60.0, 'max_llm_failures': 3},
+                 'pick': {'llm': None, 'max_tool_calls': 3, 'max_decisions': 10, 'llm_timeout': 60.0, 'max_llm_failures': 3}}
 # max_total_tokens, max_cost_usd, observation_version, first_step (react, optional): only in specs that
 # set them, so earlier walls keep their spec; observation_version 1 (the default) or 2 (Observer,
 # SYSTEM_V2, TOOLS_V2); first_step: decision points of earlier steps are skip:before_first_step
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
-             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'}}
-WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}}  # the rest of a react spec is the client's
+             'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'},
+             'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd'}}
+# the rest of an LLM spec is the client's
+WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}, 'pick': {'max_tool_calls', 'llm_timeout'}}
+LLM_KINDS = ('react', 'pick')  # pick: research/controller/pick.py, a direct choice of an endgame candidate
 SOURCES = {'null': {'null'}, 'random': {'random', 'matched_random', 'matched_random:not_matched'},
            'rule': {'rule:scarcity', 'rule:llc_drop', 'rule:none'},
            'react': {'llm', 'fallback:llm_timeout', 'fallback:llm_error', 'fallback:no_valid_commit'}}
+SOURCES['pick'] = SOURCES['react']
 LLM_FAILURES = {'fallback:llm_timeout', 'fallback:llm_error'}
 REPLY_KEYS = {'order', 'source', 'prompt_sha256', 'react', 'transcripts', 'restart'}
 
@@ -316,7 +321,7 @@ def validate_spec(spec):
     built to validate its parameters (it has no side effects); a ReAct policy and its LLM client
     are not: they exist only in the worker (make_policy runs there)."""
     spec = full_spec(spec)
-    if spec['kind'] != 'react':
+    if spec['kind'] not in LLM_KINDS:
         make_policy(spec)
     else:
         llm_identity(spec['llm'])
@@ -401,38 +406,52 @@ class ControllerClient:
         self.observer = Observer(version=observation_version(self.spec_))
         self.sink, self.ledger, self.calls = sink or write_record, ledger or write_ledger, 0
         self.request_failures = self.llm_decisions = self.tokens = self.unknown_usage = 0
-        self.cost_usd, self.api = 0.0, self.spec_['kind'] == 'react' and self.spec_['llm'].get('kind') == 'api'
+        self.cost_usd, self.api = 0.0, self.spec_['kind'] in LLM_KINDS and self.spec_['llm'].get('kind') == 'api'
         if hasattr(transport, 'log'):
             transport.log = self.ledger
 
     def spec(self):
         return self.spec_
 
-    def ask(self, obs, info):
-        spec, base = self.spec_, info['base']
-        if spec['kind'] == 'react':
-            if spec.get('first_step') is not None and obs['step'] < spec['first_step']:
-                return base, {'source': 'skip:before_first_step'}
-            if self.request_failures >= spec['max_llm_failures']:
-                return base, {'source': 'skip:llm_unavailable'}
-            if self.llm_decisions >= spec['max_decisions']:
-                return base, {'source': 'skip:wall_budget'}
-            if self.api and self.unknown_usage:
-                return base, {'source': 'skip:usage_unknown'}
-            if spec.get('max_total_tokens') is not None and self.tokens >= spec['max_total_tokens']:
-                return base, {'source': 'skip:token_budget'}
-            if spec.get('max_cost_usd') is not None and self.cost_usd >= spec['max_cost_usd']:
-                return base, {'source': 'skip:cost_budget'}
-            self.llm_decisions += 1
+    def request_of(self, obs, info):
+        """(request, record fields) of a decision point: the observation, the base order and the tool table."""
         tools = tool_table(info, self.observer.label)
         digest = {'tool_table_sha256': hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()}
-        request = {'observation': obs, 'base_order': key(base), 'orders': tools}
-        if spec['kind'] == 'react' and (spec.get('max_total_tokens') is not None or spec.get('max_cost_usd') is not None):
+        return {'observation': obs, 'base_order': key(info['base']), 'orders': tools}, digest
+
+    def keep(self, info):
+        """The decision of a skip or a fallback: the base order."""
+        return info['base']
+
+    def reply_problem(self, reply, base):
+        return reply_problem_of(reply, self.spec_['kind'], key(base))
+
+    def decision(self, reply):
+        return parse_order(reply['order']), {k: v for k, v in reply.items() if k not in ('order', 'restart')}
+
+    def ask(self, obs, info):
+        spec, base, keep = self.spec_, info['base'], self.keep(info)
+        if spec['kind'] in LLM_KINDS:
+            if spec.get('first_step') is not None and obs['step'] < spec['first_step']:
+                return keep, {'source': 'skip:before_first_step'}
+            if self.request_failures >= spec['max_llm_failures']:
+                return keep, {'source': 'skip:llm_unavailable'}
+            if self.llm_decisions >= spec['max_decisions']:
+                return keep, {'source': 'skip:wall_budget'}
+            if self.api and self.unknown_usage:
+                return keep, {'source': 'skip:usage_unknown'}
+            if spec.get('max_total_tokens') is not None and self.tokens >= spec['max_total_tokens']:
+                return keep, {'source': 'skip:token_budget'}
+            if spec.get('max_cost_usd') is not None and self.cost_usd >= spec['max_cost_usd']:
+                return keep, {'source': 'skip:cost_budget'}
+            self.llm_decisions += 1
+        request, digest = self.request_of(obs, info)
+        if spec['kind'] in LLM_KINDS and (spec.get('max_total_tokens') is not None or spec.get('max_cost_usd') is not None):
             request['budget'] = {'tokens_left': None if spec.get('max_total_tokens') is None else spec['max_total_tokens'] - self.tokens,
                                  'usd_left': None if spec.get('max_cost_usd') is None else round(spec['max_cost_usd'] - self.cost_usd, 6)}
 
         def settle(status, reply):  # before the transport cleans up: the ledger line comes first
-            problem = reply_problem_of(reply, spec['kind'], key(base)) if status == 'ok' else None
+            problem = self.reply_problem(reply, base) if status == 'ok' else None
             if problem:  # the transport then ends the worker that produced it, its policy state with it
                 status, reply = 'worker_protocol_error', problem
             self.ledger({'type': 'request', 'event': self.calls, **{k: obs[k] for k in ('step', 'phase', 'sample_trial', 'side')},
@@ -445,7 +464,7 @@ class ControllerClient:
         if status != 'ok':
             self.request_failures += 1
             self.unknown_usage += self.api  # an API call of the decision may have been sent
-            return base, {'source': f'fallback:{status}', 'error': reply, **digest}
+            return keep, {'source': f'fallback:{status}', 'error': reply, **digest}
         self.request_failures += reply['source'] in LLM_FAILURES
         if self.api:
             from research.controller import llm_api
@@ -455,11 +474,12 @@ class ControllerClient:
             self.unknown_usage += spent['unknown']
         else:
             self.tokens += tokens_of(reply)
-        return parse_order(reply['order']), {**{k: v for k, v in reply.items() if k not in ('order', 'restart')}, **digest}
+        choice, fields = self.decision(reply)
+        return choice, {**fields, **digest}
 
     def warm_worker(self):
         """Start a policy worker without an LLM before the first stone; react keeps starting at its first request."""
-        if self.spec_["kind"] != "react" and hasattr(self.transport, "warm"):
+        if self.spec_["kind"] not in LLM_KINDS and hasattr(self.transport, "warm"):
             self.transport.warm()
 
     def __call__(self, policy, ctx):
@@ -828,9 +848,19 @@ class ReActPolicy:
             return {'ok': True, 'order': order}, order
         return request['orders'][order], None
 
+    def view(self, obs):
+        """The observation of the first message: outcomes only through list_order_outcomes."""
+        return {k: v for k, v in obs.items() if k != 'outcomes'}
+
+    def answer(self, request, choice):
+        """The reply's decision: the committed order, the base order for a fallback (choice None)."""
+        return {'order': request['base_order'] if choice is None else choice}
+
+    def problem(self, reply, request):
+        return reply_problem(reply, self.tools)
+
     def decide(self, request):
-        obs, base = request['observation'], request['base_order']
-        view = {k: v for k, v in obs.items() if k != 'outcomes'}  # outcomes only through list_order_outcomes
+        view = self.view(request['observation'])
         messages = [{'role': 'system', 'content': self.system}, {'role': 'user', 'content': json.dumps(view)}]
         steps, transcripts = [], []
         meta = {'prompt_sha256': self.prompt_sha256, 'transcripts': transcripts}
@@ -840,10 +870,10 @@ class ReActPolicy:
             status, reply = self.call_llm(messages, transcripts)
             if status != 'ok':
                 steps.append({'status': status, 'error': reply})
-                return {'order': base, 'source': f'fallback:llm_{status}', **meta, 'react': steps,
+                return {**self.answer(request, None), 'source': f'fallback:llm_{status}', **meta, 'react': steps,
                         **({'restart': True} if status == 'timeout' else {})}
             try:
-                problem = reply_problem(reply, self.tools)
+                problem = self.problem(reply, request)
             except Exception as error:  # the validator must never decide by crashing
                 problem = f'unreadable reply: {error_text(error)}'
             said = reply if isinstance(reply, dict) else {'reply': reply}
@@ -855,8 +885,8 @@ class ReActPolicy:
             messages += [{'role': 'assistant', 'content': json.dumps(said)},
                          {'role': 'tool', 'name': str(said.get('tool')), 'content': json.dumps(feedback)}]
             if order is not None:
-                return {'order': order, 'source': 'llm', **meta, 'react': steps}
-        return {'order': base, 'source': 'fallback:no_valid_commit', **meta, 'react': steps}
+                return {**self.answer(request, order), 'source': 'llm', **meta, 'react': steps}
+        return {**self.answer(request, None), 'source': 'fallback:no_valid_commit', **meta, 'react': steps}
 
 
 class ReplayLLM:
@@ -919,6 +949,9 @@ class MockLLM:
         self.mode, self.model, self.params = mode, f'mock:{mode}', {}
 
     def __call__(self, messages, tools):
+        if self.mode.startswith('pick_'):  # a direct pick (research/controller/pick.py)
+            from research.controller import pick
+            return pick.mock_reply(self.mode, messages)
         failure, _, step = self.mode.partition('@')
         if step and len(messages) == 2 and json.loads(messages[1]['content'])['step'] == int(step):
             if failure == 'hang':
@@ -963,6 +996,9 @@ def make_policy(spec):
         llm = llm_api.APILLM(llm)  # its client is built here, in the process that calls it
     else:
         llm = MockLLM(llm['mode'])
+    if spec['kind'] == 'pick':
+        from research.controller import pick
+        return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']})
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 
@@ -977,12 +1013,15 @@ def make_controller(spec, sink=None, transport='process', ledger=None, worker_ve
     if isinstance(spec, dict) and spec.get('kind') == 'endgame':  # a direct pick in the endgame, no transport
         from research.controller import endgame
         return endgame.EndgamePicker(spec, sink)
-    validate_spec(spec)
+    spec = validate_spec(spec)
+    client = ControllerClient
+    if spec['kind'] == 'pick':
+        from research.controller.pick import PickClient as client
     if transport == 'inline':
-        return ControllerClient(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
+        return client(spec, InlineTransport(lambda: make_policy(spec)), sink, ledger)
     from research.controller import worker as controller_worker
     python = controller_worker.worker_python() if worker_venv else None
-    client = ControllerClient(spec, controller_worker.ProcessTransport(full_spec(spec), python=python), sink, ledger)
+    client = client(spec, controller_worker.ProcessTransport(spec, python=python), sink, ledger)
     if worker_venv:
         from research.controller import llm_api
         for k in llm_api.KEY_ENV.values():
@@ -1031,7 +1070,7 @@ def base_policy(run):
 def refuse_paid(spec, what):
     """Raises if spec's LLM is a paid API: offline work only replays recorded replies (check())."""
     spec = full_spec(spec)
-    if spec['kind'] == 'react' and spec['llm']['kind'] == 'api':
+    if spec['kind'] in LLM_KINDS and spec['llm']['kind'] == 'api':
         from research.controller import llm_api
         if llm_api.paid(spec['llm']):
             raise ValueError(f"{what} never calls a paid API ({spec['llm']['provider']}); check() replays a wall's recorded replies")
@@ -1312,6 +1351,9 @@ def check(result, records=None, spec=None, stopped=None):
     if isinstance(spec, dict) and spec.get('kind') == 'endgame':
         from research.controller import endgame
         return endgame.check(result, records, spec, stopped)
+    if isinstance(spec, dict) and spec.get('kind') == 'pick':
+        from research.controller import pick
+        return pick.check(result, records, spec, stopped)
     base, full, events = base_policy(run), full_spec(spec), list(trace_events(result))
     llm, transport = None, 'inline'
     if full['kind'] == 'react':  # the LLM answers from the records' transcripts, never an API

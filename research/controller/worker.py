@@ -136,7 +136,7 @@ def worker_env(spec, environ=None):
     environ = os.environ if environ is None else environ
     env = {k: environ[k] for k in WORKER_ENV if k in environ}
     llm = spec.get('llm') or {}
-    if spec['kind'] == 'react' and llm.get('kind') == 'api' and llm.get('provider') in ('openai', 'anthropic'):
+    if spec['kind'] in ('react', 'pick') and llm.get('kind') == 'api' and llm.get('provider') in ('openai', 'anthropic'):
         from urllib.parse import urlparse
         from research.controller import llm_api
         for k in (llm_api.KEY_ENV[llm['provider']], llm_api.PAID_GATE):
@@ -303,7 +303,7 @@ class ProcessTransport:
     docstring. target: the worker main (tests pass misbehaving ones); it must be importable by name."""
 
     def __init__(self, spec, timeout=None, start_timeout=120.0, target=serve, reap_timeout=30.0, python=None):
-        react = spec['kind'] == 'react'
+        react = spec['kind'] in ('react', 'pick')  # an LLM policy
         self.spec, self.target, self.start_timeout, self.reap_timeout = json.dumps(spec), target, start_timeout, reap_timeout
         self.python, self.env = python, None if python is None else worker_env(spec)
         self.timeout = timeout or (spec['llm_timeout'] * spec['max_tool_calls'] + 30 if react else 30.0)

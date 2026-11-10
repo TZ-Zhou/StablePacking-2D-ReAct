@@ -21,14 +21,16 @@ from research.storage import case_id as cid
 from research.walls import case_definition
 
 
-def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_runner.run):
-    """One GPT wall (see the module docstring) under the study's lock; returns its report (<case>/llm/report.json)."""
+def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_runner.run, x=None, wall_args=()):
+    """One GPT wall (see the module docstring) under the study's lock; returns its report (<case>/llm/report.json).
+    x: the experiment (gpt_wall.experiment; default the GPT walls); wall_args: run_wall arguments after x.WALL_ARGS."""
     if placements and not loopback:
         raise SystemExit("refused: --placements only for a loopback wall")
-    problems = gpt_wall.preflight(name, seed, after, loopback)
+    x = gpt_wall.experiment(x)
+    problems = gpt_wall.preflight(name, seed, after, loopback, x=x)
     if problems:
         gpt_smoke.refuse(problems)
-    study, lock = gpt_wall.STUDIES[loopback], gpt_wall.lock_of(loopback)
+    study, lock = x.STUDIES[loopback], gpt_wall.lock_of(loopback, x)
     # built before the lock: a git failure here leaves nothing behind
     journal = {
         "state": "started",
@@ -36,12 +38,13 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         "seed": seed,
         "study": study,
         "mode": "loopback mock" if loopback else "paid",
-        "spec": order_controller.full_spec(gpt_wall.SPEC),
-        "limits": gpt_wall.WALL_LIMITS,
-        "experiment_limits": gpt_wall.EXPERIMENT_LIMITS,
-        "max_http_requests": gpt_wall.max_requests(order_controller.full_spec(gpt_wall.SPEC)),
+        "spec": order_controller.full_spec(x.SPEC),
+        "limits": x.WALL_LIMITS,
+        "experiment_limits": x.EXPERIMENT_LIMITS,
+        "max_http_requests": gpt_wall.max_requests(order_controller.full_spec(x.SPEC)),
         "placements": placements,
-        "code_dirty": bool(gpt_wall.code_dirty()),
+        **({"wall_args": list(wall_args)} if wall_args else {}),
+        "code_dirty": bool(gpt_wall.code_dirty(x)),
         "git_head": gpt_wall.head(),
         "worker_venv": case_definition.worker_venv_identity(),
     }
@@ -50,7 +53,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         gpt_wall.write_json(lock, {"run": name, "pid": os.getpid()}, exclusive=True)
     except FileExistsError:
         gpt_smoke.refuse([f"run: {lock} appeared: another run is starting"])
-    problems = gpt_wall.journal_problems(name, after, loopback, holding=True)  # again, under the lock
+    problems = gpt_wall.journal_problems(name, after, loopback, holding=True, x=x)  # again, under the lock
     if problems:
         lock.unlink()
         gpt_smoke.refuse(problems)
@@ -61,13 +64,14 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         gpt_wall.write_json(lock, {"run": name, "pid": os.getpid(), "journal": journal})
         returned = launch(
             [
-                *gpt_wall.WALL_ARGS,
+                *x.WALL_ARGS,
+                *wall_args,
                 "--seed",
                 str(seed),
                 "--timeout",
-                str(gpt_wall.WALL_LIMITS["seconds"]),
+                str(x.WALL_LIMITS["seconds"]),
                 "--controller",
-                json.dumps(gpt_wall.SPEC),
+                json.dumps(x.SPEC),
             ]
             + (["--placements", str(placements)] if placements else [])
         )
@@ -76,14 +80,14 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         files = gpt_smoke.case_records(run)
         # the study lists the case first: from here on a case without a journal blocks too
         gpt_smoke.join_study(
-            study, "gpt-walls", gpt_wall.study_design(loopback), {"case_id": returned["case_id"], "name": name}
+            study, x.STUDY_KIND, gpt_wall.study_design(loopback, x), {"case_id": returned["case_id"], "name": name}
         )
         files.journal.parent.mkdir()
         gpt_wall.write_json(files.journal, journal, exclusive=True)
         written = True
         receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
         ok_status = ("PROCESS_PASS", "STOPPED_AFTER_PLACEMENTS") if placements else ("PROCESS_PASS",)
-        report = gpt_wall.accounting(run, gpt_wall.SPEC, receipt.get("process_status") == "STOPPED_AFTER_PLACEMENTS")
+        report = gpt_wall.accounting(run, x.SPEC, receipt.get("process_status") == "STOPPED_AFTER_PLACEMENTS")
         report["check"] = {
             k: v
             for k, v in order_controller.check(next(run.glob("result_*"))).items()
@@ -103,7 +107,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         report.update(status=receipt["status"], elapsed_seconds=receipt.get("elapsed_seconds"))
         gpt_wall.write_json(files.report, report)
         report["key_scan"] = gpt_smoke.key_scan(run)  # llm/report.json included
-        over = [k for k in ("http_requests", "tokens", "cost_usd") if report[k] > gpt_wall.WALL_LIMITS[k]]
+        over = [k for k in ("http_requests", "tokens", "cost_usd") if report[k] > x.WALL_LIMITS[k]]
         reasons = [
             why
             for why, bad in (
@@ -114,7 +118,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
                 ("requests that may have gone out unrecorded", not report["http_requests_exact"]),
                 ("a worker not reaped", not report["workers_reaped"]),
                 (f"over the wall limits: {over}", over),
-                ("over the time limit", (receipt.get("elapsed_seconds") or 1e9) > gpt_wall.WALL_LIMITS["seconds"]),
+                ("over the time limit", (receipt.get("elapsed_seconds") or 1e9) > x.WALL_LIMITS["seconds"]),
                 ("the key in an output file", report["key_scan"]),
             )
             if bad

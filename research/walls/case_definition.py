@@ -143,6 +143,7 @@ def code_fingerprint(root=REPO):
                 "walls/case_definition.py",
                 "controller/order_controller.py",
                 "controller/endgame.py",
+                "controller/pick.py",
                 "controller/worker.py",
                 "controller/llm_api.py",
                 "walls/check_run.py",
