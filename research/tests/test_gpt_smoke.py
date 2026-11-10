@@ -281,6 +281,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name, args = 'explain_order', {'order': '3-2-0-1-4'}
         if any(t.get('name') == 'commit_pick' for t in body.get('tools') or []):  # a direct pick (pick.py): candidate 0
             name, args = 'commit_pick', {'candidate': '0', 'rationale': 'smoke'}
+            if any(t.get('name') == 'check_after' for t in body['tools']) and not listed:  # lookahead: check it first
+                name, args = 'check_after', {'candidates': '0'}
         data = {'id': f'resp_{n}', 'object': 'response', 'created_at': 1, 'model': gpt_smoke.MODEL, 'status': 'completed', 'error': None,
                 'incomplete_details': None, 'output': [
                     {'type': 'reasoning', 'id': f'rs_{n}', 'summary': [], 'encrypted_content': f'gAAAA-{n}'},

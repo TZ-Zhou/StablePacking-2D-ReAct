@@ -9,6 +9,8 @@ clean committed tree, a price checked within PRICE_MAX_AGE days, one wall at a t
 used once, every earlier wall finished and named with --after, and a wall finished only if its billing is certain.
 Studies: pick-walls (paid) and pick-walls-loopback (a local mock server); no archive.
 """
+import sys
+
 from research.controller import llm_api, order_controller
 from research.llm_walls import gpt_smoke, gpt_wall
 from research.paths import LEGACY_RUNS
@@ -44,17 +46,20 @@ def wall_args(order):
     return ["--order", ",".join(order)]
 
 
-def spec_problems(spec=SPEC):
-    """Why SPEC does not fit WALL_LIMITS (the structural bounds a wall cannot exceed)."""
+def spec_problems(spec=SPEC, x=None):
+    """Why SPEC does not fit WALL_LIMITS (the structural bounds a wall cannot exceed); x: the experiment module whose
+    limits apply (this one by default; research/llm_walls/lookahead_wall.py)."""
+    x = x or sys.modules[__name__]
+    wall, batch = x.WALL_LIMITS, x.EXPERIMENT_LIMITS
     full, llm = order_controller.full_spec(spec), llm_api.full(spec["llm"])
     rules = {"kind pick": full["kind"] == "pick", "max_retries 0": llm["max_retries"] == 0,
-             f"max_decisions x max_tool_calls <= {WALL_LIMITS['http_requests']}":
-                 gpt_wall.max_requests(full) <= WALL_LIMITS["http_requests"],
-             f"max_total_tokens <= {WALL_LIMITS['tokens']}": full["max_total_tokens"] <= WALL_LIMITS["tokens"],
-             f"max_cost_usd <= {WALL_LIMITS['cost_usd']}": full["max_cost_usd"] <= WALL_LIMITS["cost_usd"],
+             f"max_decisions x max_tool_calls <= {wall['http_requests']}":
+                 gpt_wall.max_requests(full) <= wall["http_requests"],
+             f"max_total_tokens <= {wall['tokens']}": full["max_total_tokens"] <= wall["tokens"],
+             f"max_cost_usd <= {wall['cost_usd']}": full["max_cost_usd"] <= wall["cost_usd"],
              "call_bound <= llm_timeout": llm_api.call_bound(llm) <= full["llm_timeout"],
              "max_llm_failures 1": full["max_llm_failures"] == 1,
              f"price {PRICE}": list(llm["price_per_mtok"] or []) == PRICE,
-             f"{EXPERIMENT_LIMITS['walls']} walls x the wall cost <= the batch cost":
-                 EXPERIMENT_LIMITS["walls"] * WALL_LIMITS["cost_usd"] <= EXPERIMENT_LIMITS["cost_usd"]}
+             f"{batch['walls']} walls x the wall cost <= the batch cost":
+                 batch["walls"] * wall["cost_usd"] <= batch["cost_usd"]}
     return [f"spec: needs {rule}" for rule, ok in rules.items() if not ok]

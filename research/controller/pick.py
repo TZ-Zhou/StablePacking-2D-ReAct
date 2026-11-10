@@ -8,6 +8,12 @@ scores, selection.paper_feasible). There the LLM gets every feasible candidate i
 decision, no listing tool) and answers with commit_pick; the wall places that candidate (the base policy plus
 {'pick': row}). A skip or a fallback keeps the cascade of the base order.
 
+With "lookahead": true (docs/plans/llm-endgame-lookahead.md) the observation version is 'pick-2' (the same fields)
+and the LLM also has check_after: for listed candidate ids, the feasible poses each other remaining stone has at the
+next placement if that candidate is placed (build_wall's table, traced as 'after'; the request carries it per
+candidate, so the tool only reads it). check() then also requires each placed candidate's row to equal the next
+selection (endgame.lookahead_problems).
+
 It is the order controller with its own observation, request and reply (PickClient over ControllerClient: the same
 worker, budget, ledger and LLM transcripts; PickPolicy over ReActPolicy: the same LLM call, retries on a rejected
 reply and fallbacks). The observation version is 'pick-1', its own: no filter order, no is_paper or n_orders, no
@@ -45,6 +51,18 @@ SYSTEM = (
     "stones on offer with no feasible candidate now. Nothing about the final wall is known.\n"
     "Compare the main candidates on all five scores and on what they leave for the remaining stones; in the "
     "rationale state each one's main advantages and costs. Finish with commit_pick.")
+LOOKAHEAD = (
+    "Before committing you may call check_after with one or more candidate ids (comma-separated). For each, it "
+    "returns how many feasible poses (0 to 4, at most one per rotation) every other remaining stone would have at the "
+    "very next placement if that candidate were placed now. 0 means that stone could not be placed next; the counts "
+    "can change again after later placements. It gives no scores.\n")
+SYSTEM_LOOKAHEAD = SYSTEM.replace("Compare the main candidates", LOOKAHEAD + "Compare the main candidates")
+assert SYSTEM_LOOKAHEAD.count(LOOKAHEAD) == 1
+CHECK = {"name": "check_after", "description": "For listed candidates: the feasible poses each other remaining stone "
+         "would have at the next placement if that candidate were placed. No scores.",
+         "parameters": {"type": "object", "additionalProperties": False, "required": ["candidates"],
+                        "properties": {"candidates": {"type": "string", "description":
+                                                      "Comma-separated ids of listed candidates, e.g. '0,3'."}}}}
 COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to place.",
           "parameters": {"type": "object", "additionalProperties": False, "required": ["candidate", "rationale"],
                          "properties": {"candidate": {"type": "string", "description": "The id of a listed candidate."},
@@ -52,6 +70,7 @@ COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to 
                                                       "The main advantages and costs of the compared candidates, "
                                                       "and why this one."}}}}
 OBSERVATION_VERSION = "pick-1"
+OBSERVATION_VERSION_LOOKAHEAD = "pick-2"
 REPLY_KEYS = {"pick", "source", "prompt_sha256", "react", "transcripts", "restart"}
 ID_TEXT = re.compile(r"[0-9]{1,4}")
 
@@ -60,8 +79,8 @@ class Observer:
     """The pick observation of a selection: the wall and every feasible candidate, stones labelled in order of first
     sampling (so it is the same under any renaming of the stone ids); also the feasible rows, in candidate id order."""
 
-    def __init__(self):
-        self.labels, self.geometry = {}, None  # geometry: order_controller.rerun's slot, unused
+    def __init__(self, version=OBSERVATION_VERSION):
+        self.labels, self.geometry, self.version = {}, None, version  # geometry: order_controller.rerun's slot, unused
 
     label = oc.Observer.label
 
@@ -78,7 +97,7 @@ class Observer:
                        "scores": {oc.FILTERS[c]: round(float(raw[i, c]), 6) for c in range(5)}}
                       for k, i in enumerate(rows)]
         reachable = {sampled[i % n] for i in rows}
-        obs = {"observation_version": OBSERVATION_VERSION, "step": int(ctx["step"]), "phase": ctx["phase"],
+        obs = {"observation_version": self.version, "step": int(ctx["step"]), "phase": ctx["phase"],
                "sample_trial": int(ctx["sample_trial"]), "side": ctx["side"], "frame": "evaluation",
                "n_remaining": len({int(s) for s in ctx["inventory_ids"]} | set(sampled)),
                "wall_size": {"width": int(wall.shape[1]), "height": int(wall.shape[0])}, "wall": oc.wall_state(wall),
@@ -87,11 +106,12 @@ class Observer:
 
 
 class PickPolicy(oc.ReActPolicy):
-    """ReActPolicy with commit_pick as its only tool and the whole observation in the first message."""
+    """ReActPolicy with commit_pick as its only tool (and check_after with lookahead) and the whole observation in
+    the first message."""
 
-    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0):
+    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
-        self.system, self.tools = SYSTEM, [COMMIT]
+        self.system, self.tools = (SYSTEM_LOOKAHEAD, [CHECK, COMMIT]) if lookahead else (SYSTEM, [COMMIT])
         self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
 
     def view(self, obs):
@@ -105,6 +125,11 @@ class PickPolicy(oc.ReActPolicy):
         if problem:
             return problem
         n, args = len(request["observation"]["candidates"]), reply["arguments"]
+        if reply["tool"] == "check_after":
+            ids = [c.strip() for c in args["candidates"].split(",")]
+            if not all(ID_TEXT.fullmatch(c) and int(c) < n for c in ids) or len(set(map(int, ids))) != len(ids):
+                return f"candidates must be distinct ids of listed candidates, 0 to {n - 1}, got {args['candidates']!r}"
+            return None
         if not (ID_TEXT.fullmatch(args["candidate"].strip()) and int(args["candidate"]) < n):
             return f"candidate must be the id of a listed candidate, 0 to {n - 1}, got {args['candidate']!r}"
         if not args["rationale"].strip():
@@ -112,6 +137,9 @@ class PickPolicy(oc.ReActPolicy):
         return None
 
     def tool(self, name, args, request):
+        if name == "check_after":
+            ids = [str(int(c)) for c in args["candidates"].split(",")]
+            return {"after": {c: request["after"][c] for c in ids}}, None
         return {"ok": True, "candidate": int(args["candidate"])}, int(args["candidate"])
 
 
@@ -133,10 +161,12 @@ class PickClient(oc.ControllerClient):
 
     def __init__(self, spec, transport, sink=None, ledger=None):
         super().__init__(spec, transport, sink, ledger)
-        self.observer, self.n = Observer(), 0
+        self.lookahead = self.spec().get("lookahead", False)  # build_wall computes the check_after table if true
+        self.observer, self.n = Observer(OBSERVATION_VERSION_LOOKAHEAD if self.lookahead else OBSERVATION_VERSION), 0
 
     def request_of(self, obs, info):
-        return {"observation": obs, "base_order": oc.key(info["base"])}, {}
+        after = {"after": info["after"]} if self.lookahead else {}
+        return {"observation": obs, "base_order": oc.key(info["base"]), **after}, {}
 
     def keep(self, info):
         return None
@@ -152,7 +182,12 @@ class PickClient(oc.ControllerClient):
         base, raw = tuple(policy["order"] or oc.PAPER_ORDER), np.asarray(ctx["features_raw"])
         endgame = len(ctx["inventory_ids"]) == 0
         decision_point, self.n = endgame and len(rows) >= 2, len(rows)
-        choice, detail = self.ask(obs, {"base": base}) if decision_point else (None, {"source": "not_a_decision_point"})
+        info = {"base": base}
+        if decision_point and self.lookahead:  # per candidate id: {stone label: feasible poses at the next placement}
+            sampled, after = [int(s) for s in ctx["sampled_ids"]], np.asarray(ctx["after"])
+            info["after"] = {str(k): {self.observer.label(s): int(c) for s, c in zip(sampled, after[i]) if c >= 0}
+                             for k, i in enumerate(rows)}
+        choice, detail = self.ask(obs, info) if decision_point else (None, {"source": "not_a_decision_point"})
         pick = None if choice is None else int(rows[choice])
         cascade = select(raw, ctx["weights"], "paper", base, policy["tol"]).index
         cascade = None if cascade is None else int(cascade)
@@ -172,8 +207,19 @@ class PickClient(oc.ControllerClient):
 def mock_reply(mode, messages):
     """order_controller.MockLLM for a pick (also the 'fake' provider's): pick_llc commits the highest LLC, pick_low_top
     the lowest top (y + height), pick_first id 0; pick_retry first commits an id not listed, then as pick_llc;
-    pick_invalid only ids not listed. Ties go to the lowest id, as in research/controller/endgame.py."""
+    pick_invalid only ids not listed; pick_safe (lookahead) first calls check_after on every candidate, then commits
+    the highest LLC among the safe ones (no remaining stone left at 0), among all if none is. Ties go to the lowest
+    id, as in research/controller/endgame.py."""
     candidates = json.loads(messages[1]["content"])["candidates"]
+    if mode == "pick_safe":
+        told = json.loads(messages[-1]["content"]).get("after") if messages[-1]["role"] == "tool" else None
+        if told is None:
+            ids = ",".join(str(c["id"]) for c in candidates)
+            return {"thought": "check every candidate", "tool": "check_after", "arguments": {"candidates": ids}}
+        safe = [c for c in candidates if 0 not in told[str(c["id"])].values()] or candidates
+        best = max(safe, key=lambda c: (c["scores"]["LLC"], -c["id"]))
+        why = f"candidate {best['id']} (pick_safe, {len(safe)} safe)"
+        return {"thought": why, "tool": "commit_pick", "arguments": {"candidate": str(best["id"]), "rationale": why}}
 
     def commit(c, why):
         return {"thought": why, "tool": "commit_pick", "arguments": {"candidate": str(c), "rationale": why}}
@@ -193,12 +239,13 @@ def mock_reply(mode, messages):
 def check(result, records, spec, stopped=False):
     """The order_controller.check report of a pick wall (see the module docstring); verdict PASS needs the ledger and
     the run manifest."""
+    from research.controller.endgame import lookahead_problems
     from research.walls.check_run import chain_problems
     run = oc.run_of(result)
     receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
     base, full, events = oc.base_policy(run), oc.full_spec(spec), list(oc.trace_events(result))
     llm = oc.ReplayLLM(records, *oc.llm_identity(full["llm"]))
-    worker = {k: full[k] for k in oc.WORKER_KEYS["pick"]}
+    worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False)}
     transport = oc.ReplayedFailures(lambda: PickPolicy(llm, **worker), records)
     expected, ledger = [], []
     client = PickClient(spec, transport, expected.append, ledger.append)
@@ -208,7 +255,7 @@ def check(result, records, spec, stopped=False):
     finally:
         transport.close()
     expected = json.loads(json.dumps(expected, default=lambda v: v.item()))
-    problems = chain_problems(result, events, stopped)
+    problems = chain_problems(result, events, stopped) + lookahead_problems(events)
     if not len(events) <= len(records) <= len(events) + int(stopped):  # ponytail: a trailing record is not validated
         problems.append(f"{len(records)} records for {len(events)} selections")
     plain_base = json.loads(json.dumps(base))

@@ -16,7 +16,8 @@ A filter policy is an order of the five filters ("30214" is the paper's), "rando
 point, from a stream of orders that is the case's own) or "code_original" (Wang's code). Without the key the levels
 are "random" and every order from "01234" to "43210"; batch_example.yaml writes all of them out. An order followed by
 "+<mode>" ("30214+llc", "30214+random:7") builds with that order and research/controller/endgame.py's controller of
-that mode (a random mode names its seed), which picks directly once the inventory is empty.
+that mode (a random mode names its seed), which picks directly once the inventory is empty; "+pick_safe" builds
+with the pick controller of research/controller/pick.py, its mock LLM pick_safe and the check_after tool (lookahead).
 
 The plan is drawn once and written to plan.csv, numbered from 1; a draw equal to an earlier one would build the same
 wall again and is left out, so a plan can have fewer cases than `samples`.
@@ -33,7 +34,7 @@ import numpy as np
 import yaml
 from scipy.stats import qmc
 
-from research.controller import endgame
+from research.controller import endgame, order_controller
 from research.paths import BATCH_RUNS
 from research.storage.case_id import SCENES
 
@@ -65,7 +66,8 @@ def filter_policy_problem(level):
         return 'write an order in quotes, e.g. "01234"'
     if "+" in level:
         try:
-            endgame.full_spec(endgame_spec(level))
+            spec = endgame_spec(level)
+            endgame.full_spec(spec) if spec["kind"] == "endgame" else order_controller.validate_spec(spec)
         except ValueError as error:
             return f"an order with an endgame controller, e.g. 30214+llc or 30214+random:7: {error}"
         level = level.partition("+")[0]
@@ -76,6 +78,8 @@ def filter_policy_problem(level):
 def endgame_spec(level):
     """The endgame controller spec of a level "<order>+<mode>[:<seed>]"."""
     mode, _, seed = level.partition("+")[2].partition(":")
+    if mode == "pick_safe":
+        return {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, "lookahead": True}
     return {"kind": "endgame", "mode": mode, **({"seed": int(seed)} if seed.isdigit() else {})}
 
 

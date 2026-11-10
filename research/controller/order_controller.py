@@ -80,7 +80,8 @@ def context_from_trace(meta, a):
                             'sampled_ids': a['sampled_ids'].tolist(), 'inventory_ids': a['inventory_ids'].tolist(),
                             'x': a['x'], 'y': a['y'], 'distance': a['distance'],
                             'features_raw': a['features_raw'], 'weights': a['weights'],
-                            'width': a['width'], 'height': a['height']})
+                            'width': a['width'], 'height': a['height'],
+                            **({'after': a['after']} if 'after' in a else {})})
 
 
 def plain(v):
@@ -281,7 +282,8 @@ SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_dro
 # SYSTEM_V2, TOOLS_V2); first_step: decision points of earlier steps are skip:before_first_step
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
              'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'},
-             'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd'}}
+             'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd', 'lookahead'}}
+# lookahead (pick, optional, only in specs that set it): the check_after tool (pick.py)
 # the rest of an LLM spec is the client's
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}, 'pick': {'max_tool_calls', 'llm_timeout'}}
 LLM_KINDS = ('react', 'pick')  # pick: research/controller/pick.py, a direct choice of an endgame candidate
@@ -329,6 +331,8 @@ def validate_spec(spec):
             raise ValueError(f"observation_version is 1 or 2, got {spec['observation_version']!r}")
         if 'first_step' in spec and not (type(spec['first_step']) is int and spec['first_step'] >= 1):
             raise ValueError(f"first_step is a step number >= 1, got {spec['first_step']!r}")
+        if type(spec.get('lookahead', False)) is not bool:
+            raise ValueError(f"lookahead is true or false, got {spec['lookahead']!r}")
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -998,7 +1002,8 @@ def make_policy(spec):
         llm = MockLLM(llm['mode'])
     if spec['kind'] == 'pick':
         from research.controller import pick
-        return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']})
+        return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']},
+                               lookahead=params.get('lookahead', False))
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 
