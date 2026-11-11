@@ -16,6 +16,8 @@ research/llm_walls/whole_confirm_wall.py (docs/plans/llm-whole-wall-confirm.md, 
 study whole-al-walls), built a stage at a time: run --limit N builds the next N walls and stops.
 --lessons: the whole-wall picks with the lessons of an induction in their prompt, research/llm_walls/lessons_wall.py
 (docs/plans/llm-lessons.md, study lessons-walls); each wall's spec carries the lessons of its seed's fold.
+--repeats: the whole-wall picks of whole_wall.py again, 4 on each TH block, research/llm_walls/repeat_wall.py
+(docs/plans/llm-pick-repeats.md, study pick-repeats), built a round at a time.
 
 run builds the states of pick_wall.STATES in order, one wall at a time, each named pick-s<seed>-<order> and naming the
 one before it (--after); states with a finished wall are skipped, so a run that stopped resumes. It stops at the first
@@ -34,6 +36,7 @@ from research.llm_walls import (
     llc_note_wall,
     lookahead_wall,
     pick_wall,
+    repeat_wall,
     whole_al_wall,
     whole_confirm_wall,
     whole_wall,
@@ -96,6 +99,7 @@ def main(argv=None):
         p.add_argument("--confirm", action="store_true")
         p.add_argument("--al", action="store_true")
         p.add_argument("--lessons", action="store_true")
+        p.add_argument("--repeats", action="store_true")
         p.add_argument("--llc", choices=(*LLC, "both") if cmd == "run" else tuple(LLC))
         if cmd == "run":
             p.add_argument("--confirm-paid", action="store_true")
@@ -103,8 +107,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if (a.confirm or a.al) and not a.whole or a.confirm and a.al:
         ap.error("--confirm or --al goes with --whole")
-    x = LLC.get(a.llc) or (lessons_wall if a.lessons else whole_al_wall if a.al else whole_confirm_wall if a.confirm
-                           else whole_wall if a.whole else lookahead_wall if a.lookahead else pick_wall)
+    x = LLC.get(a.llc) or (repeat_wall if a.repeats else lessons_wall if a.lessons else whole_al_wall if a.al
+                           else whole_confirm_wall if a.confirm else whole_wall if a.whole
+                           else lookahead_wall if a.lookahead else pick_wall)
     if a.cmd == "ledger":
         shown = ("state", "reasons", "spend", "gpt_complete", "case_id", "seed", "wall_args")
         print(json.dumps({"spent": gpt_wall.spent(a.loopback, x), "limits": x.EXPERIMENT_LIMITS,
