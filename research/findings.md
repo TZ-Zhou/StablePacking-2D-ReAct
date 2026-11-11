@@ -331,3 +331,53 @@ at least 3 of the 4 walls are not below Wang. Plan and rule: `docs/plans/llm-who
   −0.096; walls not below Wang per metric: `F_SF` 7, `F_AH` 8, `F_AV` 6, `F_LR` 5. Mean percentile: LLM 0.68, Wang 0.43.
 - Limits: one LLM wall per state; all five seeds of the factorial are now used, none is held out for the `TH` scenes;
   `TH` scenes only.
+
+## Whole wall: run-to-run spread of the LLM pick (`TH_T80`, `TH_T20`, 40 walls, US$6.07)
+The whole-wall pick unchanged (pick-4: the same prompt, model, tools and limits) built 4 more times on each of the 10
+`TH` blocks (seeds 313, 484, 717, 720, 761), a round at a time (one wall on every block, then the next round), each
+wall once, within 2.4 hours of one day. A measurement fixed before any paid request, with no pass or fail: how much the
+LLM's walls differ on the same stones, and the blocks a later comparison needs. Every spread below comes from the 40
+new walls; the walls built once before are only placed against them. Plan: `docs/plans/llm-pick-repeats.md`; table
+`research/studies/pick-repeats/llm-repeats.csv`.
+
+| Seed | Scene | Mean z, rounds 1–4 | Mean | SD | Distinct pick sequences | First split (decision) | Stones LLM / Wang | Not below Wang | Wang mean z | Earlier pick-4 wall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 313 | `TH_T80` | 0.72, −0.10, 0.72, 0.72 | 0.52 | 0.41 | 4 | 6 | 18 / 18 | 3/4 | −0.05 | 0.72 |
+| 313 | `TH_T20` | −0.35, −0.64, −0.41, −0.12 | −0.38 | 0.21 | 4 | 7 | 21–22 / 22 | 1/4 | −0.15 | 0.11 |
+| 484 | `TH_T80` | −0.01, −0.01, 0.48, −0.01 | 0.11 | 0.25 | 2 | 12 | 18 / 18 | 4/4 | −0.72 | −0.01 |
+| 484 | `TH_T20` | 1.51, 0.89, 0.51, 0.12 | 0.76 | 0.59 | 4 | 3 | 21–23 / 19 | 4/4 | −0.48 | 0.53 |
+| 717 | `TH_T80` | 0.36, 0.54, 0.54, 0.08 | 0.38 | 0.22 | 3 | 2 | 18 / 18 | 0/4 | 0.97 | −0.05 |
+| 717 | `TH_T20` | 0.82, 0.82, 0.82, 0.82 | 0.82 | 0.00 | 1 | none | 21 / 20 | 4/4 | −0.67 | −0.77 |
+| 720 | `TH_T80` | 0.19, 0.85, 0.19, 0.00 | 0.31 | 0.37 | 3 | 5 | 18 / 18 | 3/4 | 0.02 | 0.85 |
+| 720 | `TH_T20` | 1.36, 0.77, 1.06, 1.06 | 1.06 | 0.24 | 3 | 6 | 22–23 / 20 | 4/4 | 0.31 | 0.92 |
+| 761 | `TH_T80` | 0.00, 0.19, 1.01, −0.38 | 0.21 | 0.59 | 4 | 1 | 18 / 18 | 1/4 | 0.45 | 0.29 |
+| 761 | `TH_T20` | 0.20, 0.02, 0.87, −0.32 | 0.19 | 0.50 | 4 | 5 | 19–22 / 22 | 2/4 | −0.42 | 0.51 |
+- All 40 walls finished, every decision the LLM's, every request the unchanged pick-4 prompt, the first offer equal to
+  Wang's; 1,557 requests, US$6.07.
+- The same stones and prompt give different walls: 32 distinct pick sequences among the 40 (31 distinct walls: two
+  walls of 313 `TH_T80` take the same picks in another order). One block gives the same wall 4 times (717 `TH_T20`),
+  five blocks 4 different sequences. Two repeats first differ between the 1st and the 12th decision.
+- Pooled within-block SD (30 degrees of freedom) of the mean z: 0.384, 95% interval 0.307–0.513 (chi-square, normal
+  walls assumed); `TH_T80` 0.390, `TH_T20` 0.377. Per metric, in z: `F_SF` 0.375, `F_AH` 0.797, `F_AV` 0.788, `F_LR`
+  0.797 (0.637–1.066). A single metric moves twice as much as the mean of the four.
+- Stones: `TH_T80` always 18 of 18; `TH_T20` 19 to 23 of 23, pooled SD 0.84.
+- The same prompt against itself: of the 60 pairs of repeats of a block, 40 are decided by the rule used for the
+  comparisons (not below: complete, mean z not lower, no fewer stones) and 20 tie. A comparison of one wall per block
+  is decided on two blocks in three by the spread alone.
+- Not below Wang: 26 of the 40 walls; per block 0 to 4 of 4. With one wall per block the count of 10 has expectation
+  6.5 and SD 1.0, so the 7 of 10 of the walls built once and an 8 of 10 are not told apart.
+- Mean z per round: 0.48, 0.33, 0.58, 0.20 (SE of a round mean about 0.12): no drift shown within the day.
+- The walls built once before, described only: the earlier pick-4 wall minus the mean of its block's repeats averages
+  −0.086 (SE 0.136) over the 10 blocks; the largest gap is 717 `TH_T20`, 1.59 below four identical repeats. The
+  lessons walls (`docs/plans/llm-lessons.md`; pick-4 plus lessons induced from the other seeds' walls, read "no
+  difference seen", 6 wins, 3 losses, 1 tie against pick-4, p = 0.254) average +0.088 (SE 0.136), `F_LR` +0.169 (SE
+  0.282). That reading is not reopened.
+- Blocks a paired comparison of means needs (one-sided 0.05, power 0.80, one wall per arm and block, the same spread in
+  both arms and the same effect in every block, so a lower bound): for a true difference of 0.5 in mean z 8 blocks (14
+  at the interval's upper end), for 0.25, 30 (53), for 1.0, 2. For `F_LR`: 0.5 needs 32 blocks, 1.0 needs 8. The sign
+  test of wins costs more: 13 blocks for 0.5 in mean z at 0.05 and 8 at 0.20, before the ties.
+- The smallest true difference 10 blocks find, with 1, 2, 4 walls per arm and block: mean z 0.43, 0.30, 0.21; `F_LR`
+  0.89, 0.63, 0.44. A comparison of one wall per block on the 10 blocks, as the lessons walls', finds a difference in
+  mean z of 0.43 or more; 4 walls per arm halve it.
+- Limits: 4 walls a block, so only the pooled SD is usable; one day, one prompt (pick-4), one model and effort, `TH`
+  scenes only; z is not normal and the stone count is an integer, so intervals and block counts are approximate.
