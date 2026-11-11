@@ -11,7 +11,9 @@ research/llm_walls/llc_control_wall.py or llc_note_wall.py (docs/plans/llm-endga
 the two batches in turn, state by state, the control first, and stops at the first wall that is not finished.
 --whole: the whole-wall picks of research/llm_walls/whole_wall.py (docs/plans/llm-whole-wall-pick.md, study
 whole-walls), one per (seed, scene); --whole --confirm: the same on the held-out seeds, the walls of
-research/llm_walls/whole_confirm_wall.py (docs/plans/llm-whole-wall-confirm.md, study whole-confirm-walls).
+research/llm_walls/whole_confirm_wall.py (docs/plans/llm-whole-wall-confirm.md, study whole-confirm-walls);
+--whole --al: the same on the Almeida walls, research/llm_walls/whole_al_wall.py (docs/plans/llm-whole-wall-al.md,
+study whole-al-walls), built a stage at a time: run --limit N builds the next N walls and stops.
 
 run builds the states of pick_wall.STATES in order, one wall at a time, each named pick-s<seed>-<order> and naming the
 one before it (--after); states with a finished wall are skipped, so a run that stopped resumes. It stops at the first
@@ -29,6 +31,7 @@ from research.llm_walls import (
     llc_note_wall,
     lookahead_wall,
     pick_wall,
+    whole_al_wall,
     whole_confirm_wall,
     whole_wall,
 )
@@ -86,13 +89,15 @@ def main(argv=None):
         p.add_argument("--lookahead", action="store_true")
         p.add_argument("--whole", action="store_true")
         p.add_argument("--confirm", action="store_true")
+        p.add_argument("--al", action="store_true")
         p.add_argument("--llc", choices=(*LLC, "both") if cmd == "run" else tuple(LLC))
         if cmd == "run":
             p.add_argument("--confirm-paid", action="store_true")
+            p.add_argument("--limit", type=int, help="build at most this many walls")
     a = ap.parse_args(argv)
-    if a.confirm and not a.whole:
-        ap.error("--confirm goes with --whole")
-    x = LLC.get(a.llc) or (whole_confirm_wall if a.confirm else whole_wall if a.whole else
+    if (a.confirm or a.al) and not a.whole or a.confirm and a.al:
+        ap.error("--confirm or --al goes with --whole")
+    x = LLC.get(a.llc) or (whole_al_wall if a.al else whole_confirm_wall if a.confirm else whole_wall if a.whole else
                            lookahead_wall if a.lookahead else pick_wall)
     if a.cmd == "ledger":
         shown = ("state", "reasons", "spend", "gpt_complete", "case_id", "seed", "wall_args")
@@ -115,8 +120,11 @@ def main(argv=None):
     if not (a.loopback or a.confirm_paid):
         gpt_smoke.refuse(["run: a paid wall needs --confirm-paid (or --loopback for a local mock server)"])
     xs = tuple(LLC.values()) if a.llc == "both" else (x,)
-    reports = run_pair(a.loopback, xs=xs) if a.llc == "both" else run(a.loopback, x=x)
+    reports = run_pair(a.loopback, xs=xs) if a.llc == "both" else run(a.loopback, x=x, limit=a.limit)
     print(json.dumps(reports, indent=1))
+    if a.limit and a.llc != "both":  # a stage: its walls only
+        journals = gpt_wall.journals(a.loopback, x)
+        return 0 if all(journals[r["name"]].get("state") == "finished" for r in reports) else 1
     return 0 if all((gpt_wall.journals(a.loopback, x).get(x.name_of(*s)) or {}).get("state") == "finished"
                     for x in xs for s in x.STATES) else 1
 

@@ -90,7 +90,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         report = gpt_wall.accounting(run, x.SPEC, receipt.get("process_status") == "STOPPED_AFTER_PLACEMENTS")
         report["check"] = {
             k: v
-            for k, v in order_controller.check(next(run.glob("result_*"))).items()
+            for k, v in order_controller.check(next(run.glob("result*"))).items()
             if k
             in (
                 "ok",

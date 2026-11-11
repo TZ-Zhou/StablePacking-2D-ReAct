@@ -289,7 +289,7 @@ def mock_reply(mode, messages):
 def check(result, records, spec, stopped=False):
     """The order_controller.check report of a pick wall (see the module docstring); verdict PASS needs the ledger and
     the run manifest."""
-    from research.controller.endgame import lookahead_problems
+    from research.controller.endgame import commits_of, lookahead_problems
     from research.walls.check_run import chain_problems
     run = oc.run_of(result)
     receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
@@ -306,7 +306,7 @@ def check(result, records, spec, stopped=False):
     finally:
         transport.close()
     expected = json.loads(json.dumps(expected, default=lambda v: v.item()))
-    problems = chain_problems(result, events, stopped) + lookahead_problems(events)
+    problems = chain_problems(result, events, stopped) + lookahead_problems(events, commits_of(result))
     if not len(events) <= len(records) <= len(events) + int(stopped):  # ponytail: a trailing record is not validated
         problems.append(f"{len(records)} records for {len(events)} selections")
     plain_base = json.loads(json.dumps(base))

@@ -17,11 +17,13 @@ Ties go to the lowest row. Every call writes a record to trace/controller.jsonl 
 
 check() re-executes the receipt's spec on the traced inputs (order_controller.context_from_trace): the records must
 equal the re-execution, each traced policy must be the base plus the record's pick, replaying select with it must
-give the traced selection, every traced check_after row of a placed pose must equal the next selection's feasible
-poses (lookahead_problems), and the trace chain and run manifest must be complete (the order controller's checks).
+give the traced selection, every traced check_after row of a placed pose must equal the feasible poses at the
+selections that follow the placement (lookahead_problems), and the trace chain and run manifest must be complete (the
+order controller's checks).
 """
 
 import json
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import rankdata
@@ -96,21 +98,41 @@ class EndgamePicker:
         return {**policy, "pick": pick} if acts else policy
 
 
-def lookahead_problems(events):
+def commits_of(result):
+    """The attempts of a traced result directory (trace/commits.jsonl)."""
+    lines = (Path(result) / "trace" / "commits.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def lookahead_problems(events, commits=None):
     """Where a traced check_after table is not what the wall did next: the row of the placed pose must give, for each
     remaining stone, its feasible poses at the next selection (and -1 for no stone left). A table traced with stones
-    still in the inventory (pick.py's whole_wall) is compared on the stones the next selection samples again."""
+    still in the inventory (pick.py's whole_wall) is compared on the stones the next selection samples again.
+    commits (trace/commits.jsonl): the placed pose is the chosen side's selection of a 'placed' attempt, and 'next' is
+    every selection on that side before the following placement, as they all see the wall it left (a two-sided,
+    sample-twice wall; the table of a probe or of the side not taken is not checked: nothing shows its wall).
+    Without commits every selection is taken as placed and followed by the next one (a wall built from one side)."""
+    if commits is None:
+        pairs = [(e, [n]) for e, n in zip(events, events[1:])] + [(events[-1], [])] if events else []
+    else:
+        by_id = {meta["event"]: (meta, a) for meta, a in events}
+        placed = [c for c in commits if c["outcome"] == "placed"]
+        last = [max(v["event"] for v in c["sides"].values() if v["event"] is not None) for c in placed]
+        pairs = []
+        for c, lo, hi in zip(placed, last, [*last[1:], float("inf")]):
+            e = by_id[c["sides"][c["chosen_side"]]["event"]]
+            pairs.append((e, [n for n in events if lo < n[0]["event"] <= hi and n[0]["side"] == e[0]["side"]]))
     problems = []
-    for (meta, a), nxt in zip(events, [*events[1:], None]):
+    for (meta, a), nxt in pairs:
         if "after" not in a or int(a["selected"]) < 0:
             continue
         ids, row = [int(s) for s in a["sampled_ids"]], a["after"][int(a["selected"])]
         told = {s: int(c) for s, c in zip(ids, row) if c >= 0}
         seen = {}
-        if nxt is not None:
-            n_ids = [int(s) for s in nxt[1]["sampled_ids"]]
-            feasible = paper_feasible(np.asarray(nxt[1]["features_raw"]))
-            seen = {s: int(feasible[k::len(n_ids)].sum()) for k, s in enumerate(n_ids)}
+        for _, n in nxt:
+            n_ids = [int(s) for s in n["sampled_ids"]]
+            feasible = paper_feasible(np.asarray(n["features_raw"]))
+            seen.update({s: int(feasible[k::len(n_ids)].sum()) for k, s in enumerate(n_ids)})
         if len(a["inventory_ids"]):
             told, seen = ({s: c for s, c in d.items() if s in told and s in seen} for d in (told, seen))
         if told != seen:
@@ -136,7 +158,7 @@ def check(result, records, spec, stopped=False):
     for meta, a in events:
         picker(dict(base), context_from_trace(meta, a))
     expected = json.loads(json.dumps(expected))
-    problems = chain_problems(result, events, stopped) + lookahead_problems(events)
+    problems = chain_problems(result, events, stopped) + lookahead_problems(events, commits_of(result))
     if len(records) != len(events):
         problems.append(f"{len(records)} records for {len(events)} selections")
     for r, x, (meta, a) in zip(records, expected, events):
