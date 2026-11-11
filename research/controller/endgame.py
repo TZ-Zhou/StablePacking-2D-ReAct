@@ -98,7 +98,8 @@ class EndgamePicker:
 
 def lookahead_problems(events):
     """Where a traced check_after table is not what the wall did next: the row of the placed pose must give, for each
-    remaining stone, its feasible poses at the next selection (and -1 for no stone left)."""
+    remaining stone, its feasible poses at the next selection (and -1 for no stone left). A table traced with stones
+    still in the inventory (pick.py's whole_wall) is compared on the stones the next selection samples again."""
     problems = []
     for (meta, a), nxt in zip(events, [*events[1:], None]):
         if "after" not in a or int(a["selected"]) < 0:
@@ -110,6 +111,8 @@ def lookahead_problems(events):
             n_ids = [int(s) for s in nxt[1]["sampled_ids"]]
             feasible = paper_feasible(np.asarray(nxt[1]["features_raw"]))
             seen = {s: int(feasible[k::len(n_ids)].sum()) for k, s in enumerate(n_ids)}
+        if len(a["inventory_ids"]):
+            told, seen = ({s: c for s, c in d.items() if s in told and s in seen} for d in (told, seen))
         if told != seen:
             problems.append(f"event {meta['event']} (step {meta['step']}): check_after {told}, next selection {seen}")
     return problems

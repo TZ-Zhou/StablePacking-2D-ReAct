@@ -474,8 +474,10 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             filters_matrix_ori = filters_matrix.copy()
             selection_weights = get_selection_weights()
             weights = [selection_weights[name] for name in FEATURE_NAMES]
-            _after = None  # the check_after table, for a controller that asks in the endgame (empty inventory)
-            if getattr(get_filter_controller(), 'lookahead', False) and not vendor.stones \
+            # the check_after table, for a controller that asks: in the endgame (empty inventory), or at every
+            # selection if its lookahead is 'always' (docs/plans/llm-whole-wall-pick.md)
+            _after, _look = None, getattr(get_filter_controller(), 'lookahead', False)
+            if _look and (_look == 'always' or not vendor.stones) \
                     and paper_feasible(filters_matrix_ori).sum() >= 2:
                 if from_right:
                     raise NotImplementedError('the lookahead is defined for walls built from the left')

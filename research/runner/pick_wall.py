@@ -9,6 +9,8 @@
 lookahead-walls) instead of pick_wall.py's (study pick-walls), the same commands. --llc control|note: the walls of
 research/llm_walls/llc_control_wall.py or llc_note_wall.py (docs/plans/llm-endgame-llc-note.md); run --llc both builds
 the two batches in turn, state by state, the control first, and stops at the first wall that is not finished.
+--whole: the whole-wall picks of research/llm_walls/whole_wall.py (docs/plans/llm-whole-wall-pick.md, study
+whole-walls), one per (seed, scene).
 
 run builds the states of pick_wall.STATES in order, one wall at a time, each named pick-s<seed>-<order> and naming the
 one before it (--after); states with a finished wall are skipped, so a run that stopped resumes. It stops at the first
@@ -19,7 +21,15 @@ stablepacking-baseline environment.
 import argparse
 import json
 
-from research.llm_walls import gpt_smoke, gpt_wall, llc_control_wall, llc_note_wall, lookahead_wall, pick_wall
+from research.llm_walls import (
+    gpt_smoke,
+    gpt_wall,
+    llc_control_wall,
+    llc_note_wall,
+    lookahead_wall,
+    pick_wall,
+    whole_wall,
+)
 from research.runner import gpt_wall as runner
 
 
@@ -72,11 +82,12 @@ def main(argv=None):
         p = sub.add_parser(cmd)
         p.add_argument("--loopback", action="store_true")
         p.add_argument("--lookahead", action="store_true")
+        p.add_argument("--whole", action="store_true")
         p.add_argument("--llc", choices=(*LLC, "both") if cmd == "run" else tuple(LLC))
         if cmd == "run":
             p.add_argument("--confirm-paid", action="store_true")
     a = ap.parse_args(argv)
-    x = LLC.get(a.llc) or (lookahead_wall if a.lookahead else pick_wall)
+    x = LLC.get(a.llc) or (whole_wall if a.whole else lookahead_wall if a.lookahead else pick_wall)
     if a.cmd == "ledger":
         shown = ("state", "reasons", "spend", "gpt_complete", "case_id", "seed", "wall_args")
         print(json.dumps({"spent": gpt_wall.spent(a.loopback, x), "limits": x.EXPERIMENT_LIMITS,
