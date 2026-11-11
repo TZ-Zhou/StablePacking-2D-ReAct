@@ -1,0 +1,187 @@
+{
+  "schema_version": 2,
+  "case_id": "20261111-2038-TH_T20-pc1",
+  "scene": "TH_T20",
+  "parent": null,
+  "started": "2026-11-11T20:38:27+08:00",
+  "case": "thangavelu-noise20",
+  "run_id": "20261111-2038-TH_T20-pc1",
+  "source": "Tests/Thangavelu/00_run.py",
+  "source_sha256": "57e9e03d20e8cb9b5838744b862097f36e13a58025a9f7a2826cf44912744032",
+  "source_edits": [
+    [
+      "/data/stones_noise_80_labels.png",
+      "/data/stones_noise_20_labels.png"
+    ]
+  ],
+  "staged_sha256": "99be2823866d2617a3bab877a37920a600b042c02060d34996ca1e0e585398d0",
+  "filter_policy": {
+    "policy": "paper",
+    "order": [
+      3,
+      0,
+      2,
+      1,
+      4
+    ],
+    "tol": 1e-09
+  },
+  "controller": {
+    "kind": "pick",
+    "llm": {
+      "kind": "api",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "max_tokens": 4096,
+      "effort": "low",
+      "request_timeout_s": 60.0,
+      "max_retries": 0,
+      "retry_backoff_s": 0.0,
+      "price_per_mtok": [
+        1.0,
+        5.0,
+        2.5,
+        0.05
+      ]
+    },
+    "llm_timeout": 90.0,
+    "max_tool_calls": 4,
+    "max_decisions": 25,
+    "max_total_tokens": 250000,
+    "max_cost_usd": 0.5,
+    "max_llm_failures": 1,
+    "lookahead": true,
+    "whole_wall": true
+  },
+  "worker_venv": {
+    "manifest": "research/validation/worker-venv.local.json",
+    "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+    "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+    "version": "3.10.22",
+    "sdks": {
+      "openai": "3.46.0"
+    },
+    "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f"
+  },
+  "trace": true,
+  "worker_pool": "persistent",
+  "step_writer": false,
+  "seed": 720,
+  "python_hash_seed_launcher": 20,
+  "placements_limit": 0,
+  "git_head": "411589faedae44ee27adf503d804514706b6a760",
+  "git_branch": "feat/llm-pick-repeats",
+  "git_status": [
+    "?? research/studies/pick-repeats/"
+  ],
+  "git_tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_sha256": {
+    "Stonepacker2D/__archive__/first.py": "9f2372c249bfbd7be3d71bdc34e9eed63cf3898b5328888c82e8d6fc7af23e7f",
+    "Stonepacker2D/__init__.py": "74db6efd354818603958a6c3db59610eeecc6f3b309b58e639b0a2acee296930",
+    "Stonepacker2D/entity/__init__.py": "54628fd0c893cf5f54f76fcc14a8cb2371b482e113091f82f033a16a8efdc35e",
+    "Stonepacker2D/entity/base.py": "705e0b572e2ed78dac8986ba718e81ce7ad39b021dcbd9df8b459bc8f8d2ef4d",
+    "Stonepacker2D/entity/brick.py": "6cc37ad67e71217f0908e18d879c8570238555754bd8353cb6723daea07708f8",
+    "Stonepacker2D/entity/stone.py": "312252c1896cc0b5686746448d3d9ecd3862702a7fbd904e6d4a15104e681622",
+    "Stonepacker2D/entity/transform.py": "e10ef72defab963045da4e2149cd748f893bba041ca6839d739d90934a6c2006",
+    "Stonepacker2D/entity/wedge.py": "7b705520e9cbcb5ed027f221a059c7e1fff2add1230d9efdd4ec127e30bcce96",
+    "Stonepacker2D/evaluate/__init__.py": "ddc8f53fc98b2eb4e844c904ca19d1ab95752336a7cf04a513283a389a95f64d",
+    "Stonepacker2D/evaluate/ksteps.py": "f98f7cec8fb01f096ec1a7d5a2fde75fb21c3085607b0a3fa5672b6a3a0e09ec",
+    "Stonepacker2D/evaluate/local_void.py": "5795ebf0a52d2a1525cf05bd067eab44022fbf1b32394e2aac756ff677932971",
+    "Stonepacker2D/evaluate/tilting_angle.py": "408a86aedfe48a1d70fef4af4e47303edcafa723f155eaeff868378aa5a22385",
+    "Stonepacker2D/stack/__init__.py": "359e7b78b830b577e26c654e0d57d38ea156d8c805e6395332f0ed33863f16a6",
+    "Stonepacker2D/stack/build_wall.py": "2e2da2c0d9e8a3d10d9f3b93ec21333f20244902c8bbdecc4a5efc5ec8190980",
+    "Stonepacker2D/stack/place_stone.py": "d479672d0c76c317155d89acc7ce6d651afbd89c9abae7ddad264a6777b9c9a5",
+    "Stonepacker2D/stack/selection.py": "db6db054e6b72e54935b78630bbd94849d473f958b497949bb3a2d31b3196ceb",
+    "Stonepacker2D/stack/vendor.py": "985955a67db06ce3d3ffd075a3a1ec05d0b8550079a79665ddc075bfba55aec2",
+    "Stonepacker2D/utils/__init__.py": "32666c79b2f8b4b44ae684cb8c536496c78ff03b66a6cf5ad5554ae2bd15148a",
+    "Stonepacker2D/utils/constant.py": "ba8bccb8c4fc8fa80f02a25ba23c6ecb3843a28cf71b2a1a40012d8cb9421bcd",
+    "Stonepacker2D/utils/kine_2d.py": "d1eb529490d37005f39af3025013337425be749fabe5dd401761e6afe641aba8",
+    "Stonepacker2D/utils/logger.py": "54795c8da89645cfabac9cbe1f7d7b8471f15974447c4a76c539aca68da39103",
+    "Stonepacker2D/utils/plot.py": "42e0a27003ab8cfb350c741f56a1ebddc45b05d5661627ad723a76dfd91cf129",
+    "Stonepacker2D/utils/region_memo.py": "a80e22e35acbff94ab155d876d2ea36d6d63c0ee22a4266617c9d328935b14c5",
+    "research/paths.py": "53dd9d272528431bb9f09e2d6d06cfad4c2724288b1f83bdb33958d277457fe4",
+    "research/runner/run_wall.py": "e420f50c84615fc4f0f42cc3f06af0d11ae07298262278cd3178d1999e5669af",
+    "research/walls/case_definition.py": "265921667cb9f515d7b0a8369715b19ae835d12fd35ad046d48338a33ba56394",
+    "research/controller/order_controller.py": "72d1bdf45070495951a695eb49d3a9051f1a1fc195426b0dcdd01c94b77b593f",
+    "research/controller/endgame.py": "b79580285b1cd537676e5f8719e7f751056c636fd0022745e75a81f70bd02d9c",
+    "research/controller/pick.py": "9c37ef4bdcbba05027fb0a00a47ef804da78c9213edf239fb163134f190e0b65",
+    "research/controller/worker.py": "fac94821e51797b457d3090fc91a6e2afd47ee81b14130e5dc23ac2d2f4a7997",
+    "research/controller/llm_api.py": "056970d26c2f138db70cd55fd8531a45c21334258e3f593cbbabb5477114d1a9",
+    "research/walls/check_run.py": "8b1efefb269c57d380ac1c664fef1a0d5e495664e55d524a153ebd0fc4ede35f",
+    "research/analysis/unplaced_stones.py": "890ceb8c63079b827e2b16830fff00b7dad49e89afa6061d48f34c5f81a28d88",
+    "research/runner/campaign.py": "444d38f8e84fd4861e3b27b5e83170bc93f6fa157265566ebc10cf5ff06b82ea",
+    "research/walls/campaign.py": "e3f0b4af0eca63dc441d0e5eed5ee45ec521d8617e5860b236f851dd32f1c822",
+    "research/walls/wall_metrics.py": "fbad7bffd33a581200c70cdf92657f3e62b00e45a22624185123b78495b75153",
+    "research/storage/case_id.py": "f091716eb21eae05b839c3409445f86fe2ea8fc9868aa2def8bddd26c9229110",
+    "research/storage/case_index.py": "b6276fe8c29657b36653cc7aa853dcaa87f81f5e06f340f540436fc682d3c1cf",
+    "research/validation/windows_case_runtime.py": "358de93891ee22e3428c8f345aa49c6143832f85e626a3157d03dc931db2c5be",
+    "research/validation/step_writer.py": "2b08030746aaa9ea02d45a17c28e22fd1a1d045e219d6ddccfe7dd786c6621e7"
+  },
+  "timeout_seconds": 3600,
+  "status": "PROCESS_PASS",
+  "command": [
+    "C:\\Users\\user\\miniconda3\\envs\\stablepacking-baseline\\python.exe",
+    "-B",
+    "-u",
+    "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-2038-TH_T20-pc1\\00_run.py"
+  ],
+  "spec_sha256": "b531ae85538c4e2567acb1ca2b9974299814aad652b157c13e6d086e4435ce6f",
+  "pid": 49048,
+  "manifest": {
+    "result_20261111-203833_wall0/trace/commits.jsonl": "8066e3b3aab66b8c23b22f8fc28455083389a870057b1646f3e333b6a9afd701",
+    "result_20261111-203833_wall0/trace/controller.jsonl": "4f16a074dc96007c32b30f68c5f2dab7395036b40476b8a2613d6f35dbadd644",
+    "result_20261111-203833_wall0/trace/e00000.npz": "868268df58ab1fa6c63cbff71f8b3fdc57efb4d8e30aabbe29ccfd86b11de89f",
+    "result_20261111-203833_wall0/trace/e00001.npz": "8aacbe2ea9d99e24f4169777069c9f72dfda1cf676ddf3e5599c2cde10486dcd",
+    "result_20261111-203833_wall0/trace/e00002.npz": "5b0e321c955b80478fd6d508e98da5f934514df4de4e26bc64d2beaa131365a1",
+    "result_20261111-203833_wall0/trace/e00003.npz": "2c68a9e0c4bf8d11d2e6a78bae8d2f849cd89c2c4ea5b75f05ceb3157382f587",
+    "result_20261111-203833_wall0/trace/e00004.npz": "2fc2e289466f1eb5602b4c3ecb65ec548ffd1ab441b6a4e711dd4b42a64da05d",
+    "result_20261111-203833_wall0/trace/e00005.npz": "d32d7f5fa011837681aa41c096b63c99dd43ba7d2d3fda9614c2f4a9ef798691",
+    "result_20261111-203833_wall0/trace/e00006.npz": "7dd29719dcbce19561253b8e3fc86c844a11e1599ac3a2ee7b40d02c605c7e89",
+    "result_20261111-203833_wall0/trace/e00007.npz": "c3c730ba5064d293450b2226dcaf6ff164c0b95ca83048755be84974f3f3785c",
+    "result_20261111-203833_wall0/trace/e00008.npz": "db8cfd034ba2566b175d7f440226ee473a2e3679cbb5e9ba8a9225aca1cf65c9",
+    "result_20261111-203833_wall0/trace/e00009.npz": "628aad865ba8141c4eb840bfb34f746e845dbd6982e15e99fbdfa1f8ecdb19c4",
+    "result_20261111-203833_wall0/trace/e00010.npz": "13d431455cc07632a3ee3c5158b918de4b9a8999ac9364499b97624befa15760",
+    "result_20261111-203833_wall0/trace/e00011.npz": "a56e10496350dfb7346a236dbcc93553ff4f57dcaaa254a02b598daa70d0ca5b",
+    "result_20261111-203833_wall0/trace/e00012.npz": "5df00fa634b3870a8e7359d81640018fb373ebb96483e0edb7db83c6c85195f7",
+    "result_20261111-203833_wall0/trace/e00013.npz": "ea2fd327c9527a7c793013a09fef1f6fa9e4c52364098a559cf7c78cf71e27bd",
+    "result_20261111-203833_wall0/trace/e00014.npz": "6a519e0eae06ffc662ad2ee2d173863a20921db53e860d1d588379ea14a946c6",
+    "result_20261111-203833_wall0/trace/e00015.npz": "a86c8540f169bf347f60f907c3c25f38cd0b349a37e4b2a5415ce67bfa77b5c0",
+    "result_20261111-203833_wall0/trace/e00016.npz": "d9919a87c74ed4815f404047c02b47a8f7e920c73dea024797da0dcbb121fd76",
+    "result_20261111-203833_wall0/trace/e00017.npz": "b7a6dfeb40b7fa3c4e09ec89fe669cf9a77b1172f4b1dd8a7d42de52c3a47b0c",
+    "result_20261111-203833_wall0/trace/e00018.npz": "24413ae6b5de00e54552f95776b41a2e4a6184f28c4d764bba0c18e8fa1d3445",
+    "result_20261111-203833_wall0/trace/e00019.npz": "2f971edc52df400e11ad3ff65a01c564ceb8354fe0732eef53a6e42e46964df2",
+    "result_20261111-203833_wall0/trace/e00020.npz": "01c44d0f92a3d63360ebf1d74fb2f8cc0f3f2a5c7c19974ee264e51afba18735",
+    "result_20261111-203833_wall0/trace/e00021.npz": "b41ced65be8f3f0d132e8f92fa4d94588f0534c962b126d5cac7cb2d823d096a",
+    "result_20261111-203833_wall0/trace/e00022.npz": "4662d87366f6dc9fc2c2a1e34ac97e5ea407245173674574a119dc02928fbd7b",
+    "result_20261111-203833_wall0/trace/transport.jsonl": "568404a4d554ea1dcd1299b724ad310a97fb83297529d215750416910a246e1b",
+    "result_20261111-203833_wall0/decisions.txt": "cb6ad842842c2e0268be09c264ac42386c79bc079577a67a960b4292c09c3981",
+    "result_20261111-203833_wall0/base.pkl": "807e91692d8d0cd029ba2af33d18314759ac6498bb33fd6e4d6a7da1786e95b6"
+  },
+  "process_status": "PROCESS_PASS",
+  "termination": null,
+  "returncode": 0,
+  "elapsed_seconds": 219.578,
+  "committed_placements": 23,
+  "trace_check": {
+    "files": 23,
+    "ok": true,
+    "problems": [],
+    "workers": {
+      "workers_started": 1,
+      "workers_closed": 1
+    },
+    "controller": [
+      {
+        "ok": true,
+        "verdict": "PASS",
+        "records": 23,
+        "decision_points": 23,
+        "switches": 8,
+        "incomplete": []
+      }
+    ]
+  },
+  "derived": {
+    "steps.csv": 23
+  }
+}
