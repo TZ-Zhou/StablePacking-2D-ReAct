@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "id": "safe-top-walls",
+  "kind": "safe-top-walls",
+  "created": "2026-11-11T23:26:09+08:00",
+  "design": {
+    "runner": "research/llm_walls/safe_top_wall.py",
+    "mode": "paid",
+    "run_wall": [
+      "--policy",
+      "paper",
+      "--order",
+      "3,0,2,1,4",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 25,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 250000,
+      "max_cost_usd": 0.5,
+      "lookahead": true,
+      "whole_wall": true,
+      "safe_top_llc": true
+    },
+    "wall_limits": {
+      "http_requests": 100,
+      "tokens": 250000,
+      "cost_usd": 0.5,
+      "seconds": 3600
+    },
+    "experiment_limits": {
+      "walls": 40,
+      "http_requests": 4000,
+      "tokens": 10000000,
+      "cost_usd": 20.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-2322-TH_T80-pc1",
+      "name": "safetop-s313-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-2326-TH_T20-pc1",
+      "name": "safetop-s313-th-t20-r1"
+    },
+    {
+      "case_id": "20261111-2330-TH_T80-pc1",
+      "name": "safetop-s484-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-2334-TH_T20-pc1",
+      "name": "safetop-s484-th-t20-r1"
+    },
+    {
+      "case_id": "20261111-2338-TH_T80-pc1",
+      "name": "safetop-s717-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-2342-TH_T20-pc1",
+      "name": "safetop-s717-th-t20-r1"
+    },
+    {
+      "case_id": "20261111-2346-TH_T80-pc1",
+      "name": "safetop-s720-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-2350-TH_T20-pc1",
+      "name": "safetop-s720-th-t20-r1"
+    },
+    {
+      "case_id": "20261111-2354-TH_T80-pc1",
+      "name": "safetop-s761-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-2358-TH_T20-pc1",
+      "name": "safetop-s761-th-t20-r1"
+    },
+    {
+      "case_id": "20261112-0002-TH_T80-pc1",
+      "name": "safetop-s313-th-t80-r2"
+    },
+    {
+      "case_id": "20261112-0007-TH_T20-pc1",
+      "name": "safetop-s313-th-t20-r2"
+    },
+    {
+      "case_id": "20261112-0011-TH_T80-pc1",
+      "name": "safetop-s484-th-t80-r2"
+    },
+    {
+      "case_id": "20261112-0015-TH_T20-pc1",
+      "name": "safetop-s484-th-t20-r2"
+    },
+    {
+      "case_id": "20261112-0019-TH_T80-pc1",
+      "name": "safetop-s717-th-t80-r2"
+    },
+    {
+      "case_id": "20261112-0024-TH_T20-pc1",
+      "name": "safetop-s717-th-t20-r2"
+    },
+    {
+      "case_id": "20261112-0028-TH_T80-pc1",
+      "name": "safetop-s720-th-t80-r2"
+    },
+    {
+      "case_id": "20261112-0032-TH_T20-pc1",
+      "name": "safetop-s720-th-t20-r2"
+    },
+    {
+      "case_id": "20261112-0036-TH_T80-pc1",
+      "name": "safetop-s761-th-t80-r2"
+    },
+    {
+      "case_id": "20261112-0040-TH_T20-pc1",
+      "name": "safetop-s761-th-t20-r2"
+    },
+    {
+      "case_id": "20261112-0044-TH_T80-pc1",
+      "name": "safetop-s313-th-t80-r3"
+    },
+    {
+      "case_id": "20261112-0048-TH_T20-pc1",
+      "name": "safetop-s313-th-t20-r3"
+    },
+    {
+      "case_id": "20261112-0052-TH_T80-pc1",
+      "name": "safetop-s484-th-t80-r3"
+    },
+    {
+      "case_id": "20261112-0056-TH_T20-pc1",
+      "name": "safetop-s484-th-t20-r3"
+    },
+    {
+      "case_id": "20261112-0059-TH_T80-pc1",
+      "name": "safetop-s717-th-t80-r3"
+    },
+    {
+      "case_id": "20261112-0103-TH_T20-pc1",
+      "name": "safetop-s717-th-t20-r3"
+    },
+    {
+      "case_id": "20261112-0107-TH_T80-pc1",
+      "name": "safetop-s720-th-t80-r3"
+    },
+    {
+      "case_id": "20261112-0112-TH_T20-pc1",
+      "name": "safetop-s720-th-t20-r3"
+    },
+    {
+      "case_id": "20261112-0115-TH_T80-pc1",
+      "name": "safetop-s761-th-t80-r3"
+    },
+    {
+      "case_id": "20261112-0119-TH_T20-pc1",
+      "name": "safetop-s761-th-t20-r3"
+    },
+    {
+      "case_id": "20261112-0123-TH_T80-pc1",
+      "name": "safetop-s313-th-t80-r4"
+    },
+    {
+      "case_id": "20261112-0127-TH_T20-pc1",
+      "name": "safetop-s313-th-t20-r4"
+    },
+    {
+      "case_id": "20261112-0130-TH_T80-pc1",
+      "name": "safetop-s484-th-t80-r4"
+    },
+    {
+      "case_id": "20261112-0134-TH_T20-pc1",
+      "name": "safetop-s484-th-t20-r4"
+    },
+    {
+      "case_id": "20261112-0138-TH_T80-pc1",
+      "name": "safetop-s717-th-t80-r4"
+    },
+    {
+      "case_id": "20261112-0142-TH_T20-pc1",
+      "name": "safetop-s717-th-t20-r4"
+    },
+    {
+      "case_id": "20261112-0146-TH_T80-pc1",
+      "name": "safetop-s720-th-t80-r4"
+    },
+    {
+      "case_id": "20261112-0150-TH_T20-pc1",
+      "name": "safetop-s720-th-t20-r4"
+    },
+    {
+      "case_id": "20261112-0154-TH_T80-pc1",
+      "name": "safetop-s761-th-t80-r4"
+    },
+    {
+      "case_id": "20261112-0158-TH_T20-pc1",
+      "name": "safetop-s761-th-t20-r4"
+    }
+  ]
+}
