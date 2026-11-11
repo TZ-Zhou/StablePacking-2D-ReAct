@@ -25,6 +25,7 @@ The plan is drawn once and written to plan.csv, numbered from 1; a draw equal to
 wall again and is left out, so a plan can have fewer cases than `samples`.
 """
 
+import contextlib
 import csv
 import itertools
 import json
@@ -202,6 +203,17 @@ def load_batch(name):
         raise FileNotFoundError(f"no batch {name}: run `plan` with its config first")
     config = read_config((folder / "config.yaml").read_text(encoding="utf-8"))
     return Batch(folder, config, read_plan(folder / "plan.csv"))
+
+
+def statuses(folder):
+    """{case number: its latest record}; a line cut short by a crash names no finished wall."""
+    path = folder / "status.jsonl"
+    records = {}
+    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else ():
+        with contextlib.suppress(json.JSONDecodeError):
+            record = json.loads(line)
+            records[record["case"]] = record
+    return records
 
 
 def parse_ranges(text):

@@ -24,22 +24,12 @@ from research.paths import REPO
 from research.runner import run_wall
 from research.runner.environment import prepare_environment
 from research.walls import batch_plan, case_definition
+from research.walls.batch_plan import statuses
 
 RAISED = "RAISED"
 TRACEBACK_TAIL = 900
 INTERRUPTED_EXIT = 130
 STOPPED_EXIT = 2
-
-
-def statuses(folder):
-    """{case number: its latest record}; a line cut short by a crash names no finished wall."""
-    path = folder / "status.jsonl"
-    records = {}
-    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else ():
-        with contextlib.suppress(json.JSONDecodeError):
-            record = json.loads(line)
-            records[record["case"]] = record
-    return records
 
 
 def save_record(folder, record):

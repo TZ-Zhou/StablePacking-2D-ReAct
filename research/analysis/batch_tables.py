@@ -31,7 +31,6 @@ import pandas as pd
 
 from research.analysis import myopia_tables as mt
 from research.paths import DATASETS_DIR, REPO
-from research.runner.batch import statuses
 from research.walls import batch_plan
 from research.walls import campaign_quality as cq
 
@@ -48,7 +47,7 @@ def sha256_text(text):
 
 def case_records(folder, numbers=None):
     """(plan row, status record) of every case with a finished record, in case order; numbers limits the cases."""
-    records = statuses(folder)
+    records = batch_plan.statuses(folder)
     chosen = [row for row in batch_plan.read_plan(folder / "plan.csv") if numbers is None or row["case"] in numbers]
     return [(row, records[row["case"]]) for row in chosen if records.get(row["case"], {}).get("case_id")]
 
