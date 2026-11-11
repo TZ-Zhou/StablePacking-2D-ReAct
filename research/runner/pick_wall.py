@@ -14,6 +14,8 @@ whole-walls), one per (seed, scene); --whole --confirm: the same on the held-out
 research/llm_walls/whole_confirm_wall.py (docs/plans/llm-whole-wall-confirm.md, study whole-confirm-walls);
 --whole --al: the same on the Almeida walls, research/llm_walls/whole_al_wall.py (docs/plans/llm-whole-wall-al.md,
 study whole-al-walls), built a stage at a time: run --limit N builds the next N walls and stops.
+--lessons: the whole-wall picks with the lessons of an induction in their prompt, research/llm_walls/lessons_wall.py
+(docs/plans/llm-lessons.md, study lessons-walls); each wall's spec carries the lessons of its seed's fold.
 
 run builds the states of pick_wall.STATES in order, one wall at a time, each named pick-s<seed>-<order> and naming the
 one before it (--after); states with a finished wall are skipped, so a run that stopped resumes. It stops at the first
@@ -27,6 +29,7 @@ import json
 from research.llm_walls import (
     gpt_smoke,
     gpt_wall,
+    lessons_wall,
     llc_control_wall,
     llc_note_wall,
     lookahead_wall,
@@ -60,7 +63,9 @@ def run(loopback, launch=runner.wall_runner.run, x=pick_wall, limit=None):
     reports = []
     while (limit is None or len(reports) < limit) and (state := next_state(loopback, x)) is not None:
         seed, order, name, after = state
-        report = runner.run_wall(name, seed, after, loopback, launch=launch, x=x, wall_args=x.wall_args(order))
+        spec = x.spec_of(seed, loopback) if hasattr(x, "spec_of") else None  # a wall's own (lessons_wall)
+        report = runner.run_wall(name, seed, after, loopback, launch=launch, x=x, wall_args=x.wall_args(order),
+                                 spec=spec)
         reports.append({"name": name, **{k: v for k, v in report.items() if k != "requests"}})
         if gpt_wall.journals(loopback, x)[name].get("state") != "finished":
             break
@@ -90,6 +95,7 @@ def main(argv=None):
         p.add_argument("--whole", action="store_true")
         p.add_argument("--confirm", action="store_true")
         p.add_argument("--al", action="store_true")
+        p.add_argument("--lessons", action="store_true")
         p.add_argument("--llc", choices=(*LLC, "both") if cmd == "run" else tuple(LLC))
         if cmd == "run":
             p.add_argument("--confirm-paid", action="store_true")
@@ -97,8 +103,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if (a.confirm or a.al) and not a.whole or a.confirm and a.al:
         ap.error("--confirm or --al goes with --whole")
-    x = LLC.get(a.llc) or (whole_al_wall if a.al else whole_confirm_wall if a.confirm else whole_wall if a.whole else
-                           lookahead_wall if a.lookahead else pick_wall)
+    x = LLC.get(a.llc) or (lessons_wall if a.lessons else whole_al_wall if a.al else whole_confirm_wall if a.confirm
+                           else whole_wall if a.whole else lookahead_wall if a.lookahead else pick_wall)
     if a.cmd == "ledger":
         shown = ("state", "reasons", "spend", "gpt_complete", "case_id", "seed", "wall_args")
         print(json.dumps({"spent": gpt_wall.spent(a.loopback, x), "limits": x.EXPERIMENT_LIMITS,

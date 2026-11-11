@@ -242,6 +242,9 @@ class SenderClient(unittest.TestCase):
                 self.assertNotIn(value, str(refused.exception))
 
 
+LESSONS = {1: 'Prefer a candidate that keeps the top of the wall level.', 2: 'Check what a candidate leaves.'}
+
+
 class Server(http.server.ThreadingHTTPServer):
     """A mock Responses API on 127.0.0.1: script holds the behaviour of each next request."""
 
@@ -283,6 +286,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name, args = 'commit_pick', {'candidate': '0', 'rationale': 'smoke'}
             if any(t.get('name') == 'check_after' for t in body['tools']) and not listed:  # lookahead: check it first
                 name, args = 'check_after', {'candidates': '0'}
+        if any(t.get('name') == 'commit_lessons' for t in body.get('tools') or []):  # an induction (lessons.py)
+            name, args = 'commit_lessons', {f'lesson_{i}': LESSONS.get(i, '') for i in range(1, 6)}
         data = {'id': f'resp_{n}', 'object': 'response', 'created_at': 1, 'model': gpt_smoke.MODEL, 'status': 'completed', 'error': None,
                 'incomplete_details': None, 'output': [
                     {'type': 'reasoning', 'id': f'rs_{n}', 'summary': [], 'encrypted_content': f'gAAAA-{n}'},

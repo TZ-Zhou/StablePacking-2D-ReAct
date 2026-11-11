@@ -283,10 +283,11 @@ SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_dro
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
              'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'},
              'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd', 'lookahead', 'llc_note',
-                                                    'whole_wall'}}
+                                                    'whole_wall', 'lessons'}}
 # lookahead (pick, optional, only in specs that set it): the check_after tool (pick.py); llc_note (pick, optional,
 # only with lookahead): the system prompt's paragraph on LLC and F_LR (pick.py, observation 'pick-3'); whole_wall
-# (pick, optional, only with lookahead and without llc_note): the LLM picks from the first stone ('pick-4')
+# (pick, optional, only with lookahead and without llc_note): the LLM picks from the first stone ('pick-4'); lessons
+# (pick, optional, only with whole_wall): 1 to 5 texts appended to that prompt (lessons_problem, pick.LESSONS)
 # the rest of an LLM spec is the client's
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}, 'pick': {'max_tool_calls', 'llm_timeout'}}
 LLM_KINDS = ('react', 'pick')  # pick: research/controller/pick.py, a direct choice of an endgame candidate
@@ -344,6 +345,10 @@ def validate_spec(spec):
             raise ValueError(f"whole_wall is true or false, got {spec['whole_wall']!r}")
         if spec.get('whole_wall') and (not spec.get('lookahead') or spec.get('llc_note')):
             raise ValueError('whole_wall needs lookahead true and no llc_note')
+        if 'lessons' in spec:  # the texts appended to the whole-wall prompt (pick.py, docs/plans/llm-lessons.md)
+            problem = lessons_problem(spec['lessons']) if spec.get('whole_wall') else 'lessons needs whole_wall true'
+            if problem:
+                raise ValueError(problem)
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -994,6 +999,24 @@ class MockLLM:
         return commit(self.best['example_order'], f"place outcome {self.best['id']}")
 
 
+LESSON_WORDS, LESSON_NAMES = 60, re.compile(r'\b(?:S\d+|[A-J][1-4])\b')
+
+
+def lessons_problem(lessons):
+    """Why `lessons` is not 1 to 5 lessons for the whole-wall pick's prompt (docs/plans/llm-lessons.md), None if it
+    is: each one line of at most LESSON_WORDS words that names no stone (S7) and no wall of a pack (B3)."""
+    if not isinstance(lessons, list) or not 1 <= len(lessons) <= 5:
+        return 'lessons is a list of 1 to 5 texts'
+    for i, text in enumerate(lessons, 1):
+        if not isinstance(text, str) or not text.strip() or text != text.strip() or '\n' in text or '\r' in text:
+            return f'lesson {i} must be one line of text without blank ends'
+        if len(text.split()) > LESSON_WORDS:
+            return f'lesson {i} has {len(text.split())} words, at most {LESSON_WORDS}'
+        if LESSON_NAMES.search(text):
+            return f'lesson {i} names a stone or a wall ({LESSON_NAMES.search(text).group()})'
+    return None
+
+
 def make_policy(spec):
     """The decision logic of a controller spec (what runs behind the transport); bad specs raise."""
     spec = full_spec(spec)
@@ -1015,7 +1038,7 @@ def make_policy(spec):
         from research.controller import pick
         return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']},
                                lookahead=params.get('lookahead', False), llc_note=params.get('llc_note', False),
-                               whole_wall=params.get('whole_wall', False))
+                               whole_wall=params.get('whole_wall', False), lessons=params.get('lessons'))
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 

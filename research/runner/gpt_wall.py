@@ -21,12 +21,14 @@ from research.storage import case_id as cid
 from research.walls import case_definition
 
 
-def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_runner.run, x=None, wall_args=()):
+def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_runner.run, x=None, wall_args=(),
+             spec=None):
     """One GPT wall (see the module docstring) under the study's lock; returns its report (<case>/llm/report.json).
     x: the experiment (gpt_wall.experiment; default the GPT walls); wall_args: run_wall arguments after x.WALL_ARGS."""
     if placements and not loopback:
         raise SystemExit("refused: --placements only for a loopback wall")
     x = gpt_wall.experiment(x)
+    spec = x.SPEC if spec is None else spec  # this wall's own (lessons_wall.spec_of)
     problems = gpt_wall.preflight(name, seed, after, loopback, x=x)
     if problems:
         gpt_smoke.refuse(problems)
@@ -38,10 +40,10 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         "seed": seed,
         "study": study,
         "mode": "loopback mock" if loopback else "paid",
-        "spec": order_controller.full_spec(x.SPEC),
+        "spec": order_controller.full_spec(spec),
         "limits": x.WALL_LIMITS,
         "experiment_limits": x.EXPERIMENT_LIMITS,
-        "max_http_requests": gpt_wall.max_requests(order_controller.full_spec(x.SPEC)),
+        "max_http_requests": gpt_wall.max_requests(order_controller.full_spec(spec)),
         "placements": placements,
         **({"wall_args": list(wall_args)} if wall_args else {}),
         "code_dirty": bool(gpt_wall.code_dirty(x)),
@@ -71,7 +73,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
                 "--timeout",
                 str(x.WALL_LIMITS["seconds"]),
                 "--controller",
-                json.dumps(x.SPEC),
+                json.dumps(spec),
             ]
             + (["--placements", str(placements)] if placements else [])
         )
@@ -87,7 +89,7 @@ def run_wall(name, seed, after=None, loopback=False, placements=0, launch=wall_r
         written = True
         receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
         ok_status = ("PROCESS_PASS", "STOPPED_AFTER_PLACEMENTS") if placements else ("PROCESS_PASS",)
-        report = gpt_wall.accounting(run, x.SPEC, receipt.get("process_status") == "STOPPED_AFTER_PLACEMENTS")
+        report = gpt_wall.accounting(run, spec, receipt.get("process_status") == "STOPPED_AFTER_PLACEMENTS")
         report["check"] = {
             k: v
             for k, v in order_controller.check(next(run.glob("result*"))).items()
