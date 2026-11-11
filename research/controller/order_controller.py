@@ -283,11 +283,12 @@ SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_dro
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
              'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'},
              'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd', 'lookahead', 'llc_note',
-                                                    'whole_wall', 'lessons'}}
+                                                    'whole_wall', 'lessons', 'safe_top_llc'}}
 # lookahead (pick, optional, only in specs that set it): the check_after tool (pick.py); llc_note (pick, optional,
 # only with lookahead): the system prompt's paragraph on LLC and F_LR (pick.py, observation 'pick-3'); whole_wall
 # (pick, optional, only with lookahead and without llc_note): the LLM picks from the first stone ('pick-4'); lessons
-# (pick, optional, only with whole_wall): 1 to 5 texts appended to that prompt (lessons_problem, pick.LESSONS)
+# (pick, optional, only with whole_wall): 1 to 5 texts appended to that prompt (lessons_problem, pick.LESSONS);
+# safe_top_llc (pick, optional, only with whole_wall): the observation's list of that name and its paragraph ('pick-5')
 # the rest of an LLM spec is the client's
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}, 'pick': {'max_tool_calls', 'llm_timeout'}}
 LLM_KINDS = ('react', 'pick')  # pick: research/controller/pick.py, a direct choice of an endgame candidate
@@ -349,6 +350,8 @@ def validate_spec(spec):
             problem = lessons_problem(spec['lessons']) if spec.get('whole_wall') else 'lessons needs whole_wall true'
             if problem:
                 raise ValueError(problem)
+        if type(spec.get('safe_top_llc', False)) is not bool or spec.get('safe_top_llc') and not spec.get('whole_wall'):
+            raise ValueError(f"safe_top_llc is true or false and needs whole_wall true, got {spec['safe_top_llc']!r}")
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -1038,7 +1041,8 @@ def make_policy(spec):
         from research.controller import pick
         return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']},
                                lookahead=params.get('lookahead', False), llc_note=params.get('llc_note', False),
-                               whole_wall=params.get('whole_wall', False), lessons=params.get('lessons'))
+                               whole_wall=params.get('whole_wall', False), lessons=params.get('lessons'),
+                               safe_top_llc=params.get('safe_top_llc', False))
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 

@@ -42,12 +42,13 @@ def picks(case_id):
     return tuple(r["final"]["index"] for r in records if r.get("decision_point"))
 
 
-def table(loopback=False):
-    """One row per finished repeat: llm_whole_wall's row, its round and its picks; None if there is none."""
-    journals = gpt_wall.journals(loopback, repeat_wall)
+def table(loopback=False, x=repeat_wall):
+    """One row per finished repeat: llm_whole_wall's row, its round and its picks; None if there is none. x: the
+    batch (safe_top_wall has the same states)."""
+    journals = gpt_wall.journals(loopback, x)
     rows = []
-    for seed, (scene, r) in repeat_wall.STATES:
-        j = journals.get(repeat_wall.name_of(seed, (scene, r))) or {}
+    for seed, (scene, r) in x.STATES:
+        j = journals.get(x.name_of(seed, (scene, r))) or {}
         if j.get("state") == "finished":
             rows.append({**ww.state_row(seed, scene, j), "round": r, "picks": picks(j["case_id"])})
     return pd.DataFrame(rows) if rows else None
