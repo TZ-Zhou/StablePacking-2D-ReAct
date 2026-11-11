@@ -1,0 +1,9 @@
+{
+ "lessons": [
+  "Prefer a candidate that keeps the top of the wall level.",
+  "Check what a candidate leaves."
+ ],
+ "pack_sha256": "41e0925fe780122cc01361c7012f07d7080b486b0a0f1dfb2f36f45f3ac1eafe",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 313
+}
