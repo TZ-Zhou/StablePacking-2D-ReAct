@@ -168,8 +168,9 @@ T = 3 / 6 / 9 / 12 / 15:
 With 7 stones left every remaining stone is on offer at every step, so endings from one state differ only by the policy.
 States: seeds 313, 484, 717, 3 cascade walls each. Mean z: the four metrics, z in the seed's factorial `TH_T80` block.
 Cascade: Wang's selection, no control. Plans and rules: `docs/plans/endgame-arena.md`, `llm-endgame-pick.md`,
-`llm-endgame-lookahead.md`; tables `runs/batch/endgame-arena-th80.csv`, `llm-endgame-pick-th80.csv`,
-`llm-endgame-lookahead-opponents.csv`, `llm-endgame-lookahead-th80.csv`.
+`llm-endgame-lookahead.md`, `llm-endgame-llc-note.md`; tables `runs/batch/endgame-arena-th80.csv`,
+`llm-endgame-pick-th80.csv`, `llm-endgame-lookahead-opponents.csv`, `llm-endgame-lookahead-th80.csv`,
+`llm-endgame-llc-note-opponents.csv`, `llm-endgame-llc-note-th80.csv`.
 
 ### Free arena (9 states, 216 walls)
 - Reading "room": an admissible ending better than the cascade by 0.1 SD or more in 4/9 states; cascade at or above the
@@ -223,3 +224,45 @@ takes the highest LLC among them. The table was checked against 161 forced rebui
   candidate of the tie in 32. In 484/02413 (LLM +1.04 over pick_safe) 2–9 safe candidates tie at the top in every
   decision; the LLM stayed within the tie in 6 of 7, a different one from pick_safe in 5, and gained mostly `F_AV`
   (+2.67) and `F_AH` (+0.99).
+
+### LLC note against a control (a third set of 9 states, 2 × 9 walls, US$0.94)
+The note is one paragraph of the system prompt: LLC and `F_LR` are the same kind of quantity (no numbers, nothing on the
+other scores, not a rule). Control: the prompt of the batch above (pick-2), on the same states, built interleaved state by
+state, the control first. Each batch was run once.
+
+| Rule | Control (pick-2) | Note (pick-3) | Bar |
+| --- | --- | --- | --- |
+| (a) above the cascade, no fewer stones | 6/9 | 5/9 | ≥ 7 |
+| (b) not below low_top | 9/9 | 9/9 | ≥ 5 |
+| (c) decisions that differ from the cascade | 29/62 | 30/61 | ≥ 25% |
+| (d) states that lose stones | LLM 0, cascade 1 | LLM 1, cascade 1 | LLM ≤ cascade |
+| (e) not below low_top_safe | 4/9 | 6/9 | ≥ 5 |
+| (f) not below pick_safe, no fewer stones | 7/9 | 5/9 | ≥ 5 |
+| Decisions giving up the highest safe LLC | 9/62 (6 for a higher NHR) | 2/61 (2) | — |
+| Mean z | 0.157 | 0.172 | — |
+- Reading of both batches "no endgame contribution shown": both fail (a). The control repeats the prompt that read "go"
+  at the bar on the previous 9 states and gets 6/9 here.
+- Effect of the note: (g) the note wall above the control wall with no fewer stones in 6/9 states (needs 7), (h) fewer
+  decisions giving up the highest safe LLC (2 against 9): "the LLM picks differently, the wall not shown better". Mean
+  of the 9 differences in mean z: +0.015.
+- By metric (exploratory), note − control in z: `F_LR` +0.63 (higher in 5 states, equal in 1, lower in 3), `F_SF` −0.33,
+  `F_AH` −0.08, `F_AV` −0.16. Mean `F_LR` z: note 0.85, control 0.22, pick_safe 0.70; `F_LR` not below pick_safe's in
+  7/9 states with the note, 3/9 without. The note moves the picks towards LLC and `F_LR` rises, the other three fall,
+  the mean stays.
+- (f) is easy on these states: pick_safe's mean z is 0.02 here (0.28 on the previous 9), at the cascade's level (−0.01)
+  and above the cascade in 4/9. Opponents' mean z: borda 0.21, low_top_safe 0.12, llc 0.05, pick_safe 0.02, cascade
+  −0.01, random_safe median −0.23, random median −0.40, low_top −0.51.
+- With the note the LLM chose another candidate of the top-LLC tie than pick_safe in 41 of 53 tied decisions (control
+  27 of 52). One note wall lost a stone (484/40321, 17 placed; the cascade loses one in another state).
+
+| State | Note mean z | Control mean z |
+| --- | --- | --- |
+| 313/12403 | −0.567 | 0.126 |
+| 313/41023 | 0.787 | 0.353 |
+| 313/04231 | 0.347 | 0.016 |
+| 484/43102 | −0.147 | −0.556 |
+| 484/40321 | −0.058 | 0.566 |
+| 484/21430 | 0.376 | 0.091 |
+| 717/14302 | 0.409 | 0.233 |
+| 717/13204 | 0.443 | 0.913 |
+| 717/41203 | −0.044 | −0.330 |
