@@ -1,0 +1,198 @@
+{
+  "schema_version": 2,
+  "case_id": "20261111-1708-TH_T20-pc1",
+  "scene": "TH_T20",
+  "parent": null,
+  "started": "2026-11-11T17:08:04+08:00",
+  "case": "thangavelu-noise20",
+  "run_id": "20261111-1708-TH_T20-pc1",
+  "source": "Tests/Thangavelu/00_run.py",
+  "source_sha256": "57e9e03d20e8cb9b5838744b862097f36e13a58025a9f7a2826cf44912744032",
+  "source_edits": [
+    [
+      "/data/stones_noise_80_labels.png",
+      "/data/stones_noise_20_labels.png"
+    ]
+  ],
+  "staged_sha256": "97e4b6542b3f60d3d1db3f6bf47f22757add3ff3a9a75509f19d2065061aa6d5",
+  "filter_policy": {
+    "policy": "paper",
+    "order": [
+      3,
+      0,
+      2,
+      1,
+      4
+    ],
+    "tol": 1e-09
+  },
+  "controller": {
+    "kind": "pick",
+    "llm": {
+      "kind": "api",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "max_tokens": 4096,
+      "effort": "low",
+      "request_timeout_s": 60.0,
+      "max_retries": 0,
+      "retry_backoff_s": 0.0,
+      "price_per_mtok": [
+        1.0,
+        5.0,
+        2.5,
+        0.05
+      ]
+    },
+    "llm_timeout": 90.0,
+    "max_tool_calls": 4,
+    "max_decisions": 25,
+    "max_total_tokens": 250000,
+    "max_cost_usd": 0.5,
+    "max_llm_failures": 1,
+    "lookahead": true,
+    "whole_wall": true,
+    "lessons": [
+      "Protect future placements first. Use check_after on promising candidates, especially when choices are narrowing or offered stones are unplaceable. Compare how many other offered stones retain poses, avoid newly blocking them, and value reopening blocked stones. This is only a one-step, on-offer check, not a guarantee of eventual placement.",
+      "When a feasible offered stone has few candidate rotations, consider placing it before its opportunity disappears, provided check_after does not reveal worse consequences for the others. A currently unplaceable stone is not necessarily lost: another placement may make it feasible again.",
+      "Favor high LLC relative to the available alternatives, particularly early in construction; avoid a large drop merely to win another filter. Treat LLC as a useful stability signal, not a guarantee of the finished wall\u2019s load, and accept a compromise when needed to preserve placement options.",
+      "While forming early courses, favor well-fitting, reasonably level placements and, where alternatives are otherwise comparable, wider rather than tall narrow orientations. Avoid repeatedly building upward before the course is filled. NHR and bounding-box shape are clues, not reasons to enforce a perfectly flat skyline.",
+      "Balance interlocking with density and local fit: a candidate with the highest IWR can still be a poor choice if it gives up substantial LLC, GDS or LFR. Compare scores against the alternatives at that placement; even a GDS of zero can be tied for best when a new course starts."
+    ]
+  },
+  "worker_venv": {
+    "manifest": "research/validation/worker-venv.local.json",
+    "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+    "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+    "version": "3.10.22",
+    "sdks": {
+      "openai": "3.46.0"
+    },
+    "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f"
+  },
+  "trace": true,
+  "worker_pool": "persistent",
+  "step_writer": false,
+  "seed": 717,
+  "python_hash_seed_launcher": 20,
+  "placements_limit": 0,
+  "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+  "git_branch": "feat/llm-lessons",
+  "git_status": [
+    "?? research/studies/lessons-walls/"
+  ],
+  "git_tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_sha256": {
+    "Stonepacker2D/__archive__/first.py": "9f2372c249bfbd7be3d71bdc34e9eed63cf3898b5328888c82e8d6fc7af23e7f",
+    "Stonepacker2D/__init__.py": "74db6efd354818603958a6c3db59610eeecc6f3b309b58e639b0a2acee296930",
+    "Stonepacker2D/entity/__init__.py": "54628fd0c893cf5f54f76fcc14a8cb2371b482e113091f82f033a16a8efdc35e",
+    "Stonepacker2D/entity/base.py": "705e0b572e2ed78dac8986ba718e81ce7ad39b021dcbd9df8b459bc8f8d2ef4d",
+    "Stonepacker2D/entity/brick.py": "6cc37ad67e71217f0908e18d879c8570238555754bd8353cb6723daea07708f8",
+    "Stonepacker2D/entity/stone.py": "312252c1896cc0b5686746448d3d9ecd3862702a7fbd904e6d4a15104e681622",
+    "Stonepacker2D/entity/transform.py": "e10ef72defab963045da4e2149cd748f893bba041ca6839d739d90934a6c2006",
+    "Stonepacker2D/entity/wedge.py": "7b705520e9cbcb5ed027f221a059c7e1fff2add1230d9efdd4ec127e30bcce96",
+    "Stonepacker2D/evaluate/__init__.py": "ddc8f53fc98b2eb4e844c904ca19d1ab95752336a7cf04a513283a389a95f64d",
+    "Stonepacker2D/evaluate/ksteps.py": "f98f7cec8fb01f096ec1a7d5a2fde75fb21c3085607b0a3fa5672b6a3a0e09ec",
+    "Stonepacker2D/evaluate/local_void.py": "5795ebf0a52d2a1525cf05bd067eab44022fbf1b32394e2aac756ff677932971",
+    "Stonepacker2D/evaluate/tilting_angle.py": "408a86aedfe48a1d70fef4af4e47303edcafa723f155eaeff868378aa5a22385",
+    "Stonepacker2D/stack/__init__.py": "359e7b78b830b577e26c654e0d57d38ea156d8c805e6395332f0ed33863f16a6",
+    "Stonepacker2D/stack/build_wall.py": "2e2da2c0d9e8a3d10d9f3b93ec21333f20244902c8bbdecc4a5efc5ec8190980",
+    "Stonepacker2D/stack/place_stone.py": "d479672d0c76c317155d89acc7ce6d651afbd89c9abae7ddad264a6777b9c9a5",
+    "Stonepacker2D/stack/selection.py": "db6db054e6b72e54935b78630bbd94849d473f958b497949bb3a2d31b3196ceb",
+    "Stonepacker2D/stack/vendor.py": "985955a67db06ce3d3ffd075a3a1ec05d0b8550079a79665ddc075bfba55aec2",
+    "Stonepacker2D/utils/__init__.py": "32666c79b2f8b4b44ae684cb8c536496c78ff03b66a6cf5ad5554ae2bd15148a",
+    "Stonepacker2D/utils/constant.py": "ba8bccb8c4fc8fa80f02a25ba23c6ecb3843a28cf71b2a1a40012d8cb9421bcd",
+    "Stonepacker2D/utils/kine_2d.py": "d1eb529490d37005f39af3025013337425be749fabe5dd401761e6afe641aba8",
+    "Stonepacker2D/utils/logger.py": "54795c8da89645cfabac9cbe1f7d7b8471f15974447c4a76c539aca68da39103",
+    "Stonepacker2D/utils/plot.py": "42e0a27003ab8cfb350c741f56a1ebddc45b05d5661627ad723a76dfd91cf129",
+    "Stonepacker2D/utils/region_memo.py": "a80e22e35acbff94ab155d876d2ea36d6d63c0ee22a4266617c9d328935b14c5",
+    "research/paths.py": "53dd9d272528431bb9f09e2d6d06cfad4c2724288b1f83bdb33958d277457fe4",
+    "research/runner/run_wall.py": "e420f50c84615fc4f0f42cc3f06af0d11ae07298262278cd3178d1999e5669af",
+    "research/walls/case_definition.py": "265921667cb9f515d7b0a8369715b19ae835d12fd35ad046d48338a33ba56394",
+    "research/controller/order_controller.py": "72d1bdf45070495951a695eb49d3a9051f1a1fc195426b0dcdd01c94b77b593f",
+    "research/controller/endgame.py": "b79580285b1cd537676e5f8719e7f751056c636fd0022745e75a81f70bd02d9c",
+    "research/controller/pick.py": "9c37ef4bdcbba05027fb0a00a47ef804da78c9213edf239fb163134f190e0b65",
+    "research/controller/worker.py": "fac94821e51797b457d3090fc91a6e2afd47ee81b14130e5dc23ac2d2f4a7997",
+    "research/controller/llm_api.py": "056970d26c2f138db70cd55fd8531a45c21334258e3f593cbbabb5477114d1a9",
+    "research/walls/check_run.py": "8b1efefb269c57d380ac1c664fef1a0d5e495664e55d524a153ebd0fc4ede35f",
+    "research/analysis/unplaced_stones.py": "890ceb8c63079b827e2b16830fff00b7dad49e89afa6061d48f34c5f81a28d88",
+    "research/runner/campaign.py": "444d38f8e84fd4861e3b27b5e83170bc93f6fa157265566ebc10cf5ff06b82ea",
+    "research/walls/campaign.py": "e3f0b4af0eca63dc441d0e5eed5ee45ec521d8617e5860b236f851dd32f1c822",
+    "research/walls/wall_metrics.py": "fbad7bffd33a581200c70cdf92657f3e62b00e45a22624185123b78495b75153",
+    "research/storage/case_id.py": "f091716eb21eae05b839c3409445f86fe2ea8fc9868aa2def8bddd26c9229110",
+    "research/storage/case_index.py": "b6276fe8c29657b36653cc7aa853dcaa87f81f5e06f340f540436fc682d3c1cf",
+    "research/validation/windows_case_runtime.py": "358de93891ee22e3428c8f345aa49c6143832f85e626a3157d03dc931db2c5be",
+    "research/validation/step_writer.py": "2b08030746aaa9ea02d45a17c28e22fd1a1d045e219d6ddccfe7dd786c6621e7"
+  },
+  "timeout_seconds": 3600,
+  "status": "PROCESS_PASS",
+  "command": [
+    "C:\\Users\\user\\miniconda3\\envs\\stablepacking-baseline\\python.exe",
+    "-B",
+    "-u",
+    "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-1708-TH_T20-pc1\\00_run.py"
+  ],
+  "spec_sha256": "88183170d8729ee7651e09eebba449239260eed1149337b81bd8c8963fa4eb15",
+  "pid": 10308,
+  "manifest": {
+    "result_20261111-170811_wall0/trace/commits.jsonl": "22b2b2ed7e09d3df30aa9d0e3e77f11728171dd72b001c5d187a296d63392e30",
+    "result_20261111-170811_wall0/trace/controller.jsonl": "defbcc5061313335cc384fe73bb16b1c3486e37b40c305b26c0de1fdf7521861",
+    "result_20261111-170811_wall0/trace/e00000.npz": "32baf422ec2b18ae69bcbe7c7849923b7f72b922762400c165f7096fe57e0934",
+    "result_20261111-170811_wall0/trace/e00001.npz": "17cf548ab1cf07a0e91a953d8faf3e86959088d5b216bfd71405391fc1c637e4",
+    "result_20261111-170811_wall0/trace/e00002.npz": "1aabb177bb692bc4a8b7cbb0a006a28e9b6c957803e07c0094a41ec04f37ad0e",
+    "result_20261111-170811_wall0/trace/e00003.npz": "d5dd68ae07269d36f204c5802388d5d170e14933b5017930a759471da8cb7359",
+    "result_20261111-170811_wall0/trace/e00004.npz": "cb547108c0faf3e8de8751e1b06a556beccfaf17ce7cf3134c1adefa27b4a802",
+    "result_20261111-170811_wall0/trace/e00005.npz": "191511b4b1497683a6c0f8d544e42a7e1bba0a7c0dcc5a15bc8ec402180651b8",
+    "result_20261111-170811_wall0/trace/e00006.npz": "e4d8d6e9519a41a1c97622aea5b9c96649ddac0557c019dcde3ca3395b3f3580",
+    "result_20261111-170811_wall0/trace/e00007.npz": "6212c6f45bdc475918f8fc5847e65f045c49d28d41e969d2a97acbc579aeaf0c",
+    "result_20261111-170811_wall0/trace/e00008.npz": "f4648aa0945a0e169965a05cbbebb01e26c2bf716ee05f080be5968f29359e73",
+    "result_20261111-170811_wall0/trace/e00009.npz": "e802b3bf5c8afdfe92cfdc6089121e1c056d0b8e2151035acfc54acc4eda4cff",
+    "result_20261111-170811_wall0/trace/e00010.npz": "5b3e9e0793817a5896082fb0bbf6b028ce6bab941d808c0af19902107ca0856d",
+    "result_20261111-170811_wall0/trace/e00011.npz": "c0fbe0d649b815f3a49c5178152ac5cb39e8bbbdcdc0de4d0dc0c225237e37e2",
+    "result_20261111-170811_wall0/trace/e00012.npz": "def1fbf16c698fbb0058065a4f94e317821a8ef401f7ee272ee350a10f311b43",
+    "result_20261111-170811_wall0/trace/e00013.npz": "0cf87133eeeeb0bfb7dee5d9fdf5dc88a572b42a0ce323a0f94f2bb0e74cc850",
+    "result_20261111-170811_wall0/trace/e00014.npz": "af27c5a2db5fd263f2ab7cb86c8448ca0f9e7c69681ac80052e0798661913920",
+    "result_20261111-170811_wall0/trace/e00015.npz": "38fd81cd6638fcc5375f92b64bce38082c98117f61bc1e41faea7475b216ac1f",
+    "result_20261111-170811_wall0/trace/e00016.npz": "ae30d872f28896b760975fc47008294e21ca8984575bceabe78d5fceb2c8287e",
+    "result_20261111-170811_wall0/trace/e00017.npz": "5beddc4056ab437f6bef0550d1a8866da8eaba4b336125d777ba8c4defc2c5a2",
+    "result_20261111-170811_wall0/trace/e00018.npz": "260b780972b62d1677dcebc6e317c348ecb03e24dae8c6cd30ad886f8250715a",
+    "result_20261111-170811_wall0/trace/e00019.npz": "cc8410b036e702849e9ea3191bee7c40923efa2f7bcf51afcf7f76afd7778550",
+    "result_20261111-170811_wall0/trace/e00020.npz": "7373584975199e067e47e55acac9dfe6a78983cae0f281cd40553d9831bba2ef",
+    "result_20261111-170811_wall0/trace/e00021.npz": "78cb29a0c9f84f062cc50d120b3d36a7b6526eb5b6260edef0ebd6cef9b9d6c9",
+    "result_20261111-170811_wall0/trace/e00022.npz": "ea90a494b8575de24309e88642944bf950604c5c8b1b388f4f94a1a00a62b04d",
+    "result_20261111-170811_wall0/trace/e00023.npz": "182930e2695016d8b8fd8d15a0eeaca376e84416dcc95bf461e2717050f39a6c",
+    "result_20261111-170811_wall0/trace/e00024.npz": "10de31ee9a3fa7e9237d3dc0ff4281668cbb8eb99f16a2a7b0579d5d52a43365",
+    "result_20261111-170811_wall0/trace/e00025.npz": "c0745c64c8004cb3031535e3d5f4a5a62743d56dbcbd1fe09606efb12b7cf66d",
+    "result_20261111-170811_wall0/trace/e00026.npz": "8551efc47fe9bc7a9f9ff5c32f5ddb7ae73effa3a7047667a989be973b1e65c8",
+    "result_20261111-170811_wall0/trace/transport.jsonl": "c0c7d7906e391a5a4c3d8e326a5611e40c317095f52ca1a15fe0ffebbbf48a43",
+    "result_20261111-170811_wall0/decisions.txt": "b2fd66f127dc71bb286934056648f8786dbc55e39b1010663039a7bec2b4a601",
+    "result_20261111-170811_wall0/base.pkl": "294d362002afe914dcdd8ab6e62b6c1e56dbd6f9c7e27964d12c89f77d006647"
+  },
+  "process_status": "PROCESS_PASS",
+  "termination": null,
+  "returncode": 0,
+  "elapsed_seconds": 203.703,
+  "committed_placements": 21,
+  "trace_check": {
+    "files": 27,
+    "ok": true,
+    "problems": [],
+    "workers": {
+      "workers_started": 1,
+      "workers_closed": 1
+    },
+    "controller": [
+      {
+        "ok": true,
+        "verdict": "PASS",
+        "records": 27,
+        "decision_points": 21,
+        "switches": 12,
+        "incomplete": []
+      }
+    ]
+  },
+  "derived": {
+    "steps.csv": 27
+  }
+}

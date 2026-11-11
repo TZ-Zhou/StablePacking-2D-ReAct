@@ -225,6 +225,17 @@ research/cases/*
 !research/cases/20261111-1213-TH_T20-pc1/
 # the paid whole-wall picks on the AL walls (study whole-al-walls), kept the same way; an AL result folder is result
 !research/cases/20261111-1351-AL_R-pc1/
+# the paid lessons walls (study lessons-walls), kept the same way
+!research/cases/20261111-1648-TH_T80-pc1/
+!research/cases/20261111-1653-TH_T20-pc1/
+!research/cases/20261111-1656-TH_T80-pc1/
+!research/cases/20261111-1700-TH_T20-pc1/
+!research/cases/20261111-1703-TH_T80-pc1/
+!research/cases/20261111-1708-TH_T20-pc1/
+!research/cases/20261111-1711-TH_T80-pc1/
+!research/cases/20261111-1715-TH_T20-pc1/
+!research/cases/20261111-1718-TH_T80-pc1/
+!research/cases/20261111-1722-TH_T20-pc1/
 research/cases/*/result*/base.pkl
 research/cases/*/result*/trace/*.npz
 !research/cases/*/execution.log

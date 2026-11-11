@@ -1,0 +1,81 @@
+{
+ "after": "lessons-s761-th-t80",
+ "case_id": "20261111-1722-TH_T20-pc1",
+ "code_dirty": false,
+ "ended_at": "2026-11-11T17:26:04",
+ "experiment_limits": {
+  "cost_usd": 5.0,
+  "http_requests": 1000,
+  "tokens": 2500000,
+  "walls": 10
+ },
+ "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+ "gpt_complete": true,
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 100,
+  "seconds": 3600,
+  "tokens": 250000
+ },
+ "max_http_requests": 100,
+ "mode": "paid",
+ "placements": 0,
+ "reasons": [],
+ "seed": 761,
+ "spec": {
+  "kind": "pick",
+  "lessons": [
+   "Use check_after before committing, especially when options are narrowing or stones on offer are unplaceable. Prefer choices that leave more other offered stones feasible, protecting those with few poses and, where possible, reopening unplaceable ones. A zero next-step count is a warning, not proof of permanent loss.",
+   "Give substantial weight to LLC, particularly early: avoid a sharp drop in available load capacity merely to maximize one other score. Compare LLC across the current candidates, but treat it as a proxy for final strength, not a guarantee; preserving future placements comes first.",
+   "Early on, favour candidates that fit the developing course rather than prematurely building a tall, narrow stack. Use bounding-box proportions, NHR and the skyline together; be particularly cautious when height variation is already large. Tall rotations can still be useful when they fit or preserve future options.",
+   "Prefer good GDS and LFR together when comparing otherwise viable candidates: dense, flush fits are useful, but neither score alone should dictate the choice. A zero GDS can occur when starting a new course, so interpret it in context rather than rejecting it automatically.",
+   "Among choices with comparable feasibility, strength and fit, prefer better IWR to stagger vertical joints. Do not chase an extreme IWR score at the expense of the other considerations, and do not insist on perfectly level NHR everywhere: neither score alone ensures short horizontal joint paths."
+  ],
+  "llm": {
+   "effort": "low",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 4096,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 60.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 90.0,
+  "lookahead": true,
+  "max_cost_usd": 0.5,
+  "max_decisions": 25,
+  "max_llm_failures": 1,
+  "max_tool_calls": 4,
+  "max_total_tokens": 250000,
+  "whole_wall": true
+ },
+ "spend": {
+  "cost_usd": 0.10570524999999996,
+  "http_requests": 44,
+  "tokens": 104738,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T17:22:38",
+ "state": "finished",
+ "study": "lessons-walls",
+ "wall_args": [
+  "thangavelu-noise20"
+ ],
+ "worker_venv": {
+  "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f",
+  "manifest": "research/validation/worker-venv.local.json",
+  "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+  "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+  "sdks": {
+   "openai": "3.46.0"
+  },
+  "version": "3.10.22"
+ }
+}
