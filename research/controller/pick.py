@@ -16,6 +16,12 @@ selection (endgame.lookahead_problems). With "llc_note": true as well (docs/plan
 observation version is 'pick-3': the system prompt of 'pick-2' plus one paragraph saying LLC and F_LR are the same
 kind of quantity (LLC_NOTE); nothing else changes.
 
+With "whole_wall": true (with lookahead, without llc_note; docs/plans/llm-whole-wall-pick.md) the LLM picks from the
+first stone: every selection with two or more feasible candidates is a decision point, the observation version is
+'pick-4' (the same fields; SYSTEM_WHOLE says all four metrics must be good) and build_wall computes the check_after
+table at every such selection (lookahead 'always'). While the inventory is not empty the next selection is a new
+sample, so check() compares a placed candidate's row only on the stones sampled again.
+
 It is the order controller with its own observation, request and reply (PickClient over ControllerClient: the same
 worker, budget, ledger and LLM transcripts; PickPolicy over ReActPolicy: the same LLM call, retries on a rejected
 reply and fallbacks). The observation version is 'pick-1', its own: no filter order, no is_paper or n_orders, no
@@ -67,11 +73,34 @@ LLC_NOTE = (
     "not a rule.\n")
 SYSTEM_NOTE = SYSTEM_LOOKAHEAD.replace("Compare the main candidates", LLC_NOTE + "Compare the main candidates")
 assert SYSTEM_NOTE.count(LLC_NOTE) == 1
+WHOLE = (  # (old, new) on SYSTEM_LOOKAHEAD
+    ("You finish a dry-stone wall. The wall is built course by course with Wang's method; you act only at the end, "
+     "when every remaining stone is on offer. At each placement you choose which candidate to place: a stone in one "
+     "of four rotations",
+     "You build a dry-stone wall from the first stone to the last. The wall is built course by course with Wang's "
+     "method. At each placement Wang's sampling puts some of the remaining stones on offer (all of them once only a "
+     "few are left), and you choose which candidate to place: a stone on offer in one of four rotations"),
+    ("(higher is better). A stone",
+     "(higher is better). All four metrics must be good: F_SF, F_AH, F_AV and F_LR. Do not sacrifice the others for "
+     "one of them. A stone"),
+    ("bottom). wall summarizes",
+     "bottom). n_remaining counts the stones not yet placed, on offer or not; wall summarizes"),
+    ("every other remaining stone would", "every other stone on offer now would"),
+    ("after later placements. It gives",
+     "after later placements. While more stones remain than are on offer, the next placement's offer is a new "
+     "sample, so a stone on offer now may not be on offer next. It gives"))
+SYSTEM_WHOLE = SYSTEM_LOOKAHEAD
+for _old, _new in WHOLE:
+    assert SYSTEM_WHOLE.count(_old) == 1
+    SYSTEM_WHOLE = SYSTEM_WHOLE.replace(_old, _new)
 CHECK = {"name": "check_after", "description": "For listed candidates: the feasible poses each other remaining stone "
          "would have at the next placement if that candidate were placed. No scores.",
          "parameters": {"type": "object", "additionalProperties": False, "required": ["candidates"],
                         "properties": {"candidates": {"type": "string", "description":
                                                       "Comma-separated ids of listed candidates, e.g. '0,3'."}}}}
+CHECK_WHOLE = {**CHECK,
+               "description": CHECK["description"].replace("other remaining stone", "other stone on offer now")}
+assert CHECK_WHOLE != CHECK
 COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to place.",
           "parameters": {"type": "object", "additionalProperties": False, "required": ["candidate", "rationale"],
                          "properties": {"candidate": {"type": "string", "description": "The id of a listed candidate."},
@@ -81,6 +110,7 @@ COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to 
 OBSERVATION_VERSION = "pick-1"
 OBSERVATION_VERSION_LOOKAHEAD = "pick-2"
 OBSERVATION_VERSION_NOTE = "pick-3"
+OBSERVATION_VERSION_WHOLE = "pick-4"
 REPLY_KEYS = {"pick", "source", "prompt_sha256", "react", "transcripts", "restart"}
 ID_TEXT = re.compile(r"[0-9]{1,4}")
 
@@ -119,11 +149,14 @@ class PickPolicy(oc.ReActPolicy):
     """ReActPolicy with commit_pick as its only tool (and check_after with lookahead) and the whole observation in
     the first message."""
 
-    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False, llc_note=False):
+    def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False, llc_note=False,
+                 whole_wall=False):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
         self.system, self.tools = (SYSTEM_LOOKAHEAD, [CHECK, COMMIT]) if lookahead else (SYSTEM, [COMMIT])
         if llc_note:
             self.system = SYSTEM_NOTE
+        if whole_wall:
+            self.system, self.tools = SYSTEM_WHOLE, [CHECK_WHOLE, COMMIT]
         self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
 
     def view(self, obs):
@@ -173,8 +206,11 @@ class PickClient(oc.ControllerClient):
 
     def __init__(self, spec, transport, sink=None, ledger=None):
         super().__init__(spec, transport, sink, ledger)
-        self.lookahead = self.spec().get("lookahead", False)  # build_wall computes the check_after table if true
-        version = (OBSERVATION_VERSION_NOTE if self.spec().get("llc_note") else OBSERVATION_VERSION_LOOKAHEAD
+        self.whole = self.spec().get("whole_wall", False)
+        # build_wall computes the check_after table if true (in the endgame) or 'always' (at every selection)
+        self.lookahead = "always" if self.whole else self.spec().get("lookahead", False)
+        version = (OBSERVATION_VERSION_WHOLE if self.whole else OBSERVATION_VERSION_NOTE
+                   if self.spec().get("llc_note") else OBSERVATION_VERSION_LOOKAHEAD
                    if self.lookahead else OBSERVATION_VERSION)
         self.observer, self.n = Observer(version), 0
 
@@ -195,7 +231,7 @@ class PickClient(oc.ControllerClient):
         obs, rows, feasible = self.observer(policy, ctx)
         base, raw = tuple(policy["order"] or oc.PAPER_ORDER), np.asarray(ctx["features_raw"])
         endgame = len(ctx["inventory_ids"]) == 0
-        decision_point, self.n = endgame and len(rows) >= 2, len(rows)
+        decision_point, self.n = (endgame or self.whole) and len(rows) >= 2, len(rows)
         info = {"base": base}
         if decision_point and self.lookahead:  # per candidate id: {stone label: feasible poses at the next placement}
             sampled, after = [int(s) for s in ctx["sampled_ids"]], np.asarray(ctx["after"])
@@ -260,7 +296,7 @@ def check(result, records, spec, stopped=False):
     base, full, events = oc.base_policy(run), oc.full_spec(spec), list(oc.trace_events(result))
     llm = oc.ReplayLLM(records, *oc.llm_identity(full["llm"]))
     worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False),
-              "llc_note": full.get("llc_note", False)}
+              "llc_note": full.get("llc_note", False), "whole_wall": full.get("whole_wall", False)}
     transport = oc.ReplayedFailures(lambda: PickPolicy(llm, **worker), records)
     expected, ledger = [], []
     client = PickClient(spec, transport, expected.append, ledger.append)

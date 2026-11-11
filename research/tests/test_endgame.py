@@ -60,7 +60,8 @@ class Picker(unittest.TestCase):
         nxt = {"sampled_ids": np.array([41]), "features_raw": RAW, "selected": np.array(0)}  # 41 then: rows 0, 1, 3
         told = np.full((8, 2), -1)
         told[1] = [3, -1]  # row 1 places stone 17 and tells 3 feasible poses of 41
-        first = {"sampled_ids": np.array([41, 17]), "features_raw": raw, "selected": np.array(1), "after": told}
+        first = {"sampled_ids": np.array([41, 17]), "features_raw": raw, "selected": np.array(1), "after": told,
+                 "inventory_ids": np.array([])}
         events = [({"event": 0, "step": 15}, first), ({"event": 1, "step": 16}, nxt)]
         self.assertEqual(endgame.lookahead_problems(events), [])
         told[1] = [2, -1]
