@@ -252,4 +252,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # The worker imports `serve` by its module's name; from __main__ the transport would start the default worker
+    # (the pick policy) instead, which is what the paid induction of fold 313 sent on 2026-11-11.
+    from research.llm_walls import lessons
+    raise SystemExit(lessons.main())

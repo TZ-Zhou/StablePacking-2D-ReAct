@@ -4,6 +4,7 @@ lessons.py), the lessons in the whole-wall prompt (research/controller/pick.py),
 
 import json
 import re
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,6 +85,12 @@ class Induction(unittest.TestCase):
         self.assertEqual((reply["source"], reply["lessons"]), ("fallback:no_valid_commit", None))
         short = {"tool": "commit_lessons", "arguments": {"lesson_1": "x"}}  # a strict schema: all five texts
         self.assertEqual(oc.reply_problem(short, [lessons.COMMIT])[:7], "missing")
+
+    def test_the_command_line_runs_the_module_the_worker_can_import(self):
+        with mock.patch.object(lessons, "main", return_value=0) as main, self.assertRaises(SystemExit) as stop:
+            runpy.run_module("research.llm_walls.lessons", run_name="__main__")
+        self.assertEqual((main.call_count, stop.exception.code, lessons.serve.__module__),
+                         (1, 0, "research.llm_walls.lessons"))
 
     def test_a_wall_gets_the_lessons_of_the_fold_without_its_seed(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(lessons, "STUDIES_DIR", Path(tmp)):
