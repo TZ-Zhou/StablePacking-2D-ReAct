@@ -1,0 +1,12 @@
+{
+ "lessons": [
+  "Use check_after on promising alternatives, especially when few candidates are feasible or some offered stones are unplaceable. Favor preserving next poses for many other offered stones, particularly constrained ones. A zero is a warning, not permanent loss: later placements may reopen poses, and unoffered stones are not checked.",
+  "When a large or awkward offered stone has few feasible poses, consider placing it rather than saving it indefinitely. Check whether alternatives would leave it without a next pose. Do not assume that rotating it upright will solve the problem.",
+  "Among choices that preserve placement options, favor higher LLC, particularly when alternatives differ sharply. Avoid giving up much LLC merely to maximize another score. LLC is a useful stability proxy, not a guarantee of the finished wall\u2019s limit load.",
+  "Do not maximize course-level NHR or interlocking IWR in isolation. Balance joint staggering with stability and fit; accept some height mismatch when it preserves good alternatives. An exceptionally high IWR can accompany a poor or incomplete wall.",
+  "For otherwise comparable candidates, favor higher GDS and LFR closer to zero. But a locally dense, flush placement can still leave a poor or incomplete wall, so do not put either score ahead of preserving stones and maintaining stability."
+ ],
+ "pack_sha256": "1e8a6e9b85fc221ee8212b31afbd50462f17e3ffdd61ac7b591b9488a7a6224f",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 484
+}
