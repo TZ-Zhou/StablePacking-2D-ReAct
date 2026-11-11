@@ -282,8 +282,9 @@ SPEC_DEFAULTS = {'null': {}, 'random': {}, 'rule': {'max_remaining': 6, 'llc_dro
 # SYSTEM_V2, TOOLS_V2); first_step: decision points of earlier steps are skip:before_first_step
 SPEC_KEYS = {'null': set(), 'random': {'seed', 'steps'}, 'rule': set(SPEC_DEFAULTS['rule']),
              'react': set(SPEC_DEFAULTS['react']) | {'max_total_tokens', 'max_cost_usd', 'observation_version', 'first_step'},
-             'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd', 'lookahead'}}
-# lookahead (pick, optional, only in specs that set it): the check_after tool (pick.py)
+             'pick': set(SPEC_DEFAULTS['pick']) | {'max_total_tokens', 'max_cost_usd', 'lookahead', 'llc_note'}}
+# lookahead (pick, optional, only in specs that set it): the check_after tool (pick.py); llc_note (pick, optional,
+# only with lookahead): the system prompt's paragraph on LLC and F_LR (pick.py, observation 'pick-3')
 # the rest of an LLM spec is the client's
 WORKER_KEYS = {'react': {'tool_feedback', 'max_tool_calls', 'llm_timeout'}, 'pick': {'max_tool_calls', 'llm_timeout'}}
 LLM_KINDS = ('react', 'pick')  # pick: research/controller/pick.py, a direct choice of an endgame candidate
@@ -333,6 +334,10 @@ def validate_spec(spec):
             raise ValueError(f"first_step is a step number >= 1, got {spec['first_step']!r}")
         if type(spec.get('lookahead', False)) is not bool:
             raise ValueError(f"lookahead is true or false, got {spec['lookahead']!r}")
+        if 'llc_note' in spec and not (spec['llc_note'] is True or spec['llc_note'] is False):
+            raise ValueError(f"llc_note is true or false, got {spec['llc_note']!r}")
+        if spec.get('llc_note') and not spec.get('lookahead'):
+            raise ValueError('llc_note needs lookahead true')
         budget, usd = spec.get('max_total_tokens'), spec.get('max_cost_usd')
         if not (budget is None or (type(budget) is int and budget > 0)):
             raise ValueError(f'max_total_tokens is None or a positive int, got {budget!r}')
@@ -1003,7 +1008,7 @@ def make_policy(spec):
     if spec['kind'] == 'pick':
         from research.controller import pick
         return pick.PickPolicy(llm, **{k: params[k] for k in WORKER_KEYS['pick']},
-                               lookahead=params.get('lookahead', False))
+                               lookahead=params.get('lookahead', False), llc_note=params.get('llc_note', False))
     return ReActPolicy(llm, **{k: params[k] for k in WORKER_KEYS['react']}, observation_version=observation_version(spec))
 
 

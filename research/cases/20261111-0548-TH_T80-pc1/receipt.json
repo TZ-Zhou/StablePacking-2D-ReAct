@@ -1,0 +1,180 @@
+{
+  "schema_version": 2,
+  "case_id": "20261111-0548-TH_T80-pc1",
+  "scene": "TH_T80",
+  "parent": null,
+  "started": "2026-11-11T05:48:16+08:00",
+  "case": "thangavelu-noise80",
+  "run_id": "20261111-0548-TH_T80-pc1",
+  "source": "Tests/Thangavelu/00_run.py",
+  "source_sha256": "57e9e03d20e8cb9b5838744b862097f36e13a58025a9f7a2826cf44912744032",
+  "staged_sha256": "dc580eee21565d3d2e67fd8effe3ea8da799385b6159fdc9cd5141f0fa7d4325",
+  "filter_policy": {
+    "policy": "paper",
+    "order": [
+      1,
+      4,
+      3,
+      0,
+      2
+    ],
+    "tol": 1e-09
+  },
+  "controller": {
+    "kind": "pick",
+    "llm": {
+      "kind": "api",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "max_tokens": 4096,
+      "effort": "low",
+      "request_timeout_s": 60.0,
+      "max_retries": 0,
+      "retry_backoff_s": 0.0,
+      "price_per_mtok": [
+        1.0,
+        5.0,
+        2.5,
+        0.05
+      ]
+    },
+    "llm_timeout": 90.0,
+    "max_tool_calls": 4,
+    "max_decisions": 10,
+    "max_total_tokens": 100000,
+    "max_cost_usd": 0.2,
+    "max_llm_failures": 1,
+    "lookahead": true,
+    "llc_note": true
+  },
+  "worker_venv": {
+    "manifest": "research/validation/worker-venv.local.json",
+    "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+    "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+    "version": "3.10.22",
+    "sdks": {
+      "openai": "3.46.0"
+    },
+    "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f"
+  },
+  "trace": true,
+  "worker_pool": "persistent",
+  "step_writer": false,
+  "seed": 717,
+  "python_hash_seed_launcher": 20,
+  "placements_limit": 0,
+  "git_head": "7cad89bd34676d0eaa7a0a17b2ea20b6e4a9bcd5",
+  "git_branch": "feat/llm-llc-note",
+  "git_status": [
+    "?? research/datasets/",
+    "?? research/studies/llc-control-walls-loopback/",
+    "?? research/studies/llc-control-walls/",
+    "?? research/studies/llc-note-walls-loopback/",
+    "?? research/studies/llc-note-walls/"
+  ],
+  "git_tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_sha256": {
+    "Stonepacker2D/__archive__/first.py": "9f2372c249bfbd7be3d71bdc34e9eed63cf3898b5328888c82e8d6fc7af23e7f",
+    "Stonepacker2D/__init__.py": "74db6efd354818603958a6c3db59610eeecc6f3b309b58e639b0a2acee296930",
+    "Stonepacker2D/entity/__init__.py": "54628fd0c893cf5f54f76fcc14a8cb2371b482e113091f82f033a16a8efdc35e",
+    "Stonepacker2D/entity/base.py": "705e0b572e2ed78dac8986ba718e81ce7ad39b021dcbd9df8b459bc8f8d2ef4d",
+    "Stonepacker2D/entity/brick.py": "6cc37ad67e71217f0908e18d879c8570238555754bd8353cb6723daea07708f8",
+    "Stonepacker2D/entity/stone.py": "312252c1896cc0b5686746448d3d9ecd3862702a7fbd904e6d4a15104e681622",
+    "Stonepacker2D/entity/transform.py": "e10ef72defab963045da4e2149cd748f893bba041ca6839d739d90934a6c2006",
+    "Stonepacker2D/entity/wedge.py": "7b705520e9cbcb5ed027f221a059c7e1fff2add1230d9efdd4ec127e30bcce96",
+    "Stonepacker2D/evaluate/__init__.py": "ddc8f53fc98b2eb4e844c904ca19d1ab95752336a7cf04a513283a389a95f64d",
+    "Stonepacker2D/evaluate/ksteps.py": "f98f7cec8fb01f096ec1a7d5a2fde75fb21c3085607b0a3fa5672b6a3a0e09ec",
+    "Stonepacker2D/evaluate/local_void.py": "5795ebf0a52d2a1525cf05bd067eab44022fbf1b32394e2aac756ff677932971",
+    "Stonepacker2D/evaluate/tilting_angle.py": "408a86aedfe48a1d70fef4af4e47303edcafa723f155eaeff868378aa5a22385",
+    "Stonepacker2D/stack/__init__.py": "359e7b78b830b577e26c654e0d57d38ea156d8c805e6395332f0ed33863f16a6",
+    "Stonepacker2D/stack/build_wall.py": "b1902dc9b42c07be036173716684f51dc6dc7e2641b450ab9d33f51863ecdf4e",
+    "Stonepacker2D/stack/place_stone.py": "d479672d0c76c317155d89acc7ce6d651afbd89c9abae7ddad264a6777b9c9a5",
+    "Stonepacker2D/stack/selection.py": "db6db054e6b72e54935b78630bbd94849d473f958b497949bb3a2d31b3196ceb",
+    "Stonepacker2D/stack/vendor.py": "985955a67db06ce3d3ffd075a3a1ec05d0b8550079a79665ddc075bfba55aec2",
+    "Stonepacker2D/utils/__init__.py": "32666c79b2f8b4b44ae684cb8c536496c78ff03b66a6cf5ad5554ae2bd15148a",
+    "Stonepacker2D/utils/constant.py": "ba8bccb8c4fc8fa80f02a25ba23c6ecb3843a28cf71b2a1a40012d8cb9421bcd",
+    "Stonepacker2D/utils/kine_2d.py": "d1eb529490d37005f39af3025013337425be749fabe5dd401761e6afe641aba8",
+    "Stonepacker2D/utils/logger.py": "54795c8da89645cfabac9cbe1f7d7b8471f15974447c4a76c539aca68da39103",
+    "Stonepacker2D/utils/plot.py": "42e0a27003ab8cfb350c741f56a1ebddc45b05d5661627ad723a76dfd91cf129",
+    "Stonepacker2D/utils/region_memo.py": "a80e22e35acbff94ab155d876d2ea36d6d63c0ee22a4266617c9d328935b14c5",
+    "research/paths.py": "53dd9d272528431bb9f09e2d6d06cfad4c2724288b1f83bdb33958d277457fe4",
+    "research/runner/run_wall.py": "e420f50c84615fc4f0f42cc3f06af0d11ae07298262278cd3178d1999e5669af",
+    "research/walls/case_definition.py": "265921667cb9f515d7b0a8369715b19ae835d12fd35ad046d48338a33ba56394",
+    "research/controller/order_controller.py": "9bbdc86beb24e5c990299f532be56ad235cf6c4f4c11c9890fc4215ed920b359",
+    "research/controller/endgame.py": "cec306389a29e395eb82590f0d13177786528b87f6efd8fe387e353f5e1eb07a",
+    "research/controller/pick.py": "a26738a3ed188261a780a25f76f84e0c54dfb22f6a4d669f0153ba4b59ae9a7b",
+    "research/controller/worker.py": "d3d3fd3c86a7931d302c5add36055013081c211ecd9db36cbb52c957792cb560",
+    "research/controller/llm_api.py": "056970d26c2f138db70cd55fd8531a45c21334258e3f593cbbabb5477114d1a9",
+    "research/walls/check_run.py": "8b1efefb269c57d380ac1c664fef1a0d5e495664e55d524a153ebd0fc4ede35f",
+    "research/analysis/unplaced_stones.py": "890ceb8c63079b827e2b16830fff00b7dad49e89afa6061d48f34c5f81a28d88",
+    "research/runner/campaign.py": "444d38f8e84fd4861e3b27b5e83170bc93f6fa157265566ebc10cf5ff06b82ea",
+    "research/walls/campaign.py": "e3f0b4af0eca63dc441d0e5eed5ee45ec521d8617e5860b236f851dd32f1c822",
+    "research/walls/wall_metrics.py": "fbad7bffd33a581200c70cdf92657f3e62b00e45a22624185123b78495b75153",
+    "research/storage/case_id.py": "f091716eb21eae05b839c3409445f86fe2ea8fc9868aa2def8bddd26c9229110",
+    "research/storage/case_index.py": "b6276fe8c29657b36653cc7aa853dcaa87f81f5e06f340f540436fc682d3c1cf",
+    "research/validation/windows_case_runtime.py": "358de93891ee22e3428c8f345aa49c6143832f85e626a3157d03dc931db2c5be",
+    "research/validation/step_writer.py": "2b08030746aaa9ea02d45a17c28e22fd1a1d045e219d6ddccfe7dd786c6621e7"
+  },
+  "timeout_seconds": 2400,
+  "status": "PROCESS_PASS",
+  "command": [
+    "C:\\Users\\user\\miniconda3\\envs\\stablepacking-baseline\\python.exe",
+    "-B",
+    "-u",
+    "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0548-TH_T80-pc1\\00_run.py"
+  ],
+  "spec_sha256": "144547dc2b9bc88bdbe8afc4900ab03407bfe04e3aa0dd859d37d31234c91345",
+  "pid": 7528,
+  "manifest": {
+    "result_20261111-054823_wall0/trace/commits.jsonl": "fdead6a2baf54b62db2ff9916c849da23216d26d97d86be93e194fe9df1a8652",
+    "result_20261111-054823_wall0/trace/controller.jsonl": "57499dab70162fc258fe890b9e639ac000bb5ab42b345cf67540f205c7ea0d3e",
+    "result_20261111-054823_wall0/trace/e00000.npz": "e1523e43663b1543a2e8c8def0eb89829187e6056e0f7834db346cd7050adbd0",
+    "result_20261111-054823_wall0/trace/e00001.npz": "e2994ac158d37d0565bd043f09ed4bb7f68f2dedb476bc489fbeeaab41d73f32",
+    "result_20261111-054823_wall0/trace/e00002.npz": "d47933b7696338bc52b6ba09373a58e91def116ca633c3279ce862101487aeee",
+    "result_20261111-054823_wall0/trace/e00003.npz": "f97cc7d76de38c649cc632e2fc0fe6dc438ed1f7db08518f6145bf99b0f20484",
+    "result_20261111-054823_wall0/trace/e00004.npz": "c04954157ca8b04785fe997b0967e5ab6874bb4c78ed6b296a39aa5826d486de",
+    "result_20261111-054823_wall0/trace/e00005.npz": "7642de9b098e72b4a22f628e5f38443f3e9eb7b989a2ea59cfdd6c99a7d0ef0a",
+    "result_20261111-054823_wall0/trace/e00006.npz": "1d22be39e3a4e14b701adc78af1e69a60af3dcd729b61cecc5e7787a19f83bd7",
+    "result_20261111-054823_wall0/trace/e00007.npz": "2b419b242d4a8ee61f2c8e5fce837257e3108adc7a31ac216fd7dcf2ebd81aa4",
+    "result_20261111-054823_wall0/trace/e00008.npz": "698ca4aa63ab4000addcf2b65e3655677ea7ff53be8046dc9e9a1db3f21caf8f",
+    "result_20261111-054823_wall0/trace/e00009.npz": "3b78156db741d0e2a2eb4c386de4cb47b8a321963f0bc7bc8a28e0fc3aa341a3",
+    "result_20261111-054823_wall0/trace/e00010.npz": "05f36c6f50f8af1d2537194c513f4b8b45fe0c239fe4e02f9fdec4810470359e",
+    "result_20261111-054823_wall0/trace/e00011.npz": "24c04ba9869f7b55f06312b8743c5bbdd7a1a320b15280606d2eea890d1ddce6",
+    "result_20261111-054823_wall0/trace/e00012.npz": "32d09fc220401e585ed108d370a3748e7edbccec268f02ede0b883f0e1850610",
+    "result_20261111-054823_wall0/trace/e00013.npz": "473b6f9af31e8a273c5921057b3be38f0f819e35b44a370be5b5a1a00cbf8992",
+    "result_20261111-054823_wall0/trace/e00014.npz": "0c6ffb59f14320f44a67f9ba93cc7e9ecff779e2ae36e2194c9c752b1e04087d",
+    "result_20261111-054823_wall0/trace/e00015.npz": "c951a18d6fbc45e02245c630109146fded6061ef50efdadacfa7ae1db0418238",
+    "result_20261111-054823_wall0/trace/e00016.npz": "6e90331a5928ff7fd4f42b6722be1afb9f40641b07c59726debb36469ef16e93",
+    "result_20261111-054823_wall0/trace/e00017.npz": "eac710bc18180b9180fef7b77b4726e127695164b27116ea5884a20490971f80",
+    "result_20261111-054823_wall0/trace/transport.jsonl": "fb364b4894cbf5353e8e970082dd0063291a2113259d83974e93a45ed2d91b1b",
+    "result_20261111-054823_wall0/decisions.txt": "e6b3b952a11a20fd2af161f38de78dd9870dcc82d33c2d5bcd7f78a9bd33017c",
+    "result_20261111-054823_wall0/base.pkl": "4e728d41105cf56dd12f9ffd5c84e6ba4b7bc41916e7727754767158d261b05c"
+  },
+  "process_status": "PROCESS_PASS",
+  "termination": null,
+  "returncode": 0,
+  "elapsed_seconds": 86.984,
+  "committed_placements": 18,
+  "trace_check": {
+    "files": 18,
+    "ok": true,
+    "problems": [],
+    "workers": {
+      "workers_started": 1,
+      "workers_closed": 1
+    },
+    "controller": [
+      {
+        "ok": true,
+        "verdict": "PASS",
+        "records": 18,
+        "decision_points": 7,
+        "switches": 1,
+        "incomplete": []
+      }
+    ]
+  },
+  "derived": {
+    "steps.csv": 18
+  }
+}

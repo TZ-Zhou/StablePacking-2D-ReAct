@@ -190,6 +190,25 @@ research/cases/*
 !research/cases/20261111-0117-TH_T80-pc1/
 !research/cases/20261111-0118-TH_T80-pc1/
 !research/cases/20261111-0120-TH_T80-pc1/
+# the paid LLC note and control pick walls (studies llc-note-walls, llc-control-walls), kept the same way
+!research/cases/20261111-0527-TH_T80-pc1/
+!research/cases/20261111-0528-TH_T80-pc1/
+!research/cases/20261111-0530-TH_T80-pc1/
+!research/cases/20261111-0532-TH_T80-pc1/
+!research/cases/20261111-0533-TH_T80-pc1/
+!research/cases/20261111-0535-TH_T80-pc1/
+!research/cases/20261111-0536-TH_T80-pc1/
+!research/cases/20261111-0538-TH_T80-pc1/
+!research/cases/20261111-0540-TH_T80-pc1/
+!research/cases/20261111-0541-TH_T80-pc1/
+!research/cases/20261111-0543-TH_T80-pc1/
+!research/cases/20261111-0544-TH_T80-pc1/
+!research/cases/20261111-0546-TH_T80-pc1/
+!research/cases/20261111-0548-TH_T80-pc1/
+!research/cases/20261111-0549-TH_T80-pc1/
+!research/cases/20261111-0551-TH_T80-pc1/
+!research/cases/20261111-0553-TH_T80-pc1/
+!research/cases/20261111-0554-TH_T80-pc1/
 research/cases/*/result_*/base.pkl
 research/cases/*/result_*/trace/*.npz
 !research/cases/*/execution.log

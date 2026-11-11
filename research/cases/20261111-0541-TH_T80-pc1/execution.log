@@ -1,0 +1,115 @@
+Wall size:  806.1111111111111 553.0555555555555
+C:\StonePacking-2D-ReAct\StablePacking-2D-ReAct\Stonepacker2D\entity\stone.py:601: RuntimeWarning: invalid value encountered in divide
+  vec_pt = (pt-p_origion)/np.linalg.norm(pt-p_origion)
+number of estimated clusters : 7
+BASELINE_EVENT {"event": "build_enter", "elapsed_seconds": 10.672, "input_stones": 18, "candidates_per_iteration": 7, "build_options": {"vendor_type": "variant"}, "constants": {"WORLD_WIDTH": 100, "WORLD_HEIGHT": 100, "EPS": -1e-05, "MAX_EDGE_LENGTH": 50, "WALL_WIDTH": 405, "WALL_HEIGHT": 279, "OPTIMIZATION": "Bbox_Ocontour_Void", "DILATION": 20, "EROSION": 1, "WEIGHT_FIRST_TO_ORIGIN_X": 0, "ALLOW_ROTATE": true, "DUMP_TO_FILE": true, "SAVE_ROOT": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0541-TH_T80-pc1/result_20261111-054153_wall0/", "LOCAL_WIDTH": 10, "INTER_WEIGHT": 0.1, "WIDTH_WEIGHT": 0.1, "STABALIZE_METHOD": "rotation", "WEDGE_ID": 257, "BASE_ID": 256, "CUT_ID": 258, "SELECTION_WEIGHTS": {"interlocking": 1, "kinematic": 1, "course_height": 1, "global_density": 1, "local_void": 1, "local_void_center": 1}, "PLACEMENT_OPTIMIZATION": "image_convolve", "PARTIAL_ENUMERATION_RATIO": 0.5, "MU": 0.58, "DENSITY": 18, "IGNORE_HEAD_JOINT": true, "KINEMATIC_RESULT_DECIMAL": 1, "IGNORE_VALUE": 255, "K_STEPS": 0, "KINEMATIC_OPTIMIZATION": true, "NUMBER_CPU": 10, "RECORD_TIME": false, "RECORD_SWITCHS": {"RECORD_PLACEMENT_VALUE": false, "RECORD_PLACEMENT_IMG": false, "RECORD_SELECTION_VALUE": false}, "FILTER_POLICY": {"policy": "paper", "order": [4, 0, 3, 2, 1], "tol": 1e-09}, "FILTER_SWITCH": {}, "TRACE_RUN_ID": "20261111-0541-TH_T80-pc1"}}
+2026-11-11 05:42:07,518 [Stonepaker2D CRITICAL] Stone 17 is selected for the 1th placement, with limit force 1.0344827586206897
+2026-11-11 05:42:07,524 [Stonepaker2D CRITICAL] 17 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 14.172, "step": 1, "outcome": "placed"}
+2026-11-11 05:42:07,910 [Stonepaker2D CRITICAL] Stone 5 is selected for the 2th placement, with limit force 0.6896551724137931
+2026-11-11 05:42:07,916 [Stonepaker2D CRITICAL] 16 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 14.562, "step": 2, "outcome": "placed"}
+2026-11-11 05:42:08,237 [Stonepaker2D CRITICAL] Stone 18 is selected for the 3th placement, with limit force 0.6896551724137931
+2026-11-11 05:42:08,248 [Stonepaker2D CRITICAL] 15 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 14.891, "step": 3, "outcome": "placed"}
+2026-11-11 05:42:08,435 [Stonepaker2D CRITICAL] Add wedge (width 2, height 1) to stone 13
+2026-11-11 05:42:08,559 [Stonepaker2D CRITICAL] Stone 14 is selected for the 4th placement, with limit force 0.6896551724137931
+2026-11-11 05:42:08,566 [Stonepaker2D CRITICAL] 14 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 15.219, "step": 4, "outcome": "placed"}
+2026-11-11 05:42:08,732 [Stonepaker2D CRITICAL] Add wedge (width 6, height 1) to stone 4
+2026-11-11 05:42:08,848 [Stonepaker2D CRITICAL] Stone 12 is selected for the 5th placement, with limit force 0.6896551724137931
+2026-11-11 05:42:08,859 [Stonepaker2D CRITICAL] 13 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 15.5, "step": 5, "outcome": "placed"}
+2026-11-11 05:42:09,154 [Stonepaker2D CRITICAL] Stone 2 is selected for the 6th placement, with limit force 0.5172413793103449
+2026-11-11 05:42:09,161 [Stonepaker2D CRITICAL] 12 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 15.812, "step": 6, "outcome": "placed"}
+2026-11-11 05:42:09,453 [Stonepaker2D CRITICAL] Stone 15 is selected for the 7th placement, with limit force 0.5172413793103449
+2026-11-11 05:42:09,464 [Stonepaker2D CRITICAL] 11 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 16.109, "step": 7, "outcome": "placed"}
+2026-11-11 05:42:09,758 [Stonepaker2D CRITICAL] Stone 10 is selected for the 8th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:09,770 [Stonepaker2D CRITICAL] 10 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 16.422, "step": 8, "outcome": "placed"}
+2026-11-11 05:42:10,087 [Stonepaker2D CRITICAL] Stone 11 is selected for the 9th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:10,099 [Stonepaker2D CRITICAL] 9 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 16.75, "step": 9, "outcome": "placed"}
+2026-11-11 05:42:10,415 [Stonepaker2D CRITICAL] Stone 19 is selected for the 10th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:10,423 [Stonepaker2D CRITICAL] 8 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 17.062, "step": 10, "outcome": "placed"}
+2026-11-11 05:42:10,733 [Stonepaker2D CRITICAL] Stone 4 is selected for the 11th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:10,744 [Stonepaker2D CRITICAL] 7 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 17.391, "step": 11, "outcome": "placed"}
+2026-11-11 05:42:11,180 [Stonepaker2D CRITICAL] Add wedge (width 3, height 1) to stone 13
+2026-11-11 05:42:12,503 [Stonepaker2D CRITICAL] Add wedge (width 2, height 1) to stone 3
+2026-11-11 05:42:12,556 [Stonepaker2D CRITICAL] Add wedge (width 2, height 1) to stone 6
+2026-11-11 05:42:13,550 [Stonepaker2D CRITICAL] Add wedge (width 6, height 1) to stone 9
+2026-11-11 05:42:24,273 [Stonepaker2D CRITICAL] Stone 1 is selected for the 12th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:24,286 [Stonepaker2D CRITICAL] 6 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 30.937, "step": 12, "outcome": "placed"}
+2026-11-11 05:42:24,287 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:42:26,550 [Stonepaker2D CRITICAL] Add wedge (width 6, height 1) to stone 9
+2026-11-11 05:42:36,352 [Stonepaker2D CRITICAL] Stone 3 is selected for the 13th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:36,377 [Stonepaker2D CRITICAL] 5 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 43.016, "step": 13, "outcome": "placed"}
+2026-11-11 05:42:36,379 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:42:38,269 [Stonepaker2D CRITICAL] Add wedge (width 2, height 1) to stone 6
+2026-11-11 05:42:47,335 [Stonepaker2D CRITICAL] Stone 8 is selected for the 14th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:47,359 [Stonepaker2D CRITICAL] 4 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 54.0, "step": 14, "outcome": "placed"}
+2026-11-11 05:42:47,361 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:42:48,529 [Stonepaker2D CRITICAL] Add wedge (width 2, height 1) to stone 6
+2026-11-11 05:42:58,476 [Stonepaker2D CRITICAL] Stone 6 is selected for the 15th placement, with limit force 0.3448275862068966
+2026-11-11 05:42:58,512 [Stonepaker2D CRITICAL] 3 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 65.156, "step": 15, "outcome": "placed"}
+2026-11-11 05:42:58,514 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:42:58,844 [Stonepaker2D CRITICAL] Add wedge (width 6, height 3) to stone 13
+2026-11-11 05:43:05,047 [Stonepaker2D CRITICAL] Stone 13 is selected for the 16th placement, with limit force 0.1724137931034483
+2026-11-11 05:43:05,075 [Stonepaker2D CRITICAL] 2 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 71.719, "step": 16, "outcome": "placed"}
+2026-11-11 05:43:05,076 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:09,915 [Stonepaker2D CRITICAL] Stone 9 is selected for the 17th placement, with limit force 0.3448275862068966
+2026-11-11 05:43:09,930 [Stonepaker2D CRITICAL] 1 stones remaining in the set
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.578, "step": 17, "outcome": "placed"}
+2026-11-11 05:43:09,931 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:09,973 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.625, "step": 18, "outcome": "no_placement"}
+Trial number 1
+2026-11-11 05:43:09,975 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:10,010 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.656, "step": 18, "outcome": "no_placement"}
+Trial number 2
+2026-11-11 05:43:10,011 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:10,044 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.687, "step": 18, "outcome": "no_placement"}
+Trial number 3
+2026-11-11 05:43:10,044 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:10,077 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.719, "step": 18, "outcome": "no_placement"}
+Trial number 4
+2026-11-11 05:43:10,078 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:10,109 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.75, "step": 18, "outcome": "no_placement"}
+Trial number 5
+2026-11-11 05:43:10,110 [Stonepaker2D WARNING] Not enough stones from the vendor
+2026-11-11 05:43:10,142 [Stonepaker2D WARNING] No possible placement for any of the 1 given
+BASELINE_EVENT {"event": "step_commit", "elapsed_seconds": 76.781, "step": 18, "outcome": "no_placement"}
+BASELINE_EVENT {"event": "build_return", "elapsed_seconds": 76.797, "placed_rocks": 17, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0541-TH_T80-pc1/result_20261111-054153_wall0/"}
+stone 17 is placed at (85.45490454246215,42.735352205398286) with stable angle 0 degree
+stone 5 is placed at (85.43435980551054,118.80713128038897) with stable angle 0 degree
+stone 18 is placed at (270.906936416185,43.90404624277457) with stable angle -2 degree
+stone 14 is placed at (449.14755480607084,35.790050590219224) with stable angle 0 degree
+stone 12 is placed at (616.511593118923,36.54674644727001) with stable angle -2 degree
+stone 2 is placed at (186.2693911592994,126.40200166805671) with stable angle 0 degree
+stone 15 is placed at (129.27881040892194,197.38785625774474) with stable angle 2 degree
+stone 10 is placed at (265.05785123966945,125.32506887052341) with stable angle -4 degree
+stone 11 is placed at (366.1389128559103,116.15962036238136) with stable angle 2 degree
+stone 19 is placed at (349.411316648531,181.0228509249184) with stable angle 0 degree
+stone 4 is placed at (522.4904362776704,135.48592306039114) with stable angle 2 degree
+stone 1 is placed at (702.741548527808,108.55288985823337) with stable angle -2 degree
+stone 3 is placed at (617.6521739130435,177.5144927536232) with stable angle 0 degree
+stone 8 is placed at (699.0569620253165,190.2594936708861) with stable angle -8 degree
+stone 6 is placed at (481.48699334543255,222.4670296430732) with stable angle 2 degree
+stone 13 is placed at (306.639608801956,248.26992665036676) with stable angle 0 degree
+stone 9 is placed at (151.60153649167734,276.64225352112675) with stable angle 0 degree
+C:\StonePacking-2D-ReAct\StablePacking-2D-ReAct\research\cases\20261111-0541-TH_T80-pc1\00_run.py:192: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed two minor releases later. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap(obj)`` instead.
+  tab20_cm = cm.get_cmap('tab20')
+BASELINE_EVENT {"event": "final_evaluation_complete", "elapsed_seconds": 76.969, "placed_rocks": 17, "limit_force": 0.2, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-0541-TH_T80-pc1/result_20261111-054153_wall0/"}

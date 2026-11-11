@@ -72,6 +72,23 @@ class Lookahead(unittest.TestCase):
         self.assertEqual(plain.prompt_sha256, record["prompt_sha256"])  # step 3's prompt is unchanged
         self.assertEqual(run("pick_llc")[1]["observation"]["observation_version"], "pick-1")
 
+    def test_the_llc_note_only_adds_its_paragraph(self):
+        llm = oc.MockLLM("pick_safe")
+        ahead = pick.PickPolicy(llm, max_tool_calls=4, lookahead=True)
+        note = pick.PickPolicy(llm, max_tool_calls=4, lookahead=True, llc_note=True)
+        self.assertEqual(note.system.replace(pick.LLC_NOTE, ""), ahead.system)
+        self.assertEqual(note.tools, ahead.tools)
+        self.assertNotRegex(pick.LLC_NOTE, r"[0-9]|NHR|GDS|IWR|LFR")  # no numbers, nothing on the other scores
+        recorded = Path(__file__).resolve().parents[1] / "cases" / "20261111-0106-TH_T80-pc1"
+        record = json.loads(next(recorded.glob("result_*/trace/controller.jsonl")).read_text(encoding="utf-8")
+                            .splitlines()[11])
+        self.assertEqual(ahead.prompt_sha256, record["prompt_sha256"])  # the lookahead walls' prompt is unchanged
+        self.assertEqual(run("pick_safe", lookahead=True, llc_note=True)[1]["observation"]["observation_version"],
+                         "pick-3")
+        for spec in ({"llc_note": True}, {"lookahead": True, "llc_note": 1}):
+            with self.subTest(spec), self.assertRaises(ValueError):
+                oc.validate_spec({"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, **spec})
+
     def test_check_after_ids_are_validated(self):
         policy = pick.PickPolicy(oc.MockLLM("pick_llc"), lookahead=True)
         request = {"observation": {"candidates": [{}] * 3}}
@@ -159,6 +176,36 @@ class Harness(unittest.TestCase):
         with mock.patch.object(gpt_wall, "journals", return_value={names[0]: {"state": "finished", "started_at": "1"}}):
             self.assertEqual(pick_runner.next_state(False, lookahead_wall), (313, "14302", names[1], names[0]))
 
+    def test_the_llc_batches_differ_only_by_the_note_and_their_states_are_the_plans(self):
+        from research.llm_walls import llc_control_wall, llc_note_wall, lookahead_wall
+        self.assertEqual((llc_control_wall.spec_problems(), llc_note_wall.spec_problems()), ([], []))
+        self.assertEqual(llc_note_wall.SPEC, {**llc_control_wall.SPEC, "llc_note": True})
+        self.assertEqual(llc_control_wall.SPEC, lookahead_wall.SPEC)
+        self.assertTrue(llc_control_wall.spec_problems(llc_note_wall.SPEC))
+        self.assertTrue(llc_note_wall.spec_problems(llc_control_wall.SPEC))
+        plan = Path(__file__).resolve().parents[2] / "docs" / "plans" / "llm-endgame-llc-note.md"
+        rows = [line.split("|")[1:3] for line in plan.read_text(encoding="utf-8").splitlines()
+                if line.startswith(("| 313 |", "| 484 |", "| 717 |"))]
+        self.assertEqual(llc_control_wall.STATES, [(int(s), o.strip()) for s, o in rows])
+        self.assertEqual(llc_note_wall.STATES, llc_control_wall.STATES)
+        self.assertFalse(set(llc_control_wall.STATES) & (set(pick_wall.STATES) | set(lookahead_wall.STATES)))
+
+    def test_the_llc_batches_are_built_in_turn(self):
+        from research.llm_walls import llc_control_wall, llc_note_wall
+        journals, built = {llc_control_wall: {}, llc_note_wall: {}}, []
+
+        def fake_run(loopback, launch, x, limit):
+            seed, order, name, after = pick_runner.next_state(loopback, x)
+            built.append(name)
+            journals[x][name] = {"state": "aborted" if name == "llcn-s313-04231" else "finished", "started_at": name}
+            return [{"name": name}]
+
+        with mock.patch.object(gpt_wall, "journals", side_effect=lambda loopback, x: journals[x]), \
+                mock.patch.object(pick_runner, "run", side_effect=fake_run):
+            pick_runner.run_pair(True)
+        self.assertEqual(built, ["llcc-s313-12403", "llcn-s313-12403", "llcc-s313-41023", "llcn-s313-41023",
+                                 "llcc-s313-04231", "llcn-s313-04231"])  # stops at the wall that is not finished
+
     def test_next_state_resumes_after_the_finished_walls(self):
         names = [pick_wall.name_of(*s) for s in pick_wall.STATES]
         done = {names[0]: {"state": "finished", "started_at": "1"}, names[1]: {"state": "finished", "started_at": "2"}}
@@ -228,6 +275,21 @@ class LoopbackWall(unittest.TestCase):
         self.assertEqual(len(server.requests), 2 * report["decision_points"])  # check_after, then commit_pick
         self.assertTrue(all([t["name"] for t in r["body"]["tools"]] == ["check_after", "commit_pick"]
                             for r in server.requests))
+
+    def test_a_loopback_llc_note_wall_passes(self):
+        """pick-3 through the venv worker: the note reaches every request and the wall checks PASS."""
+        test_gpt_smoke.isolate(self)
+        server = test_gpt_smoke.Server()
+        self.addCleanup(server.shutdown)
+        env = {**test_gpt_smoke.CLEAN_ENV, "OPENAI_API_KEY": test_gpt_smoke.DUMMY, "OPENAI_BASE_URL": server.url}
+        spec = {**LOOKAHEAD_SPEC, "llc_note": True}
+        with mock.patch.dict(os.environ, env, clear=True):
+            receipt = run_wall.run(["thangavelu-noise80", "--seed", "313", "--policy", "paper", "--order", "3,0,2,1,4",
+                                    "--worker-venv", "--controller", json.dumps(spec)])
+        report = receipt["trace_check"]["controller"][0]
+        self.assertEqual((receipt["status"], report["verdict"]), ("PROCESS_PASS", "PASS"), receipt["trace_check"])
+        self.assertEqual(len(server.requests), 2 * report["decision_points"])
+        self.assertTrue(all(pick.LLC_NOTE.strip() in json.dumps(r["body"]) for r in server.requests))
 
 
 if __name__ == "__main__":
