@@ -1,0 +1,74 @@
+{
+ "after": "repeat-s720-th-t80-r4",
+ "case_id": "20261111-2038-TH_T20-pc1",
+ "code_dirty": false,
+ "ended_at": "2026-11-11T20:42:11",
+ "experiment_limits": {
+  "cost_usd": 20.0,
+  "http_requests": 4000,
+  "tokens": 10000000,
+  "walls": 40
+ },
+ "git_head": "411589faedae44ee27adf503d804514706b6a760",
+ "gpt_complete": true,
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 100,
+  "seconds": 3600,
+  "tokens": 250000
+ },
+ "max_http_requests": 100,
+ "mode": "paid",
+ "placements": 0,
+ "reasons": [],
+ "seed": 720,
+ "spec": {
+  "kind": "pick",
+  "llm": {
+   "effort": "low",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 4096,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 60.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 90.0,
+  "lookahead": true,
+  "max_cost_usd": 0.5,
+  "max_decisions": 25,
+  "max_llm_failures": 1,
+  "max_tool_calls": 4,
+  "max_total_tokens": 250000,
+  "whole_wall": true
+ },
+ "spend": {
+  "cost_usd": 0.16074900000000003,
+  "http_requests": 45,
+  "tokens": 96140,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T20:38:27",
+ "state": "finished",
+ "study": "pick-repeats",
+ "wall_args": [
+  "thangavelu-noise20"
+ ],
+ "worker_venv": {
+  "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f",
+  "manifest": "research/validation/worker-venv.local.json",
+  "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+  "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+  "sdks": {
+   "openai": "3.46.0"
+  },
+  "version": "3.10.22"
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "lessons": [
+  "Use check_after on competing candidates, including before options become scarce. Prefer choices that keep more offered stones placeable next, especially those with few poses, and that reopen currently unplaceable stones. A zero is a warning, not necessarily a permanent loss; one-step feasibility does not guarantee completion.",
+  "Among choices that preserve placement options, favour high LLC, particularly early. Avoid a large drop in LLC merely to maximize one other filter. LLC is an immediate stability signal, not a guarantee of the finished wall\u2019s weaker-direction load.",
+  "Balance interlocking with packing: prefer good IWR together with high GDS and LFR close to zero. Do not chase an extreme IWR score at the expense of density, flush contact or stability.",
+  "Do not insist on the best NHR at every placement. Accept some height mismatch when it preserves options or improves stability, packing or joint staggering; local levelness alone does not ensure short horizontal joint paths.",
+  "When options and scores are otherwise comparable, consider a broad, low rotation rather than an upright, narrow one, particularly before the remaining stones become hard to fit. Do not rule out upright poses when they fit better or preserve future options."
+ ],
+ "pack_sha256": "41e0925fe780122cc01361c7012f07d7080b486b0a0f1dfb2f36f45f3ac1eafe",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 313
+}

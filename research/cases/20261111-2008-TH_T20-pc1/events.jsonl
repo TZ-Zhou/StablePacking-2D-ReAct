@@ -1,0 +1,31 @@
+{"event": "build_enter", "elapsed_seconds": 11.25, "input_stones": 23, "candidates_per_iteration": 3, "build_options": {"vendor_type": "variant"}, "constants": {"WORLD_WIDTH": 100, "WORLD_HEIGHT": 100, "EPS": -1e-05, "MAX_EDGE_LENGTH": 50, "WALL_WIDTH": 312, "WALL_HEIGHT": 228, "OPTIMIZATION": "Bbox_Ocontour_Void", "DILATION": 20, "EROSION": 1, "WEIGHT_FIRST_TO_ORIGIN_X": 0, "ALLOW_ROTATE": true, "DUMP_TO_FILE": true, "SAVE_ROOT": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-2008-TH_T20-pc1/result_20261111-200904_wall0/", "LOCAL_WIDTH": 10, "INTER_WEIGHT": 0.1, "WIDTH_WEIGHT": 0.1, "STABALIZE_METHOD": "rotation", "WEDGE_ID": 257, "BASE_ID": 256, "CUT_ID": 258, "SELECTION_WEIGHTS": {"interlocking": 1, "kinematic": 1, "course_height": 1, "global_density": 1, "local_void": 1, "local_void_center": 1}, "PLACEMENT_OPTIMIZATION": "image_convolve", "PARTIAL_ENUMERATION_RATIO": 0.5, "MU": 0.58, "DENSITY": 18, "IGNORE_HEAD_JOINT": true, "KINEMATIC_RESULT_DECIMAL": 1, "IGNORE_VALUE": 255, "K_STEPS": 0, "KINEMATIC_OPTIMIZATION": true, "NUMBER_CPU": 10, "RECORD_TIME": false, "RECORD_SWITCHS": {"RECORD_PLACEMENT_VALUE": false, "RECORD_PLACEMENT_IMG": false, "RECORD_SELECTION_VALUE": false}, "FILTER_POLICY": {"policy": "paper", "order": [3, 0, 2, 1, 4], "tol": 1e-09}, "FILTER_SWITCH": {}, "TRACE_RUN_ID": "20261111-2008-TH_T20-pc1"}}
+{"event": "step_commit", "elapsed_seconds": 26.625, "step": 1, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 34.359, "step": 2, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 42.015, "step": 3, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 49.25, "step": 4, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 57.14, "step": 5, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 65.125, "step": 6, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 72.187, "step": 7, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 80.562, "step": 8, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 90.296, "step": 9, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 97.921, "step": 10, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 107.156, "step": 11, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 115.078, "step": 12, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 123.203, "step": 13, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 133.562, "step": 14, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 144.296, "step": 15, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 152.546, "step": 16, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 159.859, "step": 17, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 170.625, "step": 18, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 180.5, "step": 19, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 190.781, "step": 20, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 197.953, "step": 22, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 205.171, "step": 23, "outcome": "placed"}
+{"event": "step_commit", "elapsed_seconds": 205.203, "step": 24, "outcome": "no_placement"}
+{"event": "step_commit", "elapsed_seconds": 205.234, "step": 24, "outcome": "no_placement"}
+{"event": "step_commit", "elapsed_seconds": 205.265, "step": 24, "outcome": "no_placement"}
+{"event": "step_commit", "elapsed_seconds": 205.296, "step": 24, "outcome": "no_placement"}
+{"event": "step_commit", "elapsed_seconds": 205.312, "step": 24, "outcome": "no_placement"}
+{"event": "step_commit", "elapsed_seconds": 205.343, "step": 24, "outcome": "no_placement"}
+{"event": "build_return", "elapsed_seconds": 205.343, "placed_rocks": 22, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-2008-TH_T20-pc1/result_20261111-200904_wall0/"}
+{"event": "final_evaluation_complete", "elapsed_seconds": 205.656, "placed_rocks": 22, "limit_force": 0.2, "output_dir": "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-2008-TH_T20-pc1/result_20261111-200904_wall0/"}

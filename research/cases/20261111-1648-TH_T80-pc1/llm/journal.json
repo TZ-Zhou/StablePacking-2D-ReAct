@@ -1,0 +1,81 @@
+{
+ "after": null,
+ "case_id": "20261111-1648-TH_T80-pc1",
+ "code_dirty": false,
+ "ended_at": "2026-11-11T16:52:59",
+ "experiment_limits": {
+  "cost_usd": 5.0,
+  "http_requests": 1000,
+  "tokens": 2500000,
+  "walls": 10
+ },
+ "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+ "gpt_complete": true,
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 100,
+  "seconds": 3600,
+  "tokens": 250000
+ },
+ "max_http_requests": 100,
+ "mode": "paid",
+ "placements": 0,
+ "reasons": [],
+ "seed": 313,
+ "spec": {
+  "kind": "pick",
+  "lessons": [
+   "Use check_after on competing candidates, including before options become scarce. Prefer choices that keep more offered stones placeable next, especially those with few poses, and that reopen currently unplaceable stones. A zero is a warning, not necessarily a permanent loss; one-step feasibility does not guarantee completion.",
+   "Among choices that preserve placement options, favour high LLC, particularly early. Avoid a large drop in LLC merely to maximize one other filter. LLC is an immediate stability signal, not a guarantee of the finished wall\u2019s weaker-direction load.",
+   "Balance interlocking with packing: prefer good IWR together with high GDS and LFR close to zero. Do not chase an extreme IWR score at the expense of density, flush contact or stability.",
+   "Do not insist on the best NHR at every placement. Accept some height mismatch when it preserves options or improves stability, packing or joint staggering; local levelness alone does not ensure short horizontal joint paths.",
+   "When options and scores are otherwise comparable, consider a broad, low rotation rather than an upright, narrow one, particularly before the remaining stones become hard to fit. Do not rule out upright poses when they fit better or preserve future options."
+  ],
+  "llm": {
+   "effort": "low",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 4096,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 60.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 90.0,
+  "lookahead": true,
+  "max_cost_usd": 0.5,
+  "max_decisions": 25,
+  "max_llm_failures": 1,
+  "max_tool_calls": 4,
+  "max_total_tokens": 250000,
+  "whole_wall": true
+ },
+ "spend": {
+  "cost_usd": 0.12536094999999997,
+  "http_requests": 35,
+  "tokens": 107685,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T16:48:58",
+ "state": "finished",
+ "study": "lessons-walls",
+ "wall_args": [
+  "thangavelu-noise80"
+ ],
+ "worker_venv": {
+  "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f",
+  "manifest": "research/validation/worker-venv.local.json",
+  "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+  "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+  "sdks": {
+   "openai": "3.46.0"
+  },
+  "version": "3.10.22"
+ }
+}

@@ -1,0 +1,199 @@
+{
+  "schema_version": 2,
+  "case_id": "20261111-1653-TH_T20-pc1",
+  "scene": "TH_T20",
+  "parent": null,
+  "started": "2026-11-11T16:53:24+08:00",
+  "case": "thangavelu-noise20",
+  "run_id": "20261111-1653-TH_T20-pc1",
+  "source": "Tests/Thangavelu/00_run.py",
+  "source_sha256": "57e9e03d20e8cb9b5838744b862097f36e13a58025a9f7a2826cf44912744032",
+  "source_edits": [
+    [
+      "/data/stones_noise_80_labels.png",
+      "/data/stones_noise_20_labels.png"
+    ]
+  ],
+  "staged_sha256": "cab51f166135edfc89e37df9be65ad2f7b3c51f99d6fed8c7e34121ed0d80e41",
+  "filter_policy": {
+    "policy": "paper",
+    "order": [
+      3,
+      0,
+      2,
+      1,
+      4
+    ],
+    "tol": 1e-09
+  },
+  "controller": {
+    "kind": "pick",
+    "llm": {
+      "kind": "api",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "max_tokens": 4096,
+      "effort": "low",
+      "request_timeout_s": 60.0,
+      "max_retries": 0,
+      "retry_backoff_s": 0.0,
+      "price_per_mtok": [
+        1.0,
+        5.0,
+        2.5,
+        0.05
+      ]
+    },
+    "llm_timeout": 90.0,
+    "max_tool_calls": 4,
+    "max_decisions": 25,
+    "max_total_tokens": 250000,
+    "max_cost_usd": 0.5,
+    "max_llm_failures": 1,
+    "lookahead": true,
+    "whole_wall": true,
+    "lessons": [
+      "Use check_after on competing candidates, including before options become scarce. Prefer choices that keep more offered stones placeable next, especially those with few poses, and that reopen currently unplaceable stones. A zero is a warning, not necessarily a permanent loss; one-step feasibility does not guarantee completion.",
+      "Among choices that preserve placement options, favour high LLC, particularly early. Avoid a large drop in LLC merely to maximize one other filter. LLC is an immediate stability signal, not a guarantee of the finished wall\u2019s weaker-direction load.",
+      "Balance interlocking with packing: prefer good IWR together with high GDS and LFR close to zero. Do not chase an extreme IWR score at the expense of density, flush contact or stability.",
+      "Do not insist on the best NHR at every placement. Accept some height mismatch when it preserves options or improves stability, packing or joint staggering; local levelness alone does not ensure short horizontal joint paths.",
+      "When options and scores are otherwise comparable, consider a broad, low rotation rather than an upright, narrow one, particularly before the remaining stones become hard to fit. Do not rule out upright poses when they fit better or preserve future options."
+    ]
+  },
+  "worker_venv": {
+    "manifest": "research/validation/worker-venv.local.json",
+    "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+    "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+    "version": "3.10.22",
+    "sdks": {
+      "openai": "3.46.0"
+    },
+    "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f"
+  },
+  "trace": true,
+  "worker_pool": "persistent",
+  "step_writer": false,
+  "seed": 313,
+  "python_hash_seed_launcher": 20,
+  "placements_limit": 0,
+  "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+  "git_branch": "feat/llm-lessons",
+  "git_status": [
+    "?? research/studies/lessons-walls/"
+  ],
+  "git_tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_sha256": {
+    "Stonepacker2D/__archive__/first.py": "9f2372c249bfbd7be3d71bdc34e9eed63cf3898b5328888c82e8d6fc7af23e7f",
+    "Stonepacker2D/__init__.py": "74db6efd354818603958a6c3db59610eeecc6f3b309b58e639b0a2acee296930",
+    "Stonepacker2D/entity/__init__.py": "54628fd0c893cf5f54f76fcc14a8cb2371b482e113091f82f033a16a8efdc35e",
+    "Stonepacker2D/entity/base.py": "705e0b572e2ed78dac8986ba718e81ce7ad39b021dcbd9df8b459bc8f8d2ef4d",
+    "Stonepacker2D/entity/brick.py": "6cc37ad67e71217f0908e18d879c8570238555754bd8353cb6723daea07708f8",
+    "Stonepacker2D/entity/stone.py": "312252c1896cc0b5686746448d3d9ecd3862702a7fbd904e6d4a15104e681622",
+    "Stonepacker2D/entity/transform.py": "e10ef72defab963045da4e2149cd748f893bba041ca6839d739d90934a6c2006",
+    "Stonepacker2D/entity/wedge.py": "7b705520e9cbcb5ed027f221a059c7e1fff2add1230d9efdd4ec127e30bcce96",
+    "Stonepacker2D/evaluate/__init__.py": "ddc8f53fc98b2eb4e844c904ca19d1ab95752336a7cf04a513283a389a95f64d",
+    "Stonepacker2D/evaluate/ksteps.py": "f98f7cec8fb01f096ec1a7d5a2fde75fb21c3085607b0a3fa5672b6a3a0e09ec",
+    "Stonepacker2D/evaluate/local_void.py": "5795ebf0a52d2a1525cf05bd067eab44022fbf1b32394e2aac756ff677932971",
+    "Stonepacker2D/evaluate/tilting_angle.py": "408a86aedfe48a1d70fef4af4e47303edcafa723f155eaeff868378aa5a22385",
+    "Stonepacker2D/stack/__init__.py": "359e7b78b830b577e26c654e0d57d38ea156d8c805e6395332f0ed33863f16a6",
+    "Stonepacker2D/stack/build_wall.py": "2e2da2c0d9e8a3d10d9f3b93ec21333f20244902c8bbdecc4a5efc5ec8190980",
+    "Stonepacker2D/stack/place_stone.py": "d479672d0c76c317155d89acc7ce6d651afbd89c9abae7ddad264a6777b9c9a5",
+    "Stonepacker2D/stack/selection.py": "db6db054e6b72e54935b78630bbd94849d473f958b497949bb3a2d31b3196ceb",
+    "Stonepacker2D/stack/vendor.py": "985955a67db06ce3d3ffd075a3a1ec05d0b8550079a79665ddc075bfba55aec2",
+    "Stonepacker2D/utils/__init__.py": "32666c79b2f8b4b44ae684cb8c536496c78ff03b66a6cf5ad5554ae2bd15148a",
+    "Stonepacker2D/utils/constant.py": "ba8bccb8c4fc8fa80f02a25ba23c6ecb3843a28cf71b2a1a40012d8cb9421bcd",
+    "Stonepacker2D/utils/kine_2d.py": "d1eb529490d37005f39af3025013337425be749fabe5dd401761e6afe641aba8",
+    "Stonepacker2D/utils/logger.py": "54795c8da89645cfabac9cbe1f7d7b8471f15974447c4a76c539aca68da39103",
+    "Stonepacker2D/utils/plot.py": "42e0a27003ab8cfb350c741f56a1ebddc45b05d5661627ad723a76dfd91cf129",
+    "Stonepacker2D/utils/region_memo.py": "a80e22e35acbff94ab155d876d2ea36d6d63c0ee22a4266617c9d328935b14c5",
+    "research/paths.py": "53dd9d272528431bb9f09e2d6d06cfad4c2724288b1f83bdb33958d277457fe4",
+    "research/runner/run_wall.py": "e420f50c84615fc4f0f42cc3f06af0d11ae07298262278cd3178d1999e5669af",
+    "research/walls/case_definition.py": "265921667cb9f515d7b0a8369715b19ae835d12fd35ad046d48338a33ba56394",
+    "research/controller/order_controller.py": "72d1bdf45070495951a695eb49d3a9051f1a1fc195426b0dcdd01c94b77b593f",
+    "research/controller/endgame.py": "b79580285b1cd537676e5f8719e7f751056c636fd0022745e75a81f70bd02d9c",
+    "research/controller/pick.py": "9c37ef4bdcbba05027fb0a00a47ef804da78c9213edf239fb163134f190e0b65",
+    "research/controller/worker.py": "fac94821e51797b457d3090fc91a6e2afd47ee81b14130e5dc23ac2d2f4a7997",
+    "research/controller/llm_api.py": "056970d26c2f138db70cd55fd8531a45c21334258e3f593cbbabb5477114d1a9",
+    "research/walls/check_run.py": "8b1efefb269c57d380ac1c664fef1a0d5e495664e55d524a153ebd0fc4ede35f",
+    "research/analysis/unplaced_stones.py": "890ceb8c63079b827e2b16830fff00b7dad49e89afa6061d48f34c5f81a28d88",
+    "research/runner/campaign.py": "444d38f8e84fd4861e3b27b5e83170bc93f6fa157265566ebc10cf5ff06b82ea",
+    "research/walls/campaign.py": "e3f0b4af0eca63dc441d0e5eed5ee45ec521d8617e5860b236f851dd32f1c822",
+    "research/walls/wall_metrics.py": "fbad7bffd33a581200c70cdf92657f3e62b00e45a22624185123b78495b75153",
+    "research/storage/case_id.py": "f091716eb21eae05b839c3409445f86fe2ea8fc9868aa2def8bddd26c9229110",
+    "research/storage/case_index.py": "b6276fe8c29657b36653cc7aa853dcaa87f81f5e06f340f540436fc682d3c1cf",
+    "research/validation/windows_case_runtime.py": "358de93891ee22e3428c8f345aa49c6143832f85e626a3157d03dc931db2c5be",
+    "research/validation/step_writer.py": "2b08030746aaa9ea02d45a17c28e22fd1a1d045e219d6ddccfe7dd786c6621e7"
+  },
+  "timeout_seconds": 3600,
+  "status": "PROCESS_PASS",
+  "command": [
+    "C:\\Users\\user\\miniconda3\\envs\\stablepacking-baseline\\python.exe",
+    "-B",
+    "-u",
+    "C:\\StonePacking-2D-ReAct\\StablePacking-2D-ReAct\\research\\cases\\20261111-1653-TH_T20-pc1\\00_run.py"
+  ],
+  "spec_sha256": "309dea3164a46484a6473403c764531e70a4b098717f97502e7ca2f05a6ed7b1",
+  "pid": 41392,
+  "manifest": {
+    "result_20261111-165330_wall0/trace/commits.jsonl": "ad0d0c05e9d955f6f53219f69a5f1c4a435b278db6201c93d23aa388d19f207c",
+    "result_20261111-165330_wall0/trace/controller.jsonl": "a0cc3bacbb5ef9311c6be87121ed4f3427c52001a52b1143ef308179d155bdd9",
+    "result_20261111-165330_wall0/trace/e00000.npz": "8970caba49cce67cd3b7e0c07fdfd46c0136ccbafe40287d8f646f5eecfe7510",
+    "result_20261111-165330_wall0/trace/e00001.npz": "a503e65c206e806dac396fa0abc0f8bac0e990f9bbb1d56d751f683eef838ed1",
+    "result_20261111-165330_wall0/trace/e00002.npz": "7a102883bcf0491dcd2847e148123bed086e2cc51a9ee445e178ef784df9d405",
+    "result_20261111-165330_wall0/trace/e00003.npz": "7f14b7eeb84182693bfaf7989eb4a565676a1d4a9944e5dba6b69be90a594ccc",
+    "result_20261111-165330_wall0/trace/e00004.npz": "38c9f3126e945a60e92dfe4eb364893e0cdd0fb46ef564233c3b31e08abcaab2",
+    "result_20261111-165330_wall0/trace/e00005.npz": "3c70134b2e3fe436e85f67de6ef6549ed20890c3d9fbfab0a4add71e1003bdc3",
+    "result_20261111-165330_wall0/trace/e00006.npz": "8c944bd0623b01c274fd924f6981ccbb474df77670ca60e381b0b7298b852f5b",
+    "result_20261111-165330_wall0/trace/e00007.npz": "c5dbad6b6abda240994a5b0699dea66d2d9a4787db6c504d367eb45e171b41bd",
+    "result_20261111-165330_wall0/trace/e00008.npz": "8e05f86b439554fae5bb9544537e93a5ef041a876388dec2df29865bb90e84a9",
+    "result_20261111-165330_wall0/trace/e00009.npz": "0190f304da6bb745da11ffae1aa67ce9a1b14291df38f5a8586e3e906f13915a",
+    "result_20261111-165330_wall0/trace/e00010.npz": "b81f1c407d9f7df6dac8e0f548841c3389f60bf17549d72fa4e2cfbf51689b45",
+    "result_20261111-165330_wall0/trace/e00011.npz": "0bb2bc78a1a560cd320bceaf9778225d4522ecfab21feca9c1a11fdbe7325c56",
+    "result_20261111-165330_wall0/trace/e00012.npz": "e99c49e7de4c8dbdd856e0135439fe309f42181f8b3b47cbe61ed399505607ab",
+    "result_20261111-165330_wall0/trace/e00013.npz": "5acbcae1a4d6cb7b9fae92f5a9a2aaaca99da1fe339f0a4f4032b8ac8c9051f3",
+    "result_20261111-165330_wall0/trace/e00014.npz": "3a0f2e512c8e6936b2339f465e3f83bc8c65f55915f309923aca8ce55b20c2f3",
+    "result_20261111-165330_wall0/trace/e00015.npz": "3891c03993eb21689a56b8c954f4bd7d8e38ff3bac19b6b7473a42a573677d05",
+    "result_20261111-165330_wall0/trace/e00016.npz": "1819b6e9b1c421a7b0b3f3881eae324fb16bc21a7448b98b7c6a6f766db44d5f",
+    "result_20261111-165330_wall0/trace/e00017.npz": "058061a4f5fc677a4c18dd1cf8d5d55de9ecd2d63fc5856174352315618e0dd8",
+    "result_20261111-165330_wall0/trace/e00018.npz": "f685fac9cbb356ff112a36e290adb1e3991d2b29406308769376bb6af4a42978",
+    "result_20261111-165330_wall0/trace/e00019.npz": "12b2bf4b50f6140b08ad6ada6654230c8d068c49d1c6320296dd11d0f6b23656",
+    "result_20261111-165330_wall0/trace/e00020.npz": "373b34ac52192bfd04c30a3824c6d6d304d429293f074d10588ef2591410433f",
+    "result_20261111-165330_wall0/trace/e00021.npz": "fe210254eb1d3cea3733d9d88de7b8030cbe68e5f0c2d967a6635741e341239f",
+    "result_20261111-165330_wall0/trace/e00022.npz": "51acf5badb41eabe2332b9a32174b68d48f25165dbafc533e2921f7332eae12e",
+    "result_20261111-165330_wall0/trace/e00023.npz": "3e7fdf2b72bbbb686f2d87fd208556e130eb02f13f7396ffedba36346ebf5993",
+    "result_20261111-165330_wall0/trace/e00024.npz": "c3b53db0a298fb47d4e4d347eb6c597037f26526f1ee11c11168aba4c6dc929f",
+    "result_20261111-165330_wall0/trace/e00025.npz": "d11bbdaab2d735ff937e1d84e879c0b46f47da51e79737e34c58a96e59376cda",
+    "result_20261111-165330_wall0/trace/e00026.npz": "e64129455cdc41ddc50cb3966fd8c876208058c0a792a6664a476087418afe4e",
+    "result_20261111-165330_wall0/trace/e00027.npz": "bd58951252b4cefe700834070a17655cd76a4372f969ae0a866b4b7171bb8ebb",
+    "result_20261111-165330_wall0/trace/transport.jsonl": "0a9a34580fbeec0f502eee4f97d76f54207fb818b3059b1009384988278522ee",
+    "result_20261111-165330_wall0/decisions.txt": "e6e40daf154bbe8c9f4e363068363dd23e264456221fcc0430d260542ef1cfb4",
+    "result_20261111-165330_wall0/base.pkl": "f1426d49bc79c74ccbf14f8e455635079cf5555ead29c49e95a064fb26c45d9c"
+  },
+  "process_status": "PROCESS_PASS",
+  "termination": null,
+  "returncode": 0,
+  "elapsed_seconds": 195.906,
+  "committed_placements": 22,
+  "trace_check": {
+    "files": 28,
+    "ok": true,
+    "problems": [],
+    "workers": {
+      "workers_started": 1,
+      "workers_closed": 1
+    },
+    "controller": [
+      {
+        "ok": true,
+        "verdict": "PASS",
+        "records": 28,
+        "decision_points": 21,
+        "switches": 13,
+        "incomplete": []
+      }
+    ]
+  },
+  "derived": {
+    "steps.csv": 28
+  }
+}

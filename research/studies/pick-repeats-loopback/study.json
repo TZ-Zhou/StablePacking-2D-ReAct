@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "id": "pick-repeats-loopback",
+  "kind": "pick-repeats",
+  "created": "2026-11-11T18:01:06+08:00",
+  "design": {
+    "runner": "research/llm_walls/repeat_wall.py",
+    "mode": "loopback mock",
+    "run_wall": [
+      "--policy",
+      "paper",
+      "--order",
+      "3,0,2,1,4",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 25,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 250000,
+      "max_cost_usd": 0.5,
+      "lookahead": true,
+      "whole_wall": true
+    },
+    "wall_limits": {
+      "http_requests": 100,
+      "tokens": 250000,
+      "cost_usd": 0.5,
+      "seconds": 3600
+    },
+    "experiment_limits": {
+      "walls": 40,
+      "http_requests": 4000,
+      "tokens": 10000000,
+      "cost_usd": 20.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-1759-TH_T80-pc1",
+      "name": "repeat-s313-th-t80-r1"
+    },
+    {
+      "case_id": "20261111-1801-TH_T20-pc1",
+      "name": "repeat-s313-th-t20-r1"
+    }
+  ]
+}

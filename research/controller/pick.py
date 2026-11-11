@@ -107,6 +107,9 @@ COMMIT = {"name": "commit_pick", "description": "Final action: the candidate to 
                                         "rationale": {"type": "string", "description":
                                                       "The main advantages and costs of the compared candidates, "
                                                       "and why this one."}}}}
+# before the lessons of a spec (docs/plans/llm-lessons.md); a spec without lessons leaves SYSTEM_WHOLE as it is
+LESSONS = ("\nLessons. The advice below was written after studying finished walls, good and bad, built with this "
+           "method from other sets of stones. It is advice, not rules: weigh it against what this placement shows.")
 OBSERVATION_VERSION = "pick-1"
 OBSERVATION_VERSION_LOOKAHEAD = "pick-2"
 OBSERVATION_VERSION_NOTE = "pick-3"
@@ -150,13 +153,15 @@ class PickPolicy(oc.ReActPolicy):
     the first message."""
 
     def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False, llc_note=False,
-                 whole_wall=False):
+                 whole_wall=False, lessons=None):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
         self.system, self.tools = (SYSTEM_LOOKAHEAD, [CHECK, COMMIT]) if lookahead else (SYSTEM, [COMMIT])
         if llc_note:
             self.system = SYSTEM_NOTE
         if whole_wall:
             self.system, self.tools = SYSTEM_WHOLE, [CHECK_WHOLE, COMMIT]
+        if lessons:
+            self.system += LESSONS + "".join(f"\n{i}. {text}" for i, text in enumerate(lessons, 1))
         self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
 
     def view(self, obs):
@@ -289,14 +294,15 @@ def mock_reply(mode, messages):
 def check(result, records, spec, stopped=False):
     """The order_controller.check report of a pick wall (see the module docstring); verdict PASS needs the ledger and
     the run manifest."""
-    from research.controller.endgame import lookahead_problems
+    from research.controller.endgame import commits_of, lookahead_problems
     from research.walls.check_run import chain_problems
     run = oc.run_of(result)
     receipt = json.loads((run / "receipt.json").read_text(encoding="utf-8"))
     base, full, events = oc.base_policy(run), oc.full_spec(spec), list(oc.trace_events(result))
     llm = oc.ReplayLLM(records, *oc.llm_identity(full["llm"]))
     worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False),
-              "llc_note": full.get("llc_note", False), "whole_wall": full.get("whole_wall", False)}
+              "llc_note": full.get("llc_note", False), "whole_wall": full.get("whole_wall", False),
+              "lessons": full.get("lessons")}
     transport = oc.ReplayedFailures(lambda: PickPolicy(llm, **worker), records)
     expected, ledger = [], []
     client = PickClient(spec, transport, expected.append, ledger.append)
@@ -306,7 +312,7 @@ def check(result, records, spec, stopped=False):
     finally:
         transport.close()
     expected = json.loads(json.dumps(expected, default=lambda v: v.item()))
-    problems = chain_problems(result, events, stopped) + lookahead_problems(events)
+    problems = chain_problems(result, events, stopped) + lookahead_problems(events, commits_of(result))
     if not len(events) <= len(records) <= len(events) + int(stopped):  # ponytail: a trailing record is not validated
         problems.append(f"{len(records)} records for {len(events)} selections")
     plain_base = json.loads(json.dumps(base))

@@ -1,6 +1,7 @@
 """docs/plans/llm-whole-wall-pick.md: its prompt, spec, batch and rule (research/controller/pick.py's whole_wall,
 research/llm_walls/whole_wall.py, research/analysis/llm_whole_wall.py), and its confirmation on the held-out seeds
-(docs/plans/llm-whole-wall-confirm.md, research/llm_walls/whole_confirm_wall.py)."""
+(docs/plans/llm-whole-wall-confirm.md, research/llm_walls/whole_confirm_wall.py) and its batch on the AL walls
+(docs/plans/llm-whole-wall-al.md, research/llm_walls/whole_al_wall.py)."""
 
 import json
 import os
@@ -20,7 +21,7 @@ import test_pick  # noqa: E402
 from research.analysis import llm_whole_wall as ww  # noqa: E402
 from research.controller import endgame, pick  # noqa: E402
 from research.controller import order_controller as oc  # noqa: E402
-from research.llm_walls import gpt_wall, lookahead_wall, whole_confirm_wall, whole_wall  # noqa: E402
+from research.llm_walls import gpt_wall, lookahead_wall, whole_al_wall, whole_confirm_wall, whole_wall  # noqa: E402
 from research.paths import DATASETS_DIR, REPO  # noqa: E402
 from research.runner import pick_wall as pick_runner  # noqa: E402
 from research.runner import run_wall  # noqa: E402
@@ -31,6 +32,9 @@ ROWS = [[c.strip() for c in line.split("|")[1:-1]] for line in PLAN.splitlines()
 CONFIRM = (REPO / "docs" / "plans" / "llm-whole-wall-confirm.md").read_text(encoding="utf-8")
 CONFIRM_ROWS = [[c.strip() for c in line.split("|")[1:-1]] for line in CONFIRM.splitlines()
                 if line.startswith(("| 720 |", "| 761 |"))]
+AL = (REPO / "docs" / "plans" / "llm-whole-wall-al.md").read_text(encoding="utf-8")
+AL_ROWS = [[c.strip() for c in line.split("|")[1:-1]] for line in AL.splitlines()
+           if line.startswith(("| 313 |", "| 484 |", "| 717 |"))]
 MOCK = {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}}
 
 
@@ -102,6 +106,31 @@ class WholeWall(unittest.TestCase):
         first["inventory_ids"] = np.array([])  # the endgame: every stone told must be there
         self.assertEqual(len(endgame.lookahead_problems(events)), 1)
 
+    def test_a_two_sided_table_is_checked_on_its_side_after_the_placement(self):
+        raw = np.vstack([test_pick.RAW[:4], [[0.0] * 5] * 4])  # 2 stones x 4 rotations
+        told = np.full((8, 2), -1)
+        told[1] = [3, -1]  # row 1 places stone 17 and tells 3 feasible poses of 41
+
+        def selection(event, side, ids, **more):
+            rows = test_pick.RAW[:4] if len(ids) == 1 else np.vstack([test_pick.RAW[:4]] * 2)
+            return ({"event": event, "step": 3 + event // 2, "side": side},
+                    {"sampled_ids": np.array(ids), "features_raw": rows, "selected": np.array(1),
+                     "inventory_ids": np.array([7]), **more})
+
+        placed = selection(0, "left", [41, 17], after=told)
+        placed[1]["features_raw"] = raw
+        commits = [{"outcome": "placed", "chosen_side": "left",
+                    "sides": {"left": {"event": 0}, "right": {"event": 1}}},
+                   {"outcome": "probe", "chosen_side": "left", "sides": {"left": {"event": 2}, "right": {"event": 3}}}]
+        # the right selection of the same step and the right one after it show 41 with 2 feasible poses: not compared
+        events = [placed, selection(1, "right", [41, 7]), selection(2, "left", [41]), selection(3, "right", [41, 7])]
+        self.assertEqual(endgame.lookahead_problems(events, commits), [])
+        self.assertEqual(len(endgame.lookahead_problems(events)), 1)  # one side: the next selection
+        events[2] = selection(2, "left", [41, 7])  # the left one after the placement: 2, not the 3 told
+        self.assertEqual(len(endgame.lookahead_problems(events, commits)), 1)
+        commits[0]["chosen_side"] = "right"  # the wall took the right pick: the left table is not checked
+        self.assertEqual(endgame.lookahead_problems(events, commits), [])
+
     def test_the_batch_is_the_plans(self):
         self.assertEqual(whole_wall.spec_problems(), [])
         for bad in ({"whole_wall": False}, {"llc_note": True}, {"max_decisions": 26}, {"max_cost_usd": 0.6}):
@@ -141,9 +170,43 @@ class WholeWall(unittest.TestCase):
             with self.subTest(walls=k):
                 self.assertAlmostEqual(chance[int(k):].sum(), float(p), delta=0.005)
 
+    def test_the_al_batch_is_the_plans(self):
+        a = whole_al_wall
+        self.assertEqual(a.spec_problems(), [])
+        self.assertTrue(a.spec_problems({**a.SPEC, "llc_note": True}))
+        budget = {"max_decisions": 260, "max_total_tokens": 3_500_000, "max_cost_usd": 5.00}
+        self.assertEqual((a.SPEC, a.WALL_ARGS), ({**whole_wall.SPEC, **budget}, whole_wall.WALL_ARGS))  # the budget
+        self.assertGreaterEqual(a.SPEC["max_decisions"], 4 * 59)  # AL_IR: four selections a stone
+        self.assertIn(f"每面牆最多 {a.SPEC['max_decisions']} 次決策", AL)
+        self.assertEqual(a.STATES, [(int(r[0]), r[1]) for r in AL_ROWS])
+        self.assertFalse({seed for seed, _ in a.STATES} & {720, 761})  # held out
+        self.assertEqual(*limits(AL, a))
+        names = [a.name_of(*s) for s in a.STATES]
+        self.assertTrue(all(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", n) for n in names), names)
+        with mock.patch.object(gpt_wall, "journals", return_value={names[0]: {"state": "finished", "started_at": "1"}}):
+            self.assertEqual(pick_runner.next_state(False, a), (313, "AL_PR", names[1], names[0]))
+        self.assertEqual(a.wall_args("AL_IR"), ["almeida-ir"])
+        # the chances the plan states: a random other order not below Wang in at least 8, ..., 4 of the 9 walls
+        chance = np.array([1.0])
+        for row in AL_ROWS:
+            chance = np.convolve(chance, [1 - int(row[5]) / 119, int(row[5]) / 119])
+        stated = dict(re.findall(r"^\| (\d) \| ([\d.]+) \|", AL, re.M))
+        self.assertEqual(sorted(stated), ["4", "5", "6", "7", "8"])
+        for k, p in stated.items():
+            with self.subTest(walls=k):
+                self.assertAlmostEqual(chance[int(k):].sum(), float(p), delta=0.005)
+
+    def test_the_al_rule(self):
+        self.assertEqual(ww.AL_NEEDED, 6)
+        self.assertEqual(ww.reading(table([0.1] * 5 + [0.0] + [-0.1] * 3), al=True),
+                         "pass: the whole wall is not below Wang on the AL walls")
+        self.assertEqual(ww.reading(table([0.1] * 5 + [-0.1] * 4), al=True),
+                         "catching up with Wang on the AL walls not shown")
+        self.assertEqual(ww.reading(table([0.1] * 8), al=True), "not read: 8 of the 9 walls are built")  # a stage
+
     @unittest.skipUnless((DATASETS_DIR / "factorial-s313-TH_T20" / "walls.csv").exists(), "no factorial tables")
     def test_wangs_walls_are_the_plans(self):
-        for seed, scene, wall, stones, z, others in ROWS + CONFIRM_ROWS:
+        for seed, scene, wall, stones, z, others in ROWS + CONFIRM_ROWS + AL_ROWS:
             w, block = ww.wang(int(seed), scene)
             passing = ((block.mean_z >= w.mean_z) & (block.n_placed >= w.n_placed)).sum() - 1
             with self.subTest(seed=seed, scene=scene):

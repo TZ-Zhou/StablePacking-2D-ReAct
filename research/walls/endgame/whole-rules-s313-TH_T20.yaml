@@ -1,0 +1,11 @@
+# python -B -m research.runner.batch plan research/walls/endgame/whole-rules-s313-TH_T20.yaml
+# docs/plans/whole-wall-rules.md: the Paper order with wang_safe, pick_safe and borda picking the whole wall
+name: whole-rules-s313-TH_T20
+samples: 3
+sampler_seed: 20
+wall_type: {TH_T20}
+filter_policy: ["30214+whole_cascade_safe", "30214+whole_pick_safe", "30214+whole_borda"]
+seed: [313]
+placements: 0
+timeout: 1800
+workers: 6

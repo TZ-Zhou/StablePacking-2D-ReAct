@@ -12,36 +12,45 @@ selection.paper_feasible) it returns the base policy plus {'pick': row}, by mode
 - low_top_safe, random_safe: low_top, random among the safe rows, the feasible rows whose check_after row has no 0
   (every other remaining stone keeps a feasible pose at the next selection; docs/plans/llm-endgame-lookahead.md), or
   among every feasible row if none is safe. These two ask build_wall for the table (lookahead), traced as 'after';
-  their records also give n_safe.
+  their records also give n_safe;
+- cascade_safe: the base cascade's row if it is safe or no row is; else the cascade among the safe rows alone
+  (lookahead and n_safe as above).
+With "whole": true (docs/plans/whole-wall-rules.md) it acts at every such selection, the inventory empty or not, and
+a safe mode's table is computed at each of them (lookahead 'always', as pick.py's whole_wall).
 Ties go to the lowest row. Every call writes a record to trace/controller.jsonl (order_controller.write_record).
 
 check() re-executes the receipt's spec on the traced inputs (order_controller.context_from_trace): the records must
 equal the re-execution, each traced policy must be the base plus the record's pick, replaying select with it must
-give the traced selection, every traced check_after row of a placed pose must equal the next selection's feasible
-poses (lookahead_problems), and the trace chain and run manifest must be complete (the order controller's checks).
+give the traced selection, every traced check_after row of a placed pose must equal the feasible poses at the
+selections that follow the placement (lookahead_problems), and the trace chain and run manifest must be complete (the
+order controller's checks).
 """
 
 import json
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import rankdata
 
 from Stonepacker2D.stack.selection import paper_feasible, select
 
-MODES = ("none", "random", "llc", "borda", "low_top", "low_top_safe", "random_safe")
-SAFE = ("low_top_safe", "random_safe")
+MODES = ("none", "random", "llc", "borda", "low_top", "low_top_safe", "random_safe", "cascade_safe")
+SAFE = ("low_top_safe", "random_safe", "cascade_safe")
 
 
 def full_spec(spec):
-    """The spec with its defaults; unknown keys, modes or seeds raise."""
-    if not isinstance(spec, dict) or spec.get("kind") != "endgame" or set(spec) - {"kind", "mode", "seed"}:
-        raise ValueError(f'an endgame spec is {{"kind": "endgame", "mode": ..., "seed": ...}}, got {spec!r}')
+    """The spec with its defaults (whole only if set, so earlier walls keep their spec); unknown keys, modes or seeds
+    raise."""
+    if (not isinstance(spec, dict) or spec.get("kind") != "endgame" or set(spec) - {"kind", "mode", "seed", "whole"}
+            or spec.get("whole", True) is not True):
+        raise ValueError(f'an endgame spec is {{"kind": "endgame", "mode": ..., "seed": ...[, "whole": true]}}, '
+                         f'got {spec!r}')
     full = {"kind": "endgame", "mode": spec.get("mode"), "seed": spec.get("seed")}
     if full["mode"] not in MODES:
         raise ValueError(f'endgame mode is one of {MODES}, got {full["mode"]!r}')
     if (full["mode"] in ("random", "random_safe")) != (type(full["seed"]) is int):
         raise ValueError(f'the random mode needs an int seed and the others none, got {full["seed"]!r}')
-    return full
+    return {**full, **({"whole": True} if "whole" in spec else {})}
 
 
 def safe_rows(feasible, after):
@@ -66,12 +75,24 @@ def choose(mode, raw, feasible, y, height, rng, after=None):
     return int(rows[np.argmax(score)])  # argmax takes the first of equal maxima: the lowest row
 
 
+def cascade_safe(raw, safe, weights, order, tol):
+    """The cascade's row; if it is not safe and a safe row exists, the cascade among the safe rows alone."""
+    pick = select(raw, weights, "paper", order, tol).index
+    if safe.any() and not safe[pick]:
+        masked = np.array(raw, dtype=float)
+        masked[~safe, 3] = 0  # LLC 0: not feasible for the cascade
+        pick = select(masked, weights, "paper", order, tol).index
+    return int(pick)
+
+
 class EndgamePicker:
     def __init__(self, spec, sink=None):
         from research.controller.order_controller import write_record
         self.spec_, self.sink, self.calls = full_spec(spec), sink or write_record, 0
         self.rng = np.random.default_rng(self.spec_["seed"]) if self.spec_["seed"] is not None else None
-        self.lookahead = self.spec_["mode"] in SAFE  # build_wall computes the check_after table for this controller
+        self.whole = self.spec_.get("whole", False)
+        # build_wall computes the check_after table for this controller: in the endgame, or 'always'
+        self.lookahead = self.spec_["mode"] in SAFE and ("always" if self.whole else True)
 
     def spec(self):
         return self.spec_
@@ -80,9 +101,11 @@ class EndgamePicker:
         raw = np.asarray(ctx["features_raw"])
         feasible = paper_feasible(raw)
         endgame = len(ctx["inventory_ids"]) == 0
-        acts = self.spec_["mode"] != "none" and endgame and int(feasible.sum()) >= 2
+        acts = self.spec_["mode"] != "none" and (endgame or self.whole) and int(feasible.sum()) >= 2
         pick = None
-        if acts:
+        if acts and self.spec_["mode"] == "cascade_safe":
+            pick = cascade_safe(raw, safe_rows(feasible, ctx["after"]), ctx["weights"], policy["order"], policy["tol"])
+        elif acts:
             height = ctx["height"] if ctx.get("height") is not None else [b.height for b in ctx["all_bricks"]]
             pick = choose(self.spec_["mode"], raw, feasible, ctx["y"], height, self.rng, ctx.get("after"))
         cascade = select(raw, ctx["weights"], "paper", policy["order"], policy["tol"]).index
@@ -96,21 +119,41 @@ class EndgamePicker:
         return {**policy, "pick": pick} if acts else policy
 
 
-def lookahead_problems(events):
+def commits_of(result):
+    """The attempts of a traced result directory (trace/commits.jsonl)."""
+    lines = (Path(result) / "trace" / "commits.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def lookahead_problems(events, commits=None):
     """Where a traced check_after table is not what the wall did next: the row of the placed pose must give, for each
     remaining stone, its feasible poses at the next selection (and -1 for no stone left). A table traced with stones
-    still in the inventory (pick.py's whole_wall) is compared on the stones the next selection samples again."""
+    still in the inventory (pick.py's whole_wall) is compared on the stones the next selection samples again.
+    commits (trace/commits.jsonl): the placed pose is the chosen side's selection of a 'placed' attempt, and 'next' is
+    every selection on that side before the following placement, as they all see the wall it left (a two-sided,
+    sample-twice wall; the table of a probe or of the side not taken is not checked: nothing shows its wall).
+    Without commits every selection is taken as placed and followed by the next one (a wall built from one side)."""
+    if commits is None:
+        pairs = [(e, [n]) for e, n in zip(events, events[1:])] + [(events[-1], [])] if events else []
+    else:
+        by_id = {meta["event"]: (meta, a) for meta, a in events}
+        placed = [c for c in commits if c["outcome"] == "placed"]
+        last = [max(v["event"] for v in c["sides"].values() if v["event"] is not None) for c in placed]
+        pairs = []
+        for c, lo, hi in zip(placed, last, [*last[1:], float("inf")]):
+            e = by_id[c["sides"][c["chosen_side"]]["event"]]
+            pairs.append((e, [n for n in events if lo < n[0]["event"] <= hi and n[0]["side"] == e[0]["side"]]))
     problems = []
-    for (meta, a), nxt in zip(events, [*events[1:], None]):
+    for (meta, a), nxt in pairs:
         if "after" not in a or int(a["selected"]) < 0:
             continue
         ids, row = [int(s) for s in a["sampled_ids"]], a["after"][int(a["selected"])]
         told = {s: int(c) for s, c in zip(ids, row) if c >= 0}
         seen = {}
-        if nxt is not None:
-            n_ids = [int(s) for s in nxt[1]["sampled_ids"]]
-            feasible = paper_feasible(np.asarray(nxt[1]["features_raw"]))
-            seen = {s: int(feasible[k::len(n_ids)].sum()) for k, s in enumerate(n_ids)}
+        for _, n in nxt:
+            n_ids = [int(s) for s in n["sampled_ids"]]
+            feasible = paper_feasible(np.asarray(n["features_raw"]))
+            seen.update({s: int(feasible[k::len(n_ids)].sum()) for k, s in enumerate(n_ids)})
         if len(a["inventory_ids"]):
             told, seen = ({s: c for s, c in d.items() if s in told and s in seen} for d in (told, seen))
         if told != seen:
@@ -136,7 +179,7 @@ def check(result, records, spec, stopped=False):
     for meta, a in events:
         picker(dict(base), context_from_trace(meta, a))
     expected = json.loads(json.dumps(expected))
-    problems = chain_problems(result, events, stopped) + lookahead_problems(events)
+    problems = chain_problems(result, events, stopped) + lookahead_problems(events, commits_of(result))
     if len(records) != len(events):
         problems.append(f"{len(records)} records for {len(events)} selections")
     for r, x, (meta, a) in zip(records, expected, events):

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "id": "lessons-walls",
+  "kind": "lessons-walls",
+  "created": "2026-11-11T16:52:59+08:00",
+  "design": {
+    "runner": "research/llm_walls/lessons_wall.py",
+    "mode": "paid",
+    "run_wall": [
+      "--policy",
+      "paper",
+      "--order",
+      "3,0,2,1,4",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 25,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 250000,
+      "max_cost_usd": 0.5,
+      "lookahead": true,
+      "whole_wall": true
+    },
+    "wall_limits": {
+      "http_requests": 100,
+      "tokens": 250000,
+      "cost_usd": 0.5,
+      "seconds": 3600
+    },
+    "experiment_limits": {
+      "walls": 10,
+      "http_requests": 1000,
+      "tokens": 2500000,
+      "cost_usd": 5.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-1648-TH_T80-pc1",
+      "name": "lessons-s313-th-t80"
+    },
+    {
+      "case_id": "20261111-1653-TH_T20-pc1",
+      "name": "lessons-s313-th-t20"
+    },
+    {
+      "case_id": "20261111-1656-TH_T80-pc1",
+      "name": "lessons-s484-th-t80"
+    },
+    {
+      "case_id": "20261111-1700-TH_T20-pc1",
+      "name": "lessons-s484-th-t20"
+    },
+    {
+      "case_id": "20261111-1703-TH_T80-pc1",
+      "name": "lessons-s717-th-t80"
+    },
+    {
+      "case_id": "20261111-1708-TH_T20-pc1",
+      "name": "lessons-s717-th-t20"
+    },
+    {
+      "case_id": "20261111-1711-TH_T80-pc1",
+      "name": "lessons-s720-th-t80"
+    },
+    {
+      "case_id": "20261111-1715-TH_T20-pc1",
+      "name": "lessons-s720-th-t20"
+    },
+    {
+      "case_id": "20261111-1718-TH_T80-pc1",
+      "name": "lessons-s761-th-t80"
+    },
+    {
+      "case_id": "20261111-1722-TH_T20-pc1",
+      "name": "lessons-s761-th-t20"
+    }
+  ]
+}

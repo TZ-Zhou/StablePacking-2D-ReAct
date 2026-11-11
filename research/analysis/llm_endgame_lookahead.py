@@ -121,7 +121,7 @@ def decisions(case):
     """Per LLM decision of a lookahead pick wall: tool used, ids checked, the pick unsafe, pick_safe's choice equal; the
     highest LLC among the safe candidates (all feasible if none is safe) given up, and then for a higher NHR than
     every candidate with that LLC; that LLC tied, and the pick another candidate of the tie than pick_safe's."""
-    result = next(Path(case).glob("result_*"))
+    result = next(Path(case).glob("result*"))
     records = {json.loads(line)["event"]: json.loads(line)
                for line in (result / "trace" / "controller.jsonl").read_text(encoding="utf-8").splitlines()}
     out = []

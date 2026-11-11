@@ -1,0 +1,80 @@
+{
+ "after": "lessons-s720-th-t80",
+ "case_id": "20261111-1715-TH_T20-pc1",
+ "code_dirty": false,
+ "ended_at": "2026-11-11T17:18:48",
+ "experiment_limits": {
+  "cost_usd": 5.0,
+  "http_requests": 1000,
+  "tokens": 2500000,
+  "walls": 10
+ },
+ "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+ "gpt_complete": true,
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 100,
+  "seconds": 3600,
+  "tokens": 250000
+ },
+ "max_http_requests": 100,
+ "mode": "paid",
+ "placements": 0,
+ "reasons": [],
+ "seed": 720,
+ "spec": {
+  "kind": "pick",
+  "lessons": [
+   "Check several candidates, even before options become scarce. Compare how many other offered stones retain poses and whether currently unplaceable stones regain them; protect stones with few poses. A zero is a warning, not proof of permanent loss, and a one-step check cannot guarantee completion.",
+   "Favor substantial LLC over a sharp early drop made to gain NHR, IWR or LFR. Do not maximize LLC blindly: a lower-LLC placement may be necessary to keep stones placeable, and the current score does not guarantee the finished wall\u2019s load.",
+   "Favor good GDS and near-zero LFR while seeking reasonable interlocking; avoid sacrificing fit or stability for a single spectacular IWR. Compare GDS with the current alternatives: a raw zero can be tied for best, particularly at a new course.",
+   "Treat tall, narrow rotations cautiously early, especially when they give up LLC or density for interlocking. A near-zero NHR only levels the stone with its left neighbour; balance it against fit and interlocking rather than maximizing it at every placement."
+  ],
+  "llm": {
+   "effort": "low",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 4096,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 60.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 90.0,
+  "lookahead": true,
+  "max_cost_usd": 0.5,
+  "max_decisions": 25,
+  "max_llm_failures": 1,
+  "max_tool_calls": 4,
+  "max_total_tokens": 250000,
+  "whole_wall": true
+ },
+ "spend": {
+  "cost_usd": 0.10326389999999998,
+  "http_requests": 44,
+  "tokens": 103131,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T17:15:13",
+ "state": "finished",
+ "study": "lessons-walls",
+ "wall_args": [
+  "thangavelu-noise20"
+ ],
+ "worker_venv": {
+  "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f",
+  "manifest": "research/validation/worker-venv.local.json",
+  "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+  "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+  "sdks": {
+   "openai": "3.46.0"
+  },
+  "version": "3.10.22"
+ }
+}

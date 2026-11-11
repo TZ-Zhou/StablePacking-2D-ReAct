@@ -18,6 +18,8 @@ are "random" and every order from "01234" to "43210"; batch_example.yaml writes 
 "+<mode>" ("30214+llc", "30214+random:7") builds with that order and research/controller/endgame.py's controller of
 that mode (a random mode names its seed), which picks directly once the inventory is empty; "+pick_safe" builds
 with the pick controller of research/controller/pick.py, its mock LLM pick_safe and the check_after tool (lookahead).
+"+whole_<mode>" ("30214+whole_borda", "30214+whole_pick_safe"; docs/plans/whole-wall-rules.md) is that controller
+picking at every selection, from the first stone.
 
 The plan is drawn once and written to plan.csv, numbered from 1; a draw equal to an earlier one would build the same
 wall again and is left out, so a plan can have fewer cases than `samples`.
@@ -78,9 +80,12 @@ def filter_policy_problem(level):
 def endgame_spec(level):
     """The endgame controller spec of a level "<order>+<mode>[:<seed>]"."""
     mode, _, seed = level.partition("+")[2].partition(":")
-    if mode == "pick_safe":
-        return {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, "lookahead": True}
-    return {"kind": "endgame", "mode": mode, **({"seed": int(seed)} if seed.isdigit() else {})}
+    whole, mode = mode.startswith("whole_"), mode.removeprefix("whole_")
+    if mode == "pick_safe":  # whole: the budget of research/llm_walls/whole_wall.SPEC
+        return {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, "lookahead": True,
+                **({"whole_wall": True, "max_tool_calls": 4, "max_decisions": 25} if whole else {})}
+    return {"kind": "endgame", "mode": mode, **({"seed": int(seed)} if seed.isdigit() else {}),
+            **({"whole": True} if whole else {})}
 
 
 def seed_problem(level):

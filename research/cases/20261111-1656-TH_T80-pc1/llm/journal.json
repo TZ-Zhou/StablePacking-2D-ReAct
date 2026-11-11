@@ -1,0 +1,81 @@
+{
+ "after": "lessons-s313-th-t20",
+ "case_id": "20261111-1656-TH_T80-pc1",
+ "code_dirty": false,
+ "ended_at": "2026-11-11T17:00:22",
+ "experiment_limits": {
+  "cost_usd": 5.0,
+  "http_requests": 1000,
+  "tokens": 2500000,
+  "walls": 10
+ },
+ "git_head": "f88857626634b6fb82ca9a23337d016b6013281f",
+ "gpt_complete": true,
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 100,
+  "seconds": 3600,
+  "tokens": 250000
+ },
+ "max_http_requests": 100,
+ "mode": "paid",
+ "placements": 0,
+ "reasons": [],
+ "seed": 484,
+ "spec": {
+  "kind": "pick",
+  "lessons": [
+   "Use check_after on promising alternatives, especially when few candidates are feasible or some offered stones are unplaceable. Favor preserving next poses for many other offered stones, particularly constrained ones. A zero is a warning, not permanent loss: later placements may reopen poses, and unoffered stones are not checked.",
+   "When a large or awkward offered stone has few feasible poses, consider placing it rather than saving it indefinitely. Check whether alternatives would leave it without a next pose. Do not assume that rotating it upright will solve the problem.",
+   "Among choices that preserve placement options, favor higher LLC, particularly when alternatives differ sharply. Avoid giving up much LLC merely to maximize another score. LLC is a useful stability proxy, not a guarantee of the finished wall\u2019s limit load.",
+   "Do not maximize course-level NHR or interlocking IWR in isolation. Balance joint staggering with stability and fit; accept some height mismatch when it preserves good alternatives. An exceptionally high IWR can accompany a poor or incomplete wall.",
+   "For otherwise comparable candidates, favor higher GDS and LFR closer to zero. But a locally dense, flush placement can still leave a poor or incomplete wall, so do not put either score ahead of preserving stones and maintaining stability."
+  ],
+  "llm": {
+   "effort": "low",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 4096,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 60.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 90.0,
+  "lookahead": true,
+  "max_cost_usd": 0.5,
+  "max_decisions": 25,
+  "max_llm_failures": 1,
+  "max_tool_calls": 4,
+  "max_total_tokens": 250000,
+  "whole_wall": true
+ },
+ "spend": {
+  "cost_usd": 0.1228057,
+  "http_requests": 35,
+  "tokens": 107631,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T16:56:45",
+ "state": "finished",
+ "study": "lessons-walls",
+ "wall_args": [
+  "thangavelu-noise80"
+ ],
+ "worker_venv": {
+  "files_sha256": "748ae744a41fbdad551458cbd2228828b66b3626777c18acbd541b9474ae3e1f",
+  "manifest": "research/validation/worker-venv.local.json",
+  "manifest_sha256": "46719e4c41f2baea7056f7f163be9380547800ffa59a01637faebd19fb1ee041",
+  "path": "C:\\StonePacking-2D-ReAct\\venvs\\controller-worker",
+  "sdks": {
+   "openai": "3.46.0"
+  },
+  "version": "3.10.22"
+ }
+}

@@ -1,0 +1,306 @@
+{
+ "code_dirty": true,
+ "ended_at": "2026-11-11T16:33:33",
+ "git_head": "0369a15ee9ebf8d5e2fbb68aad9f8ad4d91eed08",
+ "lessons": [
+  "Prefer a candidate that keeps the top of the wall level.",
+  "Check what a candidate leaves."
+ ],
+ "limits": {
+  "cost_usd": 0.5,
+  "http_requests": 2,
+  "tokens": 300000
+ },
+ "mode": "loopback mock",
+ "pack_sha256": "1e8a6e9b85fc221ee8212b31afbd50462f17e3ffdd61ac7b591b9488a7a6224f",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "reasons": [],
+ "spec": {
+  "kind": "pick",
+  "llm": {
+   "effort": "high",
+   "kind": "api",
+   "max_retries": 0,
+   "max_tokens": 16000,
+   "model": "gpt-6.1-terra",
+   "price_per_mtok": [
+    1.0,
+    5.0,
+    2.5,
+    0.05
+   ],
+   "provider": "openai",
+   "request_timeout_s": 600.0,
+   "retry_backoff_s": 0.0
+  },
+  "llm_timeout": 630.0,
+  "max_tool_calls": 2
+ },
+ "spend": {
+  "cost_usd": 0.00165,
+  "http_requests": 1,
+  "tokens": 1290,
+  "unknown_usage": 0
+ },
+ "started_at": "2026-11-11T16:33:29",
+ "state": "finished",
+ "walls": [
+  {
+   "case": "20261109-1217c-TH_T80-pc1",
+   "filter_policy": "31204",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 313,
+   "wall": "A1"
+  },
+  {
+   "case": "20261109-1204-TH_T80-pc1",
+   "filter_policy": "12034",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 313,
+   "wall": "A2"
+  },
+  {
+   "case": "20261109-1210c-TH_T80-pc1",
+   "filter_policy": "02341",
+   "label": "bad: lower quality",
+   "scene": "TH_T80",
+   "seed": 313,
+   "wall": "A3"
+  },
+  {
+   "case": "20261109-1246b-TH_T80-pc1",
+   "filter_policy": "20134",
+   "label": "bad: stones lost",
+   "scene": "TH_T80",
+   "seed": 313,
+   "wall": "A4"
+  },
+  {
+   "case": "20261109-1152-TH_T20-pc1",
+   "filter_policy": "04123",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 313,
+   "wall": "B1"
+  },
+  {
+   "case": "20261109-1143-TH_T20-pc1",
+   "filter_policy": "03214",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 313,
+   "wall": "B2"
+  },
+  {
+   "case": "20261109-1029-TH_T20-pc1",
+   "filter_policy": "23041",
+   "label": "bad: lower quality",
+   "scene": "TH_T20",
+   "seed": 313,
+   "wall": "B3"
+  },
+  {
+   "case": "20261109-1151-TH_T20-pc1",
+   "filter_policy": "14023",
+   "label": "bad: stones lost",
+   "scene": "TH_T20",
+   "seed": 313,
+   "wall": "B4"
+  },
+  {
+   "case": "20261110-0037c-TH_T80-pc1",
+   "filter_policy": "31042",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 717,
+   "wall": "C1"
+  },
+  {
+   "case": "20261110-0046b-TH_T80-pc1",
+   "filter_policy": "34201",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 717,
+   "wall": "C2"
+  },
+  {
+   "case": "20261110-0019-TH_T80-pc1",
+   "filter_policy": "40123",
+   "label": "bad: lower quality",
+   "scene": "TH_T80",
+   "seed": 717,
+   "wall": "C3"
+  },
+  {
+   "case": "20261110-0021-TH_T80-pc1",
+   "filter_policy": "03142",
+   "label": "bad: stones lost",
+   "scene": "TH_T80",
+   "seed": 717,
+   "wall": "C4"
+  },
+  {
+   "case": "20261109-2349b-TH_T20-pc1",
+   "filter_policy": "31042",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 717,
+   "wall": "D1"
+  },
+  {
+   "case": "20261109-2327b-TH_T20-pc1",
+   "filter_policy": "01234",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 717,
+   "wall": "D2"
+  },
+  {
+   "case": "20261109-2330c-TH_T20-pc1",
+   "filter_policy": "02341",
+   "label": "bad: lower quality",
+   "scene": "TH_T20",
+   "seed": 717,
+   "wall": "D3"
+  },
+  {
+   "case": "20261109-2335-TH_T20-pc1",
+   "filter_policy": "10342",
+   "label": "bad: stones lost",
+   "scene": "TH_T20",
+   "seed": 717,
+   "wall": "D4"
+  },
+  {
+   "case": "20261110-0646-TH_T80-pc1",
+   "filter_policy": "24130",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 720,
+   "wall": "E1"
+  },
+  {
+   "case": "20261110-0710-TH_T80-pc1",
+   "filter_policy": "10324",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 720,
+   "wall": "E2"
+  },
+  {
+   "case": "20261110-0707b-TH_T80-pc1",
+   "filter_policy": "30241",
+   "label": "bad: lower quality",
+   "scene": "TH_T80",
+   "seed": 720,
+   "wall": "E3"
+  },
+  {
+   "case": "20261110-0709-TH_T80-pc1",
+   "filter_policy": "41023",
+   "label": "bad: stones lost",
+   "scene": "TH_T80",
+   "seed": 720,
+   "wall": "E4"
+  },
+  {
+   "case": "20261110-0554b-TH_T20-pc1",
+   "filter_policy": "01342",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 720,
+   "wall": "F1"
+  },
+  {
+   "case": "20261110-0557-TH_T20-pc1",
+   "filter_policy": "03421",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 720,
+   "wall": "F2"
+  },
+  {
+   "case": "20261110-0602-TH_T20-pc1",
+   "filter_policy": "20341",
+   "label": "bad: lower quality",
+   "scene": "TH_T20",
+   "seed": 720,
+   "wall": "F3"
+  },
+  {
+   "case": "20261110-0548-TH_T20-pc1",
+   "filter_policy": "42130",
+   "label": "bad: stones lost",
+   "scene": "TH_T20",
+   "seed": 720,
+   "wall": "F4"
+  },
+  {
+   "case": "20261110-1257b-TH_T80-pc1",
+   "filter_policy": "43210",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 761,
+   "wall": "G1"
+  },
+  {
+   "case": "20261110-1244c-TH_T80-pc1",
+   "filter_policy": "31204",
+   "label": "good",
+   "scene": "TH_T80",
+   "seed": 761,
+   "wall": "G2"
+  },
+  {
+   "case": "20261110-1307c-TH_T80-pc1",
+   "filter_policy": "14023",
+   "label": "bad: lower quality",
+   "scene": "TH_T80",
+   "seed": 761,
+   "wall": "G3"
+  },
+  {
+   "case": "20261110-1228b-TH_T80-pc1",
+   "filter_policy": "23041",
+   "label": "bad: stones lost",
+   "scene": "TH_T80",
+   "seed": 761,
+   "wall": "G4"
+  },
+  {
+   "case": "20261110-1159b-TH_T20-pc1",
+   "filter_policy": "34012",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 761,
+   "wall": "H1"
+  },
+  {
+   "case": "20261110-1150c-TH_T20-pc1",
+   "filter_policy": "02341",
+   "label": "good",
+   "scene": "TH_T20",
+   "seed": 761,
+   "wall": "H2"
+  },
+  {
+   "case": "20261110-1209-TH_T20-pc1",
+   "filter_policy": "32401",
+   "label": "bad: lower quality",
+   "scene": "TH_T20",
+   "seed": 761,
+   "wall": "H3"
+  },
+  {
+   "case": "20261110-1216-TH_T20-pc1",
+   "filter_policy": "02134",
+   "label": "bad: stones lost",
+   "scene": "TH_T20",
+   "seed": 761,
+   "wall": "H4"
+  }
+ ],
+ "without": 484
+}

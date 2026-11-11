@@ -1,0 +1,12 @@
+{
+ "lessons": [
+  "Use check_after before committing, especially when options are narrowing or stones on offer are unplaceable. Prefer choices that leave more other offered stones feasible, protecting those with few poses and, where possible, reopening unplaceable ones. A zero next-step count is a warning, not proof of permanent loss.",
+  "Give substantial weight to LLC, particularly early: avoid a sharp drop in available load capacity merely to maximize one other score. Compare LLC across the current candidates, but treat it as a proxy for final strength, not a guarantee; preserving future placements comes first.",
+  "Early on, favour candidates that fit the developing course rather than prematurely building a tall, narrow stack. Use bounding-box proportions, NHR and the skyline together; be particularly cautious when height variation is already large. Tall rotations can still be useful when they fit or preserve future options.",
+  "Prefer good GDS and LFR together when comparing otherwise viable candidates: dense, flush fits are useful, but neither score alone should dictate the choice. A zero GDS can occur when starting a new course, so interpret it in context rather than rejecting it automatically.",
+  "Among choices with comparable feasibility, strength and fit, prefer better IWR to stagger vertical joints. Do not chase an extreme IWR score at the expense of the other considerations, and do not insist on perfectly level NHR everywhere: neither score alone ensures short horizontal joint paths."
+ ],
+ "pack_sha256": "0d56971a4093a2f20204aed37aa24b20683254982c029c0a0fbfa7f8ee673e73",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 761
+}

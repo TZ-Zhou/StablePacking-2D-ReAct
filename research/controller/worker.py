@@ -264,13 +264,14 @@ def summary(data):
     return f'{len(data)} bytes: {data[:200].decode("utf-8", "replace")!r}'
 
 
-def serve(conn, spec):
-    """Worker main: build the policy of `spec` (JSON text), say ready, answer requests until EOF.
+def serve(conn, spec, make=None):
+    """Worker main: build the policy of `spec` (JSON text; make(spec), order_controller.make_policy by default),
+    say ready, answer requests until EOF.
     Replies are {'ok': reply} or {'error': 'Type: message'}; every message is masked
     (order_controller.masked) before it leaves the worker, so no API key it read can reach a record."""
     from research.controller import order_controller
     try:
-        policy = order_controller.make_policy(json.loads(spec))
+        policy = (make or order_controller.make_policy)(json.loads(spec))
     except Exception as error:  # an SDK that fails to build its client included
         conn.send_bytes(order_controller.masked(json.dumps({'error': order_controller.error_text(error)})).encode())
         return

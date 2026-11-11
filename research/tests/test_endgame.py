@@ -1,12 +1,14 @@
 """research/controller/endgame.py: when it acts, what each mode picks, and its batch_plan level."""
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from research.analysis import endgame_arena
+from research.analysis import endgame_arena, whole_wall_rules
 from research.controller import endgame
+from research.llm_walls import whole_wall
 from research.walls import batch_plan
 
 # rows: NHR, GDS, IWR, LLC, LFR; row 2 is infeasible (LLC 0)
@@ -55,6 +57,30 @@ class Picker(unittest.TestCase):
         self.assertFalse(endgame.EndgamePicker({"kind": "endgame", "mode": "low_top"}).lookahead)
         self.assertNotIn("n_safe", self.picks({"kind": "endgame", "mode": "low_top"})[1])  # earlier records unchanged
 
+    def test_cascade_safe_leaves_the_cascade_unless_its_row_is_unsafe(self):
+        spec = {"kind": "endgame", "mode": "cascade_safe"}
+        pick, record = self.picks(spec)
+        self.assertEqual((record["cascade_index"], pick, record["n_safe"]), (1, 3, 2))  # row 1 unsafe: rows 0, 3 alone
+        alone = endgame.select(RAW[[0, 3]], np.ones(5), "paper", (3, 0, 2, 1, 4), 1e-9).index
+        self.assertEqual(pick, [0, 3][alone])
+        safe = np.array([[0, 2], [1, -1], [-1, -1], [1, -1]])  # the cascade's row 1 is safe, row 0 is not
+        self.assertEqual(self.picks(spec, after=safe)[0], 1)
+        unsafe = np.array([[0, 2], [0, -1], [-1, -1], [1, 0]])
+        self.assertEqual(self.picks(spec, after=unsafe)[0], 1)  # no row is safe: the cascade
+
+    def test_whole_acts_with_stones_in_the_inventory_and_earlier_specs_keep(self):
+        pick, record = self.picks({"kind": "endgame", "mode": "borda", "whole": True}, inventory=[7])
+        self.assertEqual((pick, record["acted"], record["inventory_empty"]), (3, True, False))
+        self.assertEqual(record["controller"], {"kind": "endgame", "mode": "borda", "seed": None, "whole": True})
+        pick, record = self.picks({"kind": "endgame", "mode": "cascade_safe", "whole": True}, inventory=[7])
+        self.assertEqual((pick, record["n_safe"]), (3, 2))
+        self.assertEqual(endgame.EndgamePicker({"kind": "endgame", "mode": "cascade_safe", "whole": True}).lookahead,
+                         "always")
+        self.assertIs(endgame.EndgamePicker({"kind": "endgame", "mode": "cascade_safe"}).lookahead, True)
+        self.assertFalse(endgame.EndgamePicker({"kind": "endgame", "mode": "borda", "whole": True}).lookahead)
+        self.assertEqual(endgame.full_spec({"kind": "endgame", "mode": "llc"}),
+                         {"kind": "endgame", "mode": "llc", "seed": None})
+
     def test_a_check_after_row_must_be_what_the_wall_did_next(self):
         raw = np.vstack([RAW, [[0.0] * 5] * 4])  # 2 stones x 4 rotations; stone 41 at rows 0, 2, 4, 6
         nxt = {"sampled_ids": np.array([41]), "features_raw": RAW, "selected": np.array(0)}  # 41 then: rows 0, 1, 3
@@ -77,7 +103,8 @@ class Picker(unittest.TestCase):
         for spec in ({"kind": "endgame", "mode": "random"}, {"kind": "endgame", "mode": "llc", "seed": 1},
                      {"kind": "endgame", "mode": "best"}, {"kind": "endgame", "mode": "llc", "extra": 1},
                      {"kind": "endgame", "mode": "random_safe"},
-                     {"kind": "endgame", "mode": "low_top_safe", "seed": 2}):
+                     {"kind": "endgame", "mode": "low_top_safe", "seed": 2},
+                     {"kind": "endgame", "mode": "borda", "whole": False}):
             with self.subTest(spec), self.assertRaises(ValueError):
                 endgame.full_spec(spec)
 
@@ -97,6 +124,29 @@ class ArenaReading(unittest.TestCase):
         self.assertEqual(endgame_arena.prefix(steps, "a"), [(1, 0, 0, 0), (2, 0, 5, 0)])
 
 
+class WholeWallRules(unittest.TestCase):
+    def test_reading(self):
+        read = whole_wall_rules.reading
+        self.assertEqual([read(k, 7) for k in (8, 7)], ["the rule reaches the LLM's count without an LLM"] * 2)
+        self.assertEqual([read(k, 7) for k in (6, 5)], ["not separated"] * 2)
+        self.assertEqual([read(k, 7) for k in (4, 0)], ["the LLM is 3 or more walls ahead of the rule"] * 2)
+
+    def test_the_blocks_are_the_llms_and_each_has_its_batch(self):
+        self.assertEqual(len(whole_wall_rules.BLOCKS), 10)
+        for seed, scene in whole_wall_rules.BLOCKS:
+            config = Path(batch_plan.__file__).parent / "endgame" / f"whole-rules-s{seed}-{scene}.yaml"
+            text = config.read_text(encoding="utf-8")
+            with self.subTest(seed=seed, scene=scene):
+                self.assertTrue(all(f'"30214+{mode}"' in text for mode in whole_wall_rules.RULES.values()))
+                self.assertIn(f"seed: [{seed}]", text)
+                self.assertIn(f"wall_type: {{{scene}}}", text)
+
+    def test_not_below_wang(self):
+        t = pd.DataFrame({"complete": [True, True, True, False], "mean_z": [0.1, 0.0, 0.1, 0.1], "wang_mean_z": 0.0,
+                          "n_placed": [18, 18, 17, 18], "wang_n_placed": 18})
+        self.assertEqual(whole_wall_rules.not_below_wang(t).tolist(), [True, True, False, False])
+
+
 class PlanLevel(unittest.TestCase):
     def test_levels(self):
         self.assertIsNone(batch_plan.filter_policy_problem("30214+random:7"))
@@ -107,6 +157,16 @@ class PlanLevel(unittest.TestCase):
         self.assertIsNotNone(batch_plan.filter_policy_problem("30214+random_safe"))
         self.assertEqual(batch_plan.endgame_spec("30214+pick_safe"),
                          {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, "lookahead": True})
+        # docs/plans/whole-wall-rules.md: the three rules, pick_safe on the budget of the LLM's whole wall
+        for level in ("30214+" + mode for mode in whole_wall_rules.RULES.values()):
+            self.assertIsNone(batch_plan.filter_policy_problem(level), level)
+        self.assertEqual(batch_plan.endgame_spec("30214+whole_cascade_safe"),
+                         {"kind": "endgame", "mode": "cascade_safe", "whole": True})
+        spec = batch_plan.endgame_spec("30214+whole_pick_safe")
+        self.assertEqual(spec, {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}, "lookahead": True,
+                                "whole_wall": True, "max_tool_calls": 4, "max_decisions": 25})
+        self.assertEqual([spec[k] for k in ("whole_wall", "max_tool_calls", "max_decisions")],
+                         [whole_wall.SPEC[k] for k in ("whole_wall", "max_tool_calls", "max_decisions")])
         self.assertEqual(batch_plan.policy_args({"filter_policy": "30214+llc"}),
                          ["--policy", "paper", "--order", "3,0,2,1,4",
                           "--controller", '{"kind": "endgame", "mode": "llc"}'])

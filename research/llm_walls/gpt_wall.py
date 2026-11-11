@@ -214,7 +214,7 @@ def write_json(path, data, exclusive=False):
 
 def accounting(run, spec, stopped=False):
     """What the wall's records and ledger say it sent and spent; unknown counts every doubt."""
-    result = next(run.glob('result_*'))
+    result = next(run.glob('result*'))
     records = [json.loads(l) for l in (result / 'trace' / 'controller.jsonl').read_text(encoding='utf-8').splitlines()]
     ledger = [json.loads(l) for l in (result / 'trace' / 'transport.jsonl').read_text(encoding='utf-8').splitlines()]
     rows = gpt_smoke.requests_of(records, llm_api.price(spec['llm']))

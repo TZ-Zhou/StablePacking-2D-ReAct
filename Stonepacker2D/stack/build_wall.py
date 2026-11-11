@@ -54,8 +54,9 @@ def trace_event(meta, base, vendor, current_bricks, all_bricks, xs, ys, distance
     return event
 
 def feasible_counts(base, bricks):
-    """{stone id: feasible poses} of a selection on base with bricks on offer, built from the left: the rotations and
-    the pose search of build_wall_vendor's construct_one_step, every pose through the same pool."""
+    """{stone id: feasible poses} of a selection on base with bricks on offer, in the frame of the side being built
+    (both mirrored when it is the right): the rotations and the pose search of build_wall_vendor's construct_one_step,
+    every pose through the same pool."""
     if not bricks:
         return {}
     rotated = [[], [], []]
@@ -479,8 +480,6 @@ def build_wall_vendor(base, vendor, nb_stones_per_ite, allow_cutting = False,ref
             _after, _look = None, getattr(get_filter_controller(), 'lookahead', False)
             if _look and (_look == 'always' or not vendor.stones) \
                     and paper_feasible(filters_matrix_ori).sum() >= 2:
-                if from_right:
-                    raise NotImplementedError('the lookahead is defined for walls built from the left')
                 _after = feasible_after(base, current_bricks, all_bricks, min_x_list, min_y_list, filters_matrix_ori)
             _policy = controlled_policy(get_filter_policy(construction_step_i), get_filter_controller(), {
                 'step': construction_step_i, 'side': 'right' if from_right else 'left', 'phase': _phase,

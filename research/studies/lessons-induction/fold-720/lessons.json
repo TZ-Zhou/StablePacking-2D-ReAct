@@ -1,0 +1,11 @@
+{
+ "lessons": [
+  "Check several candidates, even before options become scarce. Compare how many other offered stones retain poses and whether currently unplaceable stones regain them; protect stones with few poses. A zero is a warning, not proof of permanent loss, and a one-step check cannot guarantee completion.",
+  "Favor substantial LLC over a sharp early drop made to gain NHR, IWR or LFR. Do not maximize LLC blindly: a lower-LLC placement may be necessary to keep stones placeable, and the current score does not guarantee the finished wall\u2019s load.",
+  "Favor good GDS and near-zero LFR while seeking reasonable interlocking; avoid sacrificing fit or stability for a single spectacular IWR. Compare GDS with the current alternatives: a raw zero can be tied for best, particularly at a new course.",
+  "Treat tall, narrow rotations cautiously early, especially when they give up LLC or density for interlocking. A near-zero NHR only levels the stone with its left neighbour; balance it against fit and interlocking rather than maximizing it at every placement."
+ ],
+ "pack_sha256": "857b574ab16710707f9b4810e408952422a4acf984c08e88655a741788c80a41",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 720
+}

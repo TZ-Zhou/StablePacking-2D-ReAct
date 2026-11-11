@@ -1,0 +1,12 @@
+{
+ "lessons": [
+  "Protect future placements first. Use check_after on promising candidates, especially when choices are narrowing or offered stones are unplaceable. Compare how many other offered stones retain poses, avoid newly blocking them, and value reopening blocked stones. This is only a one-step, on-offer check, not a guarantee of eventual placement.",
+  "When a feasible offered stone has few candidate rotations, consider placing it before its opportunity disappears, provided check_after does not reveal worse consequences for the others. A currently unplaceable stone is not necessarily lost: another placement may make it feasible again.",
+  "Favor high LLC relative to the available alternatives, particularly early in construction; avoid a large drop merely to win another filter. Treat LLC as a useful stability signal, not a guarantee of the finished wall\u2019s load, and accept a compromise when needed to preserve placement options.",
+  "While forming early courses, favor well-fitting, reasonably level placements and, where alternatives are otherwise comparable, wider rather than tall narrow orientations. Avoid repeatedly building upward before the course is filled. NHR and bounding-box shape are clues, not reasons to enforce a perfectly flat skyline.",
+  "Balance interlocking with density and local fit: a candidate with the highest IWR can still be a poor choice if it gives up substantial LLC, GDS or LFR. Compare scores against the alternatives at that placement; even a GDS of zero can be tied for best when a new course starts."
+ ],
+ "pack_sha256": "bf31f9b45401ffe1ff2f33e947c0e5be2565f9ad05f0e17a68fdabc5cd087758",
+ "prompt_sha256": "ca4e134260bb354585ac11f5e67e281b46e5ccf93699631946ec8aaeab077557",
+ "without": 717
+}
