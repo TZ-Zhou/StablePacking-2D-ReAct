@@ -168,6 +168,8 @@ cython_debug/
 
 # Research experiment outputs (Phase 1+)
 research/runs/
+# tables rebuilt from the walls (research.analysis.batch_tables)
+research/datasets/
 research/cases/*
 # the paid LLM endgame pick walls (study pick-walls): their small records are kept; the wall files
 # (base.pkl, trace arrays) only on the E: backup, as runs/batch
