@@ -1,5 +1,6 @@
 """docs/plans/llm-whole-wall-pick.md: its prompt, spec, batch and rule (research/controller/pick.py's whole_wall,
-research/llm_walls/whole_wall.py, research/analysis/llm_whole_wall.py)."""
+research/llm_walls/whole_wall.py, research/analysis/llm_whole_wall.py), and its confirmation on the held-out seeds
+(docs/plans/llm-whole-wall-confirm.md, research/llm_walls/whole_confirm_wall.py)."""
 
 import json
 import os
@@ -19,7 +20,7 @@ import test_pick  # noqa: E402
 from research.analysis import llm_whole_wall as ww  # noqa: E402
 from research.controller import endgame, pick  # noqa: E402
 from research.controller import order_controller as oc  # noqa: E402
-from research.llm_walls import gpt_wall, lookahead_wall, whole_wall  # noqa: E402
+from research.llm_walls import gpt_wall, lookahead_wall, whole_confirm_wall, whole_wall  # noqa: E402
 from research.paths import DATASETS_DIR, REPO  # noqa: E402
 from research.runner import pick_wall as pick_runner  # noqa: E402
 from research.runner import run_wall  # noqa: E402
@@ -27,7 +28,19 @@ from research.runner import run_wall  # noqa: E402
 PLAN = (REPO / "docs" / "plans" / "llm-whole-wall-pick.md").read_text(encoding="utf-8")
 ROWS = [[c.strip() for c in line.split("|")[1:-1]] for line in PLAN.splitlines()
         if line.startswith(("| 313 |", "| 484 |", "| 717 |"))]
+CONFIRM = (REPO / "docs" / "plans" / "llm-whole-wall-confirm.md").read_text(encoding="utf-8")
+CONFIRM_ROWS = [[c.strip() for c in line.split("|")[1:-1]] for line in CONFIRM.splitlines()
+                if line.startswith(("| 720 |", "| 761 |"))]
 MOCK = {"kind": "pick", "llm": {"kind": "mock", "mode": "pick_safe"}}
+
+
+def limits(plan, x):
+    """(the limits a plan states, those of its batch module x)."""
+    stated = re.search(r"每面牆最多 (\d+) 個請求、(\d+)k tokens、US\$([\d.]+)；整批最多 (\d+) 面、(\d+) 個請求、"
+                       r"([\d.]+)M tokens、\*\*US\$(\d+)\*\*", plan).groups()
+    wall, batch = x.WALL_LIMITS, x.EXPERIMENT_LIMITS
+    return [float(v) for v in stated], [wall["http_requests"], wall["tokens"] / 1e3, wall["cost_usd"], batch["walls"],
+                                        batch["http_requests"], batch["tokens"] / 1e6, batch["cost_usd"]]
 
 
 def table(llm, n=18, complete=True):
@@ -47,9 +60,10 @@ class WholeWall(unittest.TestCase):
         self.assertEqual(whole.system, pick.SYSTEM_WHOLE)
         self.assertEqual([t["name"] for t in whole.tools], ["check_after", "commit_pick"])
         self.assertIn("each other stone on offer now", whole.tools[0]["description"])
-        # pick-1, pick-2 and pick-3 as the paid walls recorded them (step 3, lookahead, LLC note)
+        # pick-1 to pick-4 as the paid walls recorded them (step 3, lookahead, LLC note, whole wall)
         for case, spec in (("20261110-2141-TH_T80-pc1", {}), ("20261111-0106-TH_T80-pc1", {"lookahead": True}),
-                           ("20261111-0528-TH_T80-pc1", {"lookahead": True, "llc_note": True})):
+                           ("20261111-0528-TH_T80-pc1", {"lookahead": True, "llc_note": True}),
+                           ("20261111-1101-TH_T80-pc1", {"lookahead": True, "whole_wall": True})):
             trace = next((REPO / "research" / "cases" / case).glob("result_*/trace/controller.jsonl"))
             record = next(r for r in map(json.loads, trace.read_text(encoding="utf-8").splitlines())
                           if r.get("prompt_sha256"))
@@ -96,21 +110,40 @@ class WholeWall(unittest.TestCase):
         self.assertEqual(whole_wall.SPEC, {**lookahead_wall.SPEC, "whole_wall": True, "max_decisions": 25,
                                            "max_total_tokens": 250_000, "max_cost_usd": 0.50})
         self.assertEqual(whole_wall.STATES, [(int(r[0]), r[1]) for r in ROWS])
-        limits = re.search(r"每面牆最多 (\d+) 個請求、(\d+)k tokens、US\$([\d.]+)；整批最多 (\d+) 面、(\d+) 個請求、"
-                           r"([\d.]+)M tokens、\*\*US\$(\d+)\*\*", PLAN).groups()
-        wall, batch = whole_wall.WALL_LIMITS, whole_wall.EXPERIMENT_LIMITS
-        self.assertEqual([float(v) for v in limits],
-                         [wall["http_requests"], wall["tokens"] / 1e3, wall["cost_usd"], batch["walls"],
-                          batch["http_requests"], batch["tokens"] / 1e6, batch["cost_usd"]])
+        self.assertEqual(*limits(PLAN, whole_wall))
         names = [whole_wall.name_of(*s) for s in whole_wall.STATES]
         self.assertTrue(all(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", n) for n in names), names)  # a run name
         with mock.patch.object(gpt_wall, "journals", return_value={names[0]: {"state": "finished", "started_at": "1"}}):
             self.assertEqual(pick_runner.next_state(False, whole_wall), (313, "TH_T20", names[1], names[0]))
         self.assertEqual(whole_wall.wall_args("TH_T20"), ["thangavelu-noise20"])
 
+    def test_the_confirmation_is_the_plans(self):
+        c = whole_confirm_wall
+        self.assertEqual(c.spec_problems(), [])
+        self.assertTrue(c.spec_problems({**c.SPEC, "llc_note": True}))
+        self.assertEqual((c.SPEC, c.WALL_LIMITS, c.WALL_ARGS),  # the batch repeated unchanged
+                         (whole_wall.SPEC, whole_wall.WALL_LIMITS, whole_wall.WALL_ARGS))
+        self.assertEqual(c.STATES, [(int(r[0]), r[1]) for r in CONFIRM_ROWS])
+        self.assertFalse(set(c.STATES) & set(whole_wall.STATES))
+        self.assertFalse({seed for seed, _ in c.STATES} & {313, 484, 717})  # held out
+        self.assertEqual(*limits(CONFIRM, c))
+        names = [c.name_of(*s) for s in c.STATES]
+        self.assertTrue(all(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", n) for n in names), names)
+        with mock.patch.object(gpt_wall, "journals", return_value={}):
+            self.assertEqual(pick_runner.next_state(False, c), (720, "TH_T80", names[0], None))
+        # the chances the plan states: a random other order not below Wang in at least 4, 3, 2 of the 4 walls
+        chance = np.array([1.0])
+        for row in CONFIRM_ROWS:
+            chance = np.convolve(chance, [1 - int(row[5]) / 119, int(row[5]) / 119])
+        stated = dict(re.findall(r"^\| (\d) \| ([\d.]+) \|", CONFIRM, re.M))
+        self.assertEqual(sorted(stated), ["2", "3", "4"])
+        for k, p in stated.items():
+            with self.subTest(walls=k):
+                self.assertAlmostEqual(chance[int(k):].sum(), float(p), delta=0.005)
+
     @unittest.skipUnless((DATASETS_DIR / "factorial-s313-TH_T20" / "walls.csv").exists(), "no factorial tables")
     def test_wangs_walls_are_the_plans(self):
-        for seed, scene, wall, stones, z, others in ROWS:
+        for seed, scene, wall, stones, z, others in ROWS + CONFIRM_ROWS:
             w, block = ww.wang(int(seed), scene)
             passing = ((block.mean_z >= w.mean_z) & (block.n_placed >= w.n_placed)).sum() - 1
             with self.subTest(seed=seed, scene=scene):
@@ -124,6 +157,18 @@ class WholeWall(unittest.TestCase):
         self.assertEqual(ww.reading(table([0.1] * 6, n=[17] * 3 + [18] * 3)), "catching up with Wang not shown")
         self.assertEqual(ww.reading(table([0.1] * 6, complete=[False] * 3 + [True] * 3)),
                          "catching up with Wang not shown")
+
+    def test_the_confirmation_rule(self):
+        self.assertEqual(ww.CONFIRM_NEEDED, 3)
+        confirmed = "confirmed: the whole wall is not below Wang on the held-out seeds"
+        self.assertEqual(ww.reading(table([0.1, 0.0, 0.1, -0.1]), confirm=True), confirmed)
+        self.assertEqual(ww.reading(table([0.1, 0.1, -0.1, -0.1]), confirm=True),
+                         "not confirmed on the held-out seeds")
+        self.assertEqual(ww.reading(table([0.1] * 4, n=[17, 17, 18, 18]), confirm=True),
+                         "not confirmed on the held-out seeds")
+        diffs = pd.DataFrame({f"diff_{c}": [0.0, 0.5] for c in ww.step3.ZCOLS})
+        diffs.iloc[1, 0] = -0.1  # one metric below Wang
+        self.assertEqual(ww.all_four(diffs).tolist(), [True, False])
 
 
 @unittest.skipUnless(test_pick.VENV and Path(sys.prefix).resolve() == run_wall.ENV_PREFIX,

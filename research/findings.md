@@ -298,3 +298,36 @@ four metrics, z in the block's 120 orders. Plan and rule: `docs/plans/llm-whole-
 - check_after called in 112/116 decisions; no pick left a stone on offer at 0. 717 `TH_T20` still places 18 of 23, 2
   fewer than Wang: the table looks one step ahead and only at the stones sampled.
 - Limits: one LLM wall per state, development seeds only (720, 761 untouched), `TH` scenes only.
+
+## Whole wall, confirmation on the held-out seeds (`TH_T80`, `TH_T20`, 4 walls, US$0.59)
+The whole-wall pick unchanged (pick-4, same model, limits and comparison) on the held-out seeds 720 and 761, one LLM
+wall per seed and scene, the batch run once. Rule fixed before any paid request: the same per-wall rule, confirmed when
+at least 3 of the 4 walls are not below Wang. Plan and rule: `docs/plans/llm-whole-wall-confirm.md`; table
+`runs/batch/llm-whole-wall-confirm.csv` (copy in `research/studies/whole-confirm-walls`).
+
+| Seed | Scene | LLM mean z | Wang mean z | LLM − Wang | Stones LLM / Wang (input) | Metrics not below Wang | Decisions differing | Percentile LLM / Wang |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 720 | `TH_T80` | 0.855 | 0.025 | +0.830 | 18 / 18 (18) | 3 of 4 | 9/18 | 0.98 / 0.49 |
+| 720 | `TH_T20` | 0.923 | 0.306 | +0.617 | 21 / 20 (23) | 4 of 4 | 10/21 | 0.96 / 0.65 |
+| 761 | `TH_T80` | 0.291 | 0.447 | −0.156 | 18 / 18 (18) | 2 of 4 | 11/17 | 0.68 / 0.84 |
+| 761 | `TH_T20` | 0.508 | −0.424 | +0.932 | 22 / 22 (23) | 3 of 4 | 8/21 | 0.87 / 0.16 |
+- Reading "confirmed: the whole wall is not below Wang on the held-out seeds": 3/4 walls (needs 3). The wall below, 761
+  `TH_T80`, is against Wang's strongest of the four (percentile 0.84).
+- At the bar: another filter order drawn at random, no LLM, meets the rule in 3 or more of the 4 walls with probability
+  0.10 (all 4: 0.009). Four walls cannot show a wall better than Wang's; the result shows Wang's level or above.
+- Mean of the 4 differences in z: mean +0.556, `F_SF` +0.272, `F_AH` +1.427, `F_AV` +1.001, `F_LR` −0.477. Mean
+  percentile among the 120 orders: LLM 0.87, Wang 0.53.
+- `F_LR` is the weak metric: below Wang in 3 of the 4 walls (−0.02, −0.88, −1.60; 720 `TH_T20` +0.59). Walls not below
+  Wang per metric: `F_SF` 4, `F_AH` 4, `F_AV` 3, `F_LR` 1. 761 `TH_T20` gives `F_LR` −1.60 for `F_AH` +2.87 and `F_AV`
+  +2.44.
+- One wall is at or above Wang on all four metrics, the first in either batch: 720 `TH_T20` (`F_SF` +0.45, `F_AH`
+  +0.79, `F_AV` +0.64, `F_LR` +0.59), with 21 stones against 20.
+- 38/77 decisions differ from the cascade on the same candidates (9, 10, 11, 8 a wall).
+- check_after called in 76/77 decisions. 2 picks left a stone on offer at 0 for the next placement (761 `TH_T80` the
+  15th decision of 17, 761 `TH_T20` the first); both walls place as many stones as Wang's.
+- Both batches (described, not a rule; the development walls were read before): 7/10 walls not below Wang, which a
+  random other order reaches with probability 0.07; 1/10 at or above Wang on all four metrics; 87/193 decisions differ
+  from the cascade. Mean of the 10 differences in z: mean +0.385, `F_SF` +0.163, `F_AH` +0.806, `F_AV` +0.669, `F_LR`
+  −0.096; walls not below Wang per metric: `F_SF` 7, `F_AH` 8, `F_AV` 6, `F_LR` 5. Mean percentile: LLM 0.68, Wang 0.43.
+- Limits: one LLM wall per state; all five seeds of the factorial are now used, none is held out for the `TH` scenes;
+  `TH` scenes only.

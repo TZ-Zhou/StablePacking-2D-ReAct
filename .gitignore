@@ -218,6 +218,11 @@ research/cases/*
 !research/cases/20261111-1111-TH_T20-pc1/
 !research/cases/20261111-1114-TH_T80-pc1/
 !research/cases/20261111-1117-TH_T20-pc1/
+# the paid whole-wall confirmation walls (study whole-confirm-walls), kept the same way
+!research/cases/20261111-1203-TH_T80-pc1/
+!research/cases/20261111-1206-TH_T20-pc1/
+!research/cases/20261111-1210-TH_T80-pc1/
+!research/cases/20261111-1213-TH_T20-pc1/
 research/cases/*/result_*/base.pkl
 research/cases/*/result_*/trace/*.npz
 !research/cases/*/execution.log
