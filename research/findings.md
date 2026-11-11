@@ -529,3 +529,60 @@ it to other blocks would need. 18 overall comparisons, no correction for their n
   two columns are not independent.
 - Limits: one wall a block for each opponent; the spread measured on one day, with one prompt, model and effort; `TH`
   scenes only.
+
+## Whole wall: the safe top-LLC list shown to the LLM (`TH_T80`, `TH_T20`, 40 walls, US$6.19)
+**Pending: the conclusion awaits confirmation by a recomputation at the original resolution (結論待原解析度重算確認).**
+Every `F_*` and z of this section, as of the sections above, is computed on the simulation grid (half resolution); the
+paper renders a wall at the stones' original resolution first, and `F_AH` and `F_AV` can differ between the two
+images. The finished walls are to be recomputed that way, free; until then the reading below is provisional.
+
+The whole-wall pick with one more piece of information (pick-5): at every decision the observation carries
+`safe_top_llc`, the ids of the safe candidates (no 0 in their `check_after` row) whose shown LLC equals the highest
+among the safe ones, empty when no candidate is safe. No candidate is filtered and the LLM decides; the prompt is
+pick-4's plus one paragraph that explains the list and asks for the reason in the rationale when the pick is outside
+it. Same model, tools and limits. Built 4 times on each of the 10 `TH` blocks, a round at a time, each wall once,
+within 2.7 hours (2026-11-11 23:22 to 2026-11-12 02:02), and compared with the 40 pick-4 repeats of the same blocks.
+The rule was fixed before any paid request: per block the mean of the 4 new walls minus the mean of the 4 old; the
+standard error from the within-block SD pooled over both batches (60 degrees of freedom); `F_LR` and the mean z read
+at 2 SE. Plan: `docs/plans/llm-safe-top-hint.md`; tables `research/studies/safe-top-walls/`.
+
+| pick-5 − pick-4, 10 blocks | Mean difference | (SE within) | [SE between blocks] | `TH_T80` | `TH_T20` |
+| --- | --- | --- | --- | --- | --- |
+| Mean z | −0.081 | (−0.8) | [−0.5] | +0.048 (0.4) | −0.209 (−1.3) |
+| `F_SF` | −0.175 | (−2.0) | [−1.1] | +0.136 (2.0) | −0.486 (−2.9) |
+| `F_AH` | −0.133 | (−0.8) | [−0.5] | +0.075 (0.3) | −0.340 (−1.7) |
+| `F_AV` | −0.509 | (−2.8) | [−1.7] | −0.523 (−1.9) | −0.496 (−2.1) |
+| `F_LR` | +0.494 | (2.2) | [1.8] | +0.504 (2.2) | +0.484 (1.3) |
+| Stones | −0.175 | (−1.4) | [−0.7] | 0.00 (no spread) | −0.35 (−1.4) |
+
+| pick-5 − opponent, 10 blocks | Wang | `wang_safe` | `pick_safe` | pick-4 against `pick_safe` (section above) |
+| --- | --- | --- | --- | --- |
+| Mean z | +0.391 (4.8) [2.3] | +0.199 (2.4) [1.1] | −0.147 (−1.8) [−0.8] | −0.067 (−1.1) |
+| `F_SF` | +0.161 (2.4) [1.0] | +0.200 (3.0) [1.2] | +0.146 (2.2) [0.5] | +0.321 (5.4) |
+| `F_AH` | +0.510 (5.1) [1.4] | +0.208 (2.1) [0.6] | −0.077 (−0.8) [−0.2] | +0.056 (0.4) |
+| `F_AV` | +0.372 (2.8) [1.0] | +0.194 (1.5) [0.6] | −0.401 (−3.0) [−1.3] | +0.108 (0.9) |
+| `F_LR` | +0.521 (2.9) [1.1] | +0.194 (1.1) [0.4] | −0.257 (−1.4) [−0.4] | −0.752 (−6.0) |
+| Stones | +0.33 (4.2) [1.3] | +0.43 (5.5) [1.6] | +0.33 (4.2) [0.7] | +0.50 (5.3) |
+- All 40 walls finished, each built once, every decision the LLM's, every request the pick-5 prompt with the list in
+  the observation, the first offer equal to Wang's; the first wall was built alone and checked before the other 39.
+  1,550 requests, US$6.19 (US$0.155 a wall; pick-4 US$0.152).
+- Reading by the plan's rule: "F_LR raised and the mean z kept". `F_LR` +0.494 z (2.2 SE), up on 8 of the 10 blocks
+  (down on 761 `TH_T20` −1.09 and 720 `TH_T20` −0.10); mean z −0.081 (−0.8 SE), up on 5 blocks.
+- The margin is thin: 2.2 SE by the within-block spread the rule uses, 1.8 SE by the spread between the 10 block
+  differences.
+- The gain is traded against `F_AV`: −0.509 z (−2.8 SE), with `F_SF` −0.175 (−2.0 SE); the mean of the four is level,
+  not higher. Per scene: `TH_T80` `F_LR` +0.504 (2.2 SE) with mean z +0.048; `TH_T20` `F_LR` +0.484 (1.3 SE) with mean
+  z −0.209 (−1.3 SE) and `F_SF` −0.486 (−2.9 SE).
+- The new walls spread more: within-block SD of the 40 pick-5 walls alone 0.516 in mean z and 1.147 in `F_LR` (pick-4:
+  0.384 and 0.797); 38 distinct pick sequences among the 40 (pick-4: 32).
+- Against the walls without spread (described, SE from the pick-5 walls' own spread): the `F_LR` gap to `pick_safe`
+  goes from −0.752 (6.0 SE) to −0.257 (1.4 SE, inside the spread), and `F_AV` falls below `pick_safe`'s (−0.401, 3.0
+  SE); mean z −0.147 (1.8 SE, inside). Above Wang by +0.391 in mean z (4.8 SE; pick-4 +0.472) and now also in `F_LR`
+  (+0.521, 2.9 SE; pick-4 +0.027). Not below Wang: 26 of the 40 walls, as pick-4.
+- What the LLM did with the list: 84.0% of the 775 picks are in it (pick-4, which was not shown the list, 72.8% of
+  786). Of the 124 picks outside, 27 had an empty list (no safe candidate); of the other 97, 62 name `safe_top_llc`
+  and 96 word the list or the safe top LLC (a keyword pass, not a reading of each), and the last one was read and
+  explains its pick. `check_after` ids a wall 123.8 (pick-4 144.9).
+- Limits: the control (pick-4) was built earlier the same day, not interleaved with the new walls; 10 blocks of all
+  five seeds, none held out; `pick_safe` has one wall a block; the list and the request to explain are one treatment
+  and are not told apart; `TH` scenes only; grid metrics (see the note at the top of this section).
