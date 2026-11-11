@@ -12,7 +12,8 @@ After each placement n of a recorded wall:
 - lambda_left, lambda_right: evaluate_kine's two tilting-table solves (solve_force_rigid, unrounded)
   of the simulation wall after n; F_LR = min / mu, the partial wall's limit.
 Checks, each fatal: V's series is gpt-001's; at the last placement F_SF, F_AH, F_AV, F_LR are
-wang-quality-v1's (summary.json of the counterfactual plan) and the lambdas the mechanism files';
+wang-quality-v1's (summary.json of the counterfactual plan) and the lambdas the mechanism files' within
+LAMBDA_RTOL (the walls predate the speedup 5a6992c; since it a repeated solve is an ulp or two off);
 at every placement round(lambda_min, 1) / mu is the chosen candidate's LLC; G_k and P_k agree before
 the placement of step k.
 """
@@ -37,6 +38,7 @@ WALLS = {'GPT': 'gpt-walls/gpt-001', 'Paper': 'campaigns/dev-2seeds/thangavelu-n
 PAIRS = {'k6': ('G6', 'Paper', 6), 'k8': ('G8', 'P8', 8), 'k17': ('G17', 'P17', 17), 'GPT-Paper': ('GPT', 'Paper', 6)}
 METRICS = ('F_SF', 'F_SF_progress', 'F_AH_partial', 'F_AV_partial', 'lambda_left', 'lambda_right', 'F_LR')
 LLC_DECIMALS = 1  # Stonepacker2D.utils.constant.KINEMATIC_RESULT_DECIMAL
+LAMBDA_RTOL = 1e-12  # a solve repeated by later code against the recorded one
 
 
 def result_of(run):
@@ -89,7 +91,8 @@ def wall_problems(rows, final):
     p += [f'last placement: {k} {last[col(k)]} is not wang-quality-v1 {final[k]}'
           for k in ('F_SF', 'F_AH', 'F_AV', 'F_LR') if last[col(k)] != final[k]]
     p += [f'last placement: lambda_{s} {last[f"lambda_{s}"]} is not the mechanism file {final[s]}'
-          for s in ('left', 'right') if last[f'lambda_{s}'] != final[s]]
+          for s in ('left', 'right')
+          if final[s] is None or not np.isclose(last[f'lambda_{s}'], final[s], rtol=LAMBDA_RTOL, atol=0)]
     return p
 
 
