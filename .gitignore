@@ -223,8 +223,10 @@ research/cases/*
 !research/cases/20261111-1206-TH_T20-pc1/
 !research/cases/20261111-1210-TH_T80-pc1/
 !research/cases/20261111-1213-TH_T20-pc1/
-research/cases/*/result_*/base.pkl
-research/cases/*/result_*/trace/*.npz
+# the paid whole-wall picks on the AL walls (study whole-al-walls), kept the same way; an AL result folder is result
+!research/cases/20261111-1351-AL_R-pc1/
+research/cases/*/result*/base.pkl
+research/cases/*/result*/trace/*.npz
 !research/cases/*/execution.log
 /runs/
 research/perf/runs/

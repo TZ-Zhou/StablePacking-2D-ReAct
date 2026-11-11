@@ -1,0 +1,2 @@
+seed,scene,case_id,complete,llm_mean_z,wang_mean_z,mean_z_diff,diff_z_F_SF,diff_z_F_AH,diff_z_F_AV,diff_z_F_LR,llm_n_placed,wang_n_placed,n_input,llm_percentile,decisions,llm_decisions,switches,decisions_checked,ids_checked,left_at_zero,same_first_offer,http_requests,tokens,cost_usd,llm_seconds
+313,AL_R,20261111-1351-AL_R-pc1,True,0.402647,-2.008178,2.410825,3.581151,1.766901,2.18813,2.107119,33,30,34,0.716667,132,132,48,132,874,0,True,264,956226,1.412136,785.97

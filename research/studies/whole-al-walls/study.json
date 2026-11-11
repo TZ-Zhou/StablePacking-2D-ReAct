@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "whole-al-walls",
+  "kind": "whole-al-walls",
+  "created": "2026-11-11T14:09:13+08:00",
+  "design": {
+    "runner": "research/llm_walls/whole_al_wall.py",
+    "mode": "paid",
+    "run_wall": [
+      "--policy",
+      "paper",
+      "--order",
+      "3,0,2,1,4",
+      "--worker-venv"
+    ],
+    "spec": {
+      "kind": "pick",
+      "llm": {
+        "kind": "api",
+        "provider": "openai",
+        "model": "gpt-6.1-terra",
+        "max_tokens": 4096,
+        "effort": "low",
+        "request_timeout_s": 60.0,
+        "max_retries": 0,
+        "retry_backoff_s": 0.0,
+        "price_per_mtok": [
+          1.0,
+          5.0,
+          2.5,
+          0.05
+        ]
+      },
+      "max_tool_calls": 4,
+      "max_decisions": 260,
+      "llm_timeout": 90.0,
+      "max_llm_failures": 1,
+      "max_total_tokens": 3500000,
+      "max_cost_usd": 5.0,
+      "lookahead": true,
+      "whole_wall": true
+    },
+    "wall_limits": {
+      "http_requests": 1040,
+      "tokens": 3500000,
+      "cost_usd": 5.0,
+      "seconds": 10800
+    },
+    "experiment_limits": {
+      "walls": 9,
+      "http_requests": 9360,
+      "tokens": 31500000,
+      "cost_usd": 45.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "20261111-1351-AL_R-pc1",
+      "name": "whole-s313-al-r"
+    }
+  ]
+}
