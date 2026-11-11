@@ -39,8 +39,9 @@ class Gpt001(unittest.TestCase):
         self.assertEqual(len(steps), 18)
         broken = [dict(steps[-1], F_AH_partial=steps[-1]['F_AH_partial'] + 1e-9)]
         self.assertTrue(sq.wall_problems(steps[:-1] + broken, {**final, 'left': final['lambda_left'], 'right': final['lambda_right']}))
-        broken = [dict(steps[-1], lambda_left=steps[-1]['lambda_left'] + 1e-9)]  # beyond the one ulp allowed
-        self.assertTrue(sq.wall_problems(steps[:-1] + broken, {**final, **sq.metrics.mechanism_lambdas(sq.result_of(sq.WALLS['GPT']))}))
+        for k in ('lambda_left', 'F_LR'):  # beyond the ulp or two allowed
+            broken = [dict(steps[-1], **{k: steps[-1][k] + 1e-9})]
+            self.assertTrue(sq.wall_problems(steps[:-1] + broken, {**final, **sq.metrics.mechanism_lambdas(sq.result_of(sq.WALLS['GPT']))}))
 
 
 if __name__ == '__main__':

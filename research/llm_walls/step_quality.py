@@ -11,9 +11,10 @@ After each placement n of a recorded wall:
   values, never a final quality. At the last placement they are wang-quality-v1's.
 - lambda_left, lambda_right: evaluate_kine's two tilting-table solves (solve_force_rigid, unrounded)
   of the simulation wall after n; F_LR = min / mu, the partial wall's limit.
-Checks, each fatal: V's series is gpt-001's; at the last placement F_SF, F_AH, F_AV, F_LR are
-wang-quality-v1's (summary.json of the counterfactual plan) and the lambdas the mechanism files' within
-LAMBDA_RTOL (the walls predate the speedup 5a6992c; since it a repeated solve is an ulp or two off);
+Checks, each fatal: V's series is gpt-001's; at the last placement F_SF, F_AH, F_AV are
+wang-quality-v1's (summary.json of the counterfactual plan), and F_LR is wang-quality-v1's and the
+lambdas the mechanism files' within LAMBDA_RTOL (the walls predate the speedup 5a6992c; since it a
+repeated solve, and so F_LR = min / mu, is an ulp or two off);
 at every placement round(lambda_min, 1) / mu is the chosen candidate's LLC; G_k and P_k agree before
 the placement of step k.
 """
@@ -88,11 +89,12 @@ def wall_problems(rows, final):
             p.append(f"n {r['n']}: round(lambda_min) / mu is not the chosen LLC {r['LLC_chosen']}")
     last = rows[-1]
     col = lambda k: k if k in ('F_SF', 'F_LR') else f'{k}_partial'  # noqa: E731
+    off = lambda a, b: b is None or not np.isclose(a, b, rtol=LAMBDA_RTOL, atol=0)  # noqa: E731
     p += [f'last placement: {k} {last[col(k)]} is not wang-quality-v1 {final[k]}'
-          for k in ('F_SF', 'F_AH', 'F_AV', 'F_LR') if last[col(k)] != final[k]]
+          for k in ('F_SF', 'F_AH', 'F_AV', 'F_LR')
+          if (off(last[k], final[k]) if k == 'F_LR' else last[col(k)] != final[k])]
     p += [f'last placement: lambda_{s} {last[f"lambda_{s}"]} is not the mechanism file {final[s]}'
-          for s in ('left', 'right')
-          if final[s] is None or not np.isclose(last[f'lambda_{s}'], final[s], rtol=LAMBDA_RTOL, atol=0)]
+          for s in ('left', 'right') if off(last[f'lambda_{s}'], final[s])]
     return p
 
 
