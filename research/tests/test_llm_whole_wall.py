@@ -103,6 +103,7 @@ class WholeWall(unittest.TestCase):
                          [wall["http_requests"], wall["tokens"] / 1e3, wall["cost_usd"], batch["walls"],
                           batch["http_requests"], batch["tokens"] / 1e6, batch["cost_usd"]])
         names = [whole_wall.name_of(*s) for s in whole_wall.STATES]
+        self.assertTrue(all(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", n) for n in names), names)  # a run name
         with mock.patch.object(gpt_wall, "journals", return_value={names[0]: {"state": "finished", "started_at": "1"}}):
             self.assertEqual(pick_runner.next_state(False, whole_wall), (313, "TH_T20", names[1], names[0]))
         self.assertEqual(whole_wall.wall_args("TH_T20"), ["thangavelu-noise20"])

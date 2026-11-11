@@ -28,7 +28,7 @@ STATES = [(313, "TH_T80"), (313, "TH_T20"), (484, "TH_T80"), (484, "TH_T20"), (7
 
 
 def name_of(seed, scene):
-    return f"whole-s{seed}-{scene}"
+    return f"whole-s{seed}-{scene.lower().replace('_', '-')}"  # a run name is [a-z0-9-]
 
 
 def wall_args(scene):
