@@ -332,6 +332,92 @@ at least 3 of the 4 walls are not below Wang. Plan and rule: `docs/plans/llm-who
 - Limits: one LLM wall per state; all five seeds of the factorial are now used, none is held out for the `TH` scenes;
   `TH` scenes only.
 
+## Whole wall: rules without an LLM (`TH_T80`, `TH_T20`, 30 walls, free)
+The LLM's whole wall has two things Wang's does not: the check_after table and the LLM's own choice. Three rules
+without an LLM build the whole wall on the same 10 blocks to tell the two apart, with the same stones and the same
+candidates at each selection (two of them with the same check_after table); each is deterministic and built once.
+`wang_safe`: the cascade's pick if it is safe (no stone on offer left without a pose), otherwise the cascade run on
+the safe candidates only. `pick_safe`: the safe candidate with the highest LLC. `borda`: no table, the best rank
+sum of the five scores. Reading fixed before building, on the walls not below Wang of 10 against the LLM's 7: 7 or
+more "the rule reaches the LLM's count without an LLM", 5 or 6 "not separated", 4 or fewer "the LLM is 3 or more
+walls ahead of the rule". The LLM's walls are the pick-4 walls built once (the two sections above). Plan and rule:
+`docs/plans/whole-wall-rules.md`; table `runs/batch/whole-wall-rules.csv` (the records are only in `runs/batch`).
+
+| Seed | Scene | Wang mean z | LLM − Wang | `wang_safe` − Wang | `pick_safe` − Wang | `borda` − Wang | Stones Wang / LLM / `wang_safe` / `pick_safe` / `borda` | Decisions changed, `wang_safe`, `pick_safe`, `borda` | Not below Wang |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 313 | `TH_T80` | −0.047 | +0.771 | 0.000 | +1.482 | +0.055 | 18 / 18 / 18 / 18 / 18 | 0/18, 15/18, 4/17 | LLM, `wang_safe`, `pick_safe`, `borda` |
+| 313 | `TH_T20` | −0.149 | +0.257 | +0.496 | +0.471 | +0.248 | 22 / 22 / 21 / 21 / 20 | 1/21, 13/21, 10/19 | LLM |
+| 484 | `TH_T80` | −0.720 | +0.707 | +0.541 | +1.596 | +0.731 | 18 / 18 / 18 / 18 / 18 | 4/17, 15/18, 9/18 | LLM, `wang_safe`, `pick_safe`, `borda` |
+| 484 | `TH_T20` | −0.479 | +1.011 | −0.079 | +0.678 | +0.922 | 19 / 23 / 19 / 22 / 22 | 1/19, 15/21, 8/22 | LLM, `pick_safe`, `borda` |
+| 717 | `TH_T80` | 0.966 | −1.013 | 0.000 | −1.148 | −0.999 | 18 / 18 / 18 / 18 / 18 | 0/17, 13/18, 7/17 | `wang_safe` |
+| 717 | `TH_T20` | −0.667 | −0.104 | +0.059 | +0.319 | +1.658 | 20 / 18 / 20 / 23 / 23 | 1/20, 16/22, 7/23 | `wang_safe`, `pick_safe`, `borda` |
+| 720 | `TH_T80` | 0.025 | +0.830 | +0.373 | +0.402 | −0.090 | 18 / 18 / 18 / 18 / 17 | 1/18, 13/17, 6/17 | LLM, `wang_safe`, `pick_safe` |
+| 720 | `TH_T20` | 0.306 | +0.617 | 0.000 | −0.088 | −1.310 | 20 / 21 / 20 / 17 / 21 | 0/20, 11/17, 12/20 | LLM, `wang_safe` |
+| 761 | `TH_T80` | 0.447 | −0.156 | +0.530 | +0.192 | −1.180 | 18 / 18 / 18 / 18 / 17 | 4/18, 14/18, 7/17 | `wang_safe`, `pick_safe` |
+| 761 | `TH_T20` | −0.424 | +0.932 | 0.000 | +1.482 | −0.449 | 22 / 22 / 22 / 20 / 16 | 0/22, 14/20, 8/15 | LLM, `wang_safe` |
+- Walls not below Wang of 10: `wang_safe` 8 ("the rule reaches the LLM's count without an LLM"), `pick_safe` 6 ("not
+  separated"), `borda` 4 ("the LLM is 3 or more walls ahead of the rule"); the LLM 7. Read on the `wang_safe` row: the
+  7/10 is reached by Wang's choice with check_after, so it is not shown to be the LLM's choice.
+- The limit named in the plan applies: 4 of `wang_safe`'s 8 are Wang's wall again (no decision changed; a wall equal to
+  Wang's counts as not below). It changes 12 of its 190 decisions, on 6 walls, 4 of them not below (below: 313 `TH_T20`
+  by one stone, 484 `TH_T20` by 0.08 in mean z). Not below and different from Wang's wall: LLM 7, `pick_safe` 6,
+  `wang_safe` 4, `borda` 4.
+- Mean of the 10 differences from Wang in mean z: `pick_safe` +0.539, LLM +0.385, `wang_safe` +0.192, `borda` −0.042.
+  Stones of the 10 walls: Wang 193, LLM 196, `pick_safe` 193, `wang_safe` 192, `borda` 190.
+- The LLM against the rule on the same block (LLM not below the rule / the rule not below the LLM): `wang_safe` 6 / 3,
+  `pick_safe` 4 / 4, `borda` 7 / 3.
+- `pick_safe` changes 139 of 190 decisions. Neither tool rule places an unsafe candidate when a safe one exists (70
+  and 69 decisions with both kinds). `pick_safe` still places fewer stones than Wang on three `TH_T20` walls (21,
+  17, 20 against 22, 20, 22).
+- All 30 walls finished with every decision the rule's and the first offer equal to Wang's.
+- Limits: 10 walls, where another filter order drawn at random is not below Wang in 6 or more with probability 0.24
+  and in 7 or more with 0.07, so one or two walls are no evidence; one LLM wall per block, built once (its run-to-run
+  spread is measured two sections below); `TH` scenes only.
+
+## Whole wall: lessons induced from finished walls, stage A (`TH_T80`, `TH_T20`, 10 walls, US$2.10)
+The LLM reads finished walls of the factorial and writes up to 5 lessons; the lessons go unchanged after the pick-4
+prompt and the whole wall is built again, everything else as pick-4. Per source block 4 walls chosen by formula (the
+two best and the worst of the walls placing the most stones, and the wall placing the fewest), every step recomputed
+in the words of the pick-4 observation, without seed, order, stone ids or coordinates. Leave one seed out: a seed's
+two walls get the lessons induced from the other four seeds' 8 blocks (32 walls), 5 inductions. Main comparison,
+fixed before any paid request: the lessons wall against the pick-4 wall built once before on the same block (win,
+loss or tie by the not-below rule both ways), one-sided sign test on the decided blocks; stage A is a screen at p ≤
+0.20 and stage B (new seeds, both arms built new) runs only if it passes. Plan and rule: `docs/plans/llm-lessons.md`;
+tables `research/studies/lessons-walls/llm-lessons.csv` and `runs/batch/llm-lessons-metrics.csv`.
+
+| Seed | Scene | Lessons mean z | pick-4 mean z | Lessons − pick-4 | `F_LR` z, lessons − pick-4 | Stones lessons / pick-4 / Wang | Against pick-4 | Against `pick_safe` | Against `wang_safe` | Not below Wang |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 313 | `TH_T80` | 0.562 | 0.724 | −0.162 | +1.135 | 18 / 18 / 18 | loss | loss | win | yes |
+| 313 | `TH_T20` | −0.114 | 0.108 | −0.221 | +1.065 | 22 / 22 / 22 | loss | tie | tie | yes |
+| 484 | `TH_T80` | 0.492 | −0.012 | +0.505 | +1.180 | 18 / 18 / 18 | win | loss | win | yes |
+| 484 | `TH_T20` | 0.330 | 0.533 | −0.203 | +0.703 | 22 / 23 / 19 | loss | win | win | yes |
+| 717 | `TH_T80` | 0.725 | −0.047 | +0.772 | −0.825 | 18 / 18 / 18 | win | win | loss | no |
+| 717 | `TH_T20` | 0.123 | −0.770 | +0.893 | −0.910 | 21 / 18 / 20 | win | tie | win | yes |
+| 720 | `TH_T80` | 1.223 | 0.855 | +0.368 | +1.690 | 18 / 18 / 18 | win | win | win | yes |
+| 720 | `TH_T20` | 0.273 | 0.923 | −0.650 | −2.457 | 22 / 21 / 20 | tie | win | tie | no |
+| 761 | `TH_T80` | 0.562 | 0.291 | +0.271 | −0.264 | 18 / 18 / 18 | win | loss | loss | yes |
+| 761 | `TH_T20` | 0.676 | 0.508 | +0.168 | +1.604 | 22 / 22 / 22 | win | tie | win | yes |
+- Reading "no difference seen": 6 wins, 3 losses, 1 tie against pick-4, p = 0.254 (the screen needs p ≤ 0.20). Stage
+  A stops there and stage B is not run.
+- Against the rules, not part of the screen: `pick_safe` 4 wins, 3 losses, 3 ties (p = 0.500); `wang_safe` 6, 2, 2 (p
+  = 0.145).
+- Described, not in the rule: not below Wang 8 of 10 (pick-4 7; below on 717 `TH_T80` and 720 `TH_T20`); at or above
+  Wang on all four metrics 3 walls (pick-4 1); stones 199 (pick-4 196, Wang 193).
+- Per metric, lessons − pick-4 in z, mean of the 10 blocks (blocks better / worse): mean z +0.17, `F_SF` +0.09 (5 /
+  5), `F_AH` −0.15 (5 / 5), `F_AV` +0.46 (5 / 5), `F_LR` +0.29 (6 / 4; median +0.88). The swings go both ways (`F_LR`
+  +1.69 on 720 `TH_T80`, −2.46 on 720 `TH_T20`). Both walls of a block were built once: the next section measures the
+  spread of pick-4 alone and places these differences inside it.
+- 109 of 197 decisions differ from the cascade (pick-4 87 of 193); no pick leaves a stone on offer without a pose
+  (pick-4 2).
+- The inductions gave 5, 5, 5, 4, 5 lessons of 32 to 51 words. All five sets say to use check_after and protect the
+  stones on offer, to weigh LLC and not to chase one score.
+- One induction was repeated: the first paid request of fold 313 carried the pick prompt instead of the induction
+  prompt (an error in the command line, US$0.16, no lesson written), so that fold was induced once more with the
+  corrected code; the exception and the void records are in the plan and in
+  `research/studies/lessons-induction/fold-313-void`. Cost: inductions US$0.94 with the void attempt, walls US$1.16.
+- Limits: a screen, not evidence (the formula and the prompts were designed knowing which pick-4 walls are below
+  Wang); the pick-4 arm built once and earlier; the two walls of a seed share one set of lessons; `TH` scenes only.
+
 ## Whole wall: run-to-run spread of the LLM pick (`TH_T80`, `TH_T20`, 40 walls, US$6.07)
 The whole-wall pick unchanged (pick-4: the same prompt, model, tools and limits) built 4 more times on each of the 10
 `TH` blocks (seeds 313, 484, 717, 720, 761), a round at a time (one wall on every block, then the next round), each
@@ -381,3 +467,65 @@ new walls; the walls built once before are only placed against them. Plan: `docs
   mean z of 0.43 or more; 4 walls per arm halve it.
 - Limits: 4 walls a block, so only the pooled SD is usable; one day, one prompt (pick-4), one model and effort, `TH`
   scenes only; z is not normal and the stone count is an integer, so intervals and block counts are approximate.
+
+## Whole wall: the 40 repeats against Wang and two rules, described afterwards (`TH_T80`, `TH_T20`, free)
+A description made after the data were seen, not a judgment: it was added to the plan after the 40 repeats had been
+built and read and after the walls of the three opponents were known, so nothing passes or fails and no earlier
+reading is reopened (the 7/10, the rules comparison and the lessons' "no difference seen" stand). The LLM is the 40
+repeats, 4 a block. The opponents have one wall a block and no run-to-run spread: Wang's Paper wall, the `wang_safe`
+wall and the `pick_safe` wall of the same 10 blocks. A difference is the mean of the LLM's walls minus the opponent's
+wall. Round brackets: the difference in standard errors of the LLM's measured within-block spread (pooled SD / √40;
+a scene's pooled SD / √20), called outside the spread from 2; this speaks for these 10 blocks only. Square brackets:
+the same difference in standard errors of the spread between the 10 block means (SD / √10), which is what carrying
+it to other blocks would need. 18 overall comparisons, no correction for their number. Plan:
+`docs/plans/llm-pick-repeats.md` (last section); tables `research/studies/pick-repeats/llm-repeats-against.csv` and
+`llm-repeats-against-blocks.csv`.
+
+| LLM − opponent, 10 blocks | Wang | `wang_safe` | `pick_safe` |
+| --- | --- | --- | --- |
+| Mean z | +0.472 (7.8) [2.2] | +0.280 (4.6) [1.1] | −0.067 (−1.1) [−0.3] |
+| `F_SF` | +0.336 (5.7) [1.3] | +0.375 (6.3) [1.5] | +0.321 (5.4) [1.0] |
+| `F_AH` | +0.643 (5.1) [2.3] | +0.341 (2.7) [1.0] | +0.056 (0.4) [0.1] |
+| `F_AV` | +0.881 (7.1) [3.1] | +0.703 (5.6) [2.3] | +0.108 (0.9) [0.4] |
+| `F_LR` | +0.027 (0.2) [0.1] | −0.300 (−2.4) [−0.6] | −0.752 (−6.0) [−1.7] |
+| Stones | +0.50 (5.3) [1.2] | +0.60 (6.4) [1.5] | +0.50 (5.3) [0.8] |
+| Mean z, `TH_T20` | +0.773 (9.2) [2.6] | +0.678 (8.0) [1.8] | +0.201 (2.4) [0.5] |
+| `F_LR`, `TH_T20` | +0.406 (2.1) [0.5] | +0.377 (1.9) [0.5] | −0.629 (−3.2) [−0.8] |
+| Stones, `TH_T20` | +1.00 (5.3) [1.2] | +1.20 (6.4) [1.6] | +1.00 (5.3) [0.8] |
+| Mean z, `TH_T80` | +0.170 (1.95) [0.7] | −0.119 (−1.4) [−0.5] | −0.335 (−3.8) [−1.3] |
+| `F_LR`, `TH_T80` | −0.353 (−2.2) [−0.8] | −0.977 (−6.1) [−2.5] | −0.874 (−5.4) [−1.7] |
+| Stones, `TH_T80` | 0.00 (no spread) | 0.00 (no spread) | 0.00 (no spread) |
+| Walls of 40: win / tie / loss | 26 / 2 / 12 | 23 / 3 / 14 | 12 / 10 / 18 |
+
+| Seed | Scene | Mean z against Wang (SE), walls win / tie / loss | Against `wang_safe` | Against `pick_safe` |
+| --- | --- | --- | --- | --- |
+| 313 | `TH_T80` | +0.56 (2.9), 3 / 0 / 1 | +0.56 (2.9), 3 / 0 / 1 | −0.92 (−4.7), 0 / 0 / 4 |
+| 313 | `TH_T20` | −0.23 (−1.2), 1 / 0 / 3 | −0.73 (−3.8), 0 / 1 / 3 | −0.70 (−3.7), 0 / 1 / 3 |
+| 484 | `TH_T80` | +0.83 (4.3), 4 / 0 / 0 | +0.29 (1.5), 4 / 0 / 0 | −0.76 (−3.9), 0 / 0 / 4 |
+| 484 | `TH_T20` | +1.24 (6.6), 4 / 0 / 0 | +1.32 (7.0), 4 / 0 / 0 | +0.56 (3.0), 2 / 2 / 0 |
+| 717 | `TH_T80` | −0.59 (−3.0), 0 / 0 / 4 | −0.59 (−3.0), 0 / 0 / 4 | +0.56 (2.9), 4 / 0 / 0 |
+| 717 | `TH_T20` | +1.49 (7.9), 4 / 0 / 0 | +1.43 (7.6), 4 / 0 / 0 | +1.17 (6.2), 0 / 4 / 0 |
+| 720 | `TH_T80` | +0.28 (1.5), 3 / 0 / 1 | −0.09 (−0.5), 1 / 0 / 3 | −0.12 (−0.6), 1 / 0 / 3 |
+| 720 | `TH_T20` | +0.76 (4.0), 4 / 0 / 0 | +0.76 (4.0), 4 / 0 / 0 | +0.84 (4.5), 4 / 0 / 0 |
+| 761 | `TH_T80` | −0.24 (−1.2), 1 / 0 / 3 | −0.77 (−4.0), 1 / 0 / 3 | −0.43 (−2.2), 1 / 0 / 3 |
+| 761 | `TH_T20` | +0.62 (3.3), 2 / 2 / 0 | +0.62 (3.3), 2 / 2 / 0 | −0.87 (−4.6), 0 / 3 / 1 |
+- On these 10 blocks the LLM's average wall is above Wang's and `wang_safe`'s beyond its own spread: mean z +0.472
+  (7.8 SE) and +0.280 (4.6 SE), and likewise `F_SF`, `F_AH`, `F_AV` and the stones. 26 of the 40 walls win against
+  Wang's wall and 12 lose; against `wang_safe`'s 23 and 14.
+- Level with `pick_safe`: mean z −0.067 (1.1 SE, inside the spread); 12 walls win, 18 lose, 10 tie. The LLM has the
+  higher `F_SF` and more stones, `pick_safe` the higher `F_LR`.
+- `F_LR` is the weak metric: +0.027 against Wang (inside the spread), −0.300 against `wang_safe` (2.4 SE), −0.752
+  against `pick_safe` (6.0 SE). Over the 10 blocks it is above no opponent beyond the spread (on `TH_T20` alone
+  +0.406 against Wang, 2.1 SE), and on `TH_T80` it is below all three (−0.353, −0.977, −0.874).
+- The lead is on `TH_T20` only: mean z +0.773 against Wang and +0.678 against `wang_safe`, with 1.0 and 1.2 more
+  stones a wall. On `TH_T80`, where every wall places all 18 stones: +0.170 against Wang (1.95 SE, inside the spread),
+  −0.119 against `wang_safe` (inside), −0.335 against `pick_safe` (3.8 SE below).
+- Not carried to other seeds. The round brackets hold only the LLM's run-to-run spread. The difference itself varies
+  between blocks with SD 0.67 to 0.80 in mean z and changes sign: above Wang on 7 blocks and below on 3, above
+  `pick_safe` on 4 and below on 6. In standard errors between blocks only the mean z, `F_AH` and `F_AV` against Wang
+  and `F_AV` against `wang_safe` reach 2 (mean z 2.2 against Wang, 1.1 against `wang_safe`), with 18 comparisons
+  uncorrected and the comparison chosen after the data. The 10 blocks are all five seeds; none is held out.
+- `wang_safe`'s wall is Wang's wall on 4 blocks (313 `TH_T80`, 717 `TH_T80`, 720 `TH_T20`, 761 `TH_T20`), so the first
+  two columns are not independent.
+- Limits: one wall a block for each opponent; the spread measured on one day, with one prompt, model and effort; `TH`
+  scenes only.
