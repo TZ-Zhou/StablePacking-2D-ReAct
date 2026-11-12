@@ -20,7 +20,10 @@ With "whole_wall": true (with lookahead, without llc_note; docs/plans/llm-whole-
 first stone: every selection with two or more feasible candidates is a decision point, the observation version is
 'pick-4' (the same fields; SYSTEM_WHOLE says all four metrics must be good) and build_wall computes the check_after
 table at every such selection (lookahead 'always'). While the inventory is not empty the next selection is a new
-sample, so check() compares a placed candidate's row only on the stones sampled again.
+sample, so check() compares a placed candidate's row only on the stones sampled again. With "safe_top_llc": true
+as well (docs/plans/llm-safe-top-hint.md) the observation version is 'pick-5': the 'pick-4' fields and safe_top_llc,
+the ids of the safe candidates (no 0 in their check_after row) at the highest LLC among the safe ones, and the
+prompt of 'pick-4' plus one paragraph on it (SAFE_TOP). No candidate is removed and the tools are the same.
 
 It is the order controller with its own observation, request and reply (PickClient over ControllerClient: the same
 worker, budget, ledger and LLM transcripts; PickPolicy over ReActPolicy: the same LLM call, retries on a rejected
@@ -93,6 +96,14 @@ SYSTEM_WHOLE = SYSTEM_LOOKAHEAD
 for _old, _new in WHOLE:
     assert SYSTEM_WHOLE.count(_old) == 1
     SYSTEM_WHOLE = SYSTEM_WHOLE.replace(_old, _new)
+SAFE_TOP = (
+    "safe_top_llc lists the ids of the candidates that are safe (placing one leaves no other stone on offer now at 0 "
+    "feasible poses for the next placement, which is what check_after would show) and whose LLC is the highest among "
+    "the safe candidates. LLC is rounded, so candidates whose limit loads are close share that value. The list is "
+    "empty when no candidate is safe. It is information, not a rule: every candidate stays available and the choice "
+    "is yours. If you commit a candidate that is not in safe_top_llc, say in the rationale why.\n")
+SYSTEM_SAFE = SYSTEM_WHOLE.replace("Compare the main candidates", SAFE_TOP + "Compare the main candidates")
+assert SYSTEM_SAFE.count(SAFE_TOP) == 1
 CHECK = {"name": "check_after", "description": "For listed candidates: the feasible poses each other remaining stone "
          "would have at the next placement if that candidate were placed. No scores.",
          "parameters": {"type": "object", "additionalProperties": False, "required": ["candidates"],
@@ -114,6 +125,7 @@ OBSERVATION_VERSION = "pick-1"
 OBSERVATION_VERSION_LOOKAHEAD = "pick-2"
 OBSERVATION_VERSION_NOTE = "pick-3"
 OBSERVATION_VERSION_WHOLE = "pick-4"
+OBSERVATION_VERSION_SAFE = "pick-5"
 REPLY_KEYS = {"pick", "source", "prompt_sha256", "react", "transcripts", "restart"}
 ID_TEXT = re.compile(r"[0-9]{1,4}")
 
@@ -153,13 +165,13 @@ class PickPolicy(oc.ReActPolicy):
     the first message."""
 
     def __init__(self, llm, max_tool_calls=3, llm_timeout=60.0, lookahead=False, llc_note=False,
-                 whole_wall=False, lessons=None):
+                 whole_wall=False, lessons=None, safe_top_llc=False):
         self.llm, self.max_tool_calls, self.llm_timeout = llm, max_tool_calls, llm_timeout
         self.system, self.tools = (SYSTEM_LOOKAHEAD, [CHECK, COMMIT]) if lookahead else (SYSTEM, [COMMIT])
         if llc_note:
             self.system = SYSTEM_NOTE
         if whole_wall:
-            self.system, self.tools = SYSTEM_WHOLE, [CHECK_WHOLE, COMMIT]
+            self.system, self.tools = SYSTEM_SAFE if safe_top_llc else SYSTEM_WHOLE, [CHECK_WHOLE, COMMIT]
         if lessons:
             self.system += LESSONS + "".join(f"\n{i}. {text}" for i, text in enumerate(lessons, 1))
         self.prompt_sha256 = hashlib.sha256(json.dumps([self.system, self.tools]).encode()).hexdigest()
@@ -211,10 +223,11 @@ class PickClient(oc.ControllerClient):
 
     def __init__(self, spec, transport, sink=None, ledger=None):
         super().__init__(spec, transport, sink, ledger)
-        self.whole = self.spec().get("whole_wall", False)
+        self.whole, self.safe = self.spec().get("whole_wall", False), self.spec().get("safe_top_llc", False)
         # build_wall computes the check_after table if true (in the endgame) or 'always' (at every selection)
         self.lookahead = "always" if self.whole else self.spec().get("lookahead", False)
-        version = (OBSERVATION_VERSION_WHOLE if self.whole else OBSERVATION_VERSION_NOTE
+        version = (OBSERVATION_VERSION_SAFE if self.safe else OBSERVATION_VERSION_WHOLE
+                   if self.whole else OBSERVATION_VERSION_NOTE
                    if self.spec().get("llc_note") else OBSERVATION_VERSION_LOOKAHEAD
                    if self.lookahead else OBSERVATION_VERSION)
         self.observer, self.n = Observer(version), 0
@@ -242,6 +255,10 @@ class PickClient(oc.ControllerClient):
             sampled, after = [int(s) for s in ctx["sampled_ids"]], np.asarray(ctx["after"])
             info["after"] = {str(k): {self.observer.label(s): int(c) for s, c in zip(sampled, after[i]) if c >= 0}
                              for k, i in enumerate(rows)}
+            if self.safe:  # the safe candidates at the highest LLC among the safe ones; none if none is safe
+                safe = [c for c in obs["candidates"] if 0 not in info["after"][str(c["id"])].values()]
+                top = max((c["scores"]["LLC"] for c in safe), default=None)
+                obs["safe_top_llc"] = [c["id"] for c in safe if c["scores"]["LLC"] == top]
         choice, detail = self.ask(obs, info) if decision_point else (None, {"source": "not_a_decision_point"})
         pick = None if choice is None else int(rows[choice])
         cascade = select(raw, ctx["weights"], "paper", base, policy["tol"]).index
@@ -302,7 +319,7 @@ def check(result, records, spec, stopped=False):
     llm = oc.ReplayLLM(records, *oc.llm_identity(full["llm"]))
     worker = {**{k: full[k] for k in oc.WORKER_KEYS["pick"]}, "lookahead": full.get("lookahead", False),
               "llc_note": full.get("llc_note", False), "whole_wall": full.get("whole_wall", False),
-              "lessons": full.get("lessons")}
+              "lessons": full.get("lessons"), "safe_top_llc": full.get("safe_top_llc", False)}
     transport = oc.ReplayedFailures(lambda: PickPolicy(llm, **worker), records)
     expected, ledger = [], []
     client = PickClient(spec, transport, expected.append, ledger.append)

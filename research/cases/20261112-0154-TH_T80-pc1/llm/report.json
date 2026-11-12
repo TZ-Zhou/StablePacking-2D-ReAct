@@ -1,0 +1,938 @@
+{
+ "check": {
+  "decision_points": 18,
+  "incomplete": [],
+  "ok": true,
+  "problems": [],
+  "records": 18,
+  "switches": 7,
+  "verdict": "PASS"
+ },
+ "cost_usd": 0.16185014999999997,
+ "decision_points": 18,
+ "elapsed_seconds": 231.594,
+ "gpt_complete": true,
+ "http_requests": 35,
+ "http_requests_exact": true,
+ "key_scan": [],
+ "llm_decisions": 18,
+ "requests": [
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.004968,
+   "decision": [
+    1,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 0,
+   "latency_s": 2.625,
+   "outcome": "reply",
+   "request_id": "req_ba9ce4ac0a594abfa88b555a900fd6c1",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1916,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 35,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0030313000000000002,
+   "decision": [
+    1,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 0,
+   "latency_s": 7.375,
+   "outcome": "reply",
+   "request_id": "req_e35004d97b6849cface11b1a83315828",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 455,
+    "cache_read_input_tokens": 1916,
+    "input_tokens": 3,
+    "output_tokens": 359,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0068905,
+   "decision": [
+    2,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 1,
+   "latency_s": 2.765,
+   "outcome": "reply",
+   "request_id": "req_131690fbbfe6444a8b20180f46d601ca",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2697,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 29,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00250285,
+   "decision": [
+    2,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 1,
+   "latency_s": 6.266,
+   "outcome": "reply",
+   "request_id": "req_d7f613d62a8d445fb02ab1cb09fe636a",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 314,
+    "cache_read_input_tokens": 2697,
+    "input_tokens": 3,
+    "output_tokens": 316,
+    "reasoning_tokens": 49
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0077555,
+   "decision": [
+    3,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 2,
+   "latency_s": 2.094,
+   "outcome": "reply",
+   "request_id": "req_708a22fce2bf44e3bda34e95156121b0",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2979,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 61,
+    "reasoning_tokens": 28
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00283945,
+   "decision": [
+    3,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 2,
+   "latency_s": 6.172,
+   "outcome": "reply",
+   "request_id": "req_175a87271cc9477fb1a9a3d777fab786",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 391,
+    "cache_read_input_tokens": 2979,
+    "input_tokens": 3,
+    "output_tokens": 342,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.007948,
+   "decision": [
+    4,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 3,
+   "latency_s": 2.094,
+   "outcome": "reply",
+   "request_id": "req_47baa1d76d54482f82dc3f8ef280cfb1",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 3076,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 51,
+    "reasoning_tokens": 20
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0027868000000000003,
+   "decision": [
+    4,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 3,
+   "latency_s": 7.25,
+   "outcome": "reply",
+   "request_id": "req_39a79ac051e543c1988497eb3fe0d61b",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 336,
+    "cache_read_input_tokens": 3076,
+    "input_tokens": 3,
+    "output_tokens": 358,
+    "reasoning_tokens": 128
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0072205,
+   "decision": [
+    5,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 4,
+   "latency_s": 1.937,
+   "outcome": "reply",
+   "request_id": "req_12eba3a9680640028ed90cd530b9dcdb",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2785,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 51,
+    "reasoning_tokens": 20
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00261225,
+   "decision": [
+    5,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 4,
+   "latency_s": 5.438,
+   "outcome": "reply",
+   "request_id": "req_ce7ce4bcab53489391499458555e8dec",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 336,
+    "cache_read_input_tokens": 2785,
+    "input_tokens": 3,
+    "output_tokens": 326,
+    "reasoning_tokens": 20
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0074505,
+   "decision": [
+    6,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 5,
+   "latency_s": 2.14,
+   "outcome": "reply",
+   "request_id": "req_9ba2bf17e8004049b7e6ddd8e41aa1cd",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2885,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 47,
+    "reasoning_tokens": 18
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00260975,
+   "decision": [
+    6,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 5,
+   "latency_s": 5.969,
+   "outcome": "reply",
+   "request_id": "req_3c08af133f294e7b87b03d5c6129a286",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 287,
+    "cache_read_input_tokens": 2885,
+    "input_tokens": 3,
+    "output_tokens": 349,
+    "reasoning_tokens": 45
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0075655,
+   "decision": [
+    7,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 6,
+   "latency_s": 3.968,
+   "outcome": "reply",
+   "request_id": "req_e7b29f5c4a9d4b92b6a8d25d47ad9c64",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2905,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 60,
+    "reasoning_tokens": 31
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00274325,
+   "decision": [
+    7,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 6,
+   "latency_s": 6.547,
+   "outcome": "reply",
+   "request_id": "req_8b88b8085bee44bc811a6816c8e1acbd",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 300,
+    "cache_read_input_tokens": 2905,
+    "input_tokens": 3,
+    "output_tokens": 369,
+    "reasoning_tokens": 12
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.007128,
+   "decision": [
+    8,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 7,
+   "latency_s": 1.922,
+   "outcome": "reply",
+   "request_id": "req_19fc323d6c9e4d9cae7e89b8e395f675",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2796,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 27,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0022553,
+   "decision": [
+    8,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 7,
+   "latency_s": 5.891,
+   "outcome": "reply",
+   "request_id": "req_928f189e88504515b6aa148482e427aa",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 267,
+    "cache_read_input_tokens": 2796,
+    "input_tokens": 3,
+    "output_tokens": 289,
+    "reasoning_tokens": 72
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0073005,
+   "decision": [
+    9,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 8,
+   "latency_s": 2.25,
+   "outcome": "reply",
+   "request_id": "req_6f6dcc50fb9e4d65bc001068b9588e8e",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2815,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 52,
+    "reasoning_tokens": 23
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00238375,
+   "decision": [
+    9,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 8,
+   "latency_s": 6.125,
+   "outcome": "reply",
+   "request_id": "req_2759dc880eff471d994e362539233940",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 292,
+    "cache_read_input_tokens": 2815,
+    "input_tokens": 3,
+    "output_tokens": 302,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.005938,
+   "decision": [
+    10,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 9,
+   "latency_s": 1.688,
+   "outcome": "reply",
+   "request_id": "req_b0aec825eb954fca8263c782079e3446",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2320,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 27,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0029715,
+   "decision": [
+    10,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 9,
+   "latency_s": 8.422,
+   "outcome": "reply",
+   "request_id": "req_593634821ecc422a856073e978140409",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 267,
+    "cache_read_input_tokens": 2320,
+    "input_tokens": 3,
+    "output_tokens": 437,
+    "reasoning_tokens": 115
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0076705,
+   "decision": [
+    11,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 10,
+   "latency_s": 1.921,
+   "outcome": "reply",
+   "request_id": "req_aa5439088ec64e4aa2a3d05ab52a263b",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 3001,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 33,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00269805,
+   "decision": [
+    11,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 10,
+   "latency_s": 5.86,
+   "outcome": "reply",
+   "request_id": "req_fb1e8c11e3264fa3a0d992cb90f14f3d",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 408,
+    "cache_read_input_tokens": 3001,
+    "input_tokens": 3,
+    "output_tokens": 305,
+    "reasoning_tokens": 25
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0083655,
+   "decision": [
+    12,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 11,
+   "latency_s": 1.766,
+   "outcome": "reply",
+   "request_id": "req_6981348e7d2343f08a6041a262b2a146",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 3287,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 29,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00317735,
+   "decision": [
+    12,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 11,
+   "latency_s": 7.625,
+   "outcome": "reply",
+   "request_id": "req_22961d1ca31d4a74bf076741f9c520cb",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 314,
+    "cache_read_input_tokens": 3287,
+    "input_tokens": 3,
+    "output_tokens": 445,
+    "reasoning_tokens": 76
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.006923,
+   "decision": [
+    13,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 12,
+   "latency_s": 1.954,
+   "outcome": "reply",
+   "request_id": "req_9efee331b0284ed4a73a7c97f62a95d1",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2714,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 27,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0021136999999999996,
+   "decision": [
+    13,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 12,
+   "latency_s": 5.109,
+   "outcome": "reply",
+   "request_id": "req_56783486454d45cdb309dc7ee200d275",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 232,
+    "cache_read_input_tokens": 2714,
+    "input_tokens": 3,
+    "output_tokens": 279,
+    "reasoning_tokens": 34
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.0061605,
+   "decision": [
+    14,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 13,
+   "latency_s": 1.703,
+   "outcome": "reply",
+   "request_id": "req_1d050dd4ca6545e0bd7c662fe867067f",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2413,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 25,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.00196865,
+   "decision": [
+    14,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 13,
+   "latency_s": 5.406,
+   "outcome": "reply",
+   "request_id": "req_668950dc5a894d538326f75e2bd34298",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 164,
+    "cache_read_input_tokens": 2413,
+    "input_tokens": 3,
+    "output_tokens": 287,
+    "reasoning_tokens": 39
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.005793,
+   "decision": [
+    15,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 14,
+   "latency_s": 2.609,
+   "outcome": "reply",
+   "request_id": "req_a0fa7fdb853b49df9c21bbdb19f5a755",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 2220,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 48,
+    "reasoning_tokens": 19
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0023615,
+   "decision": [
+    15,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 14,
+   "latency_s": 5.844,
+   "outcome": "reply",
+   "request_id": "req_7b2da39399134869bf53aa6463ddae0e",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 183,
+    "cache_read_input_tokens": 2220,
+    "input_tokens": 3,
+    "output_tokens": 358,
+    "reasoning_tokens": 32
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.005068,
+   "decision": [
+    16,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 15,
+   "latency_s": 2.0,
+   "outcome": "reply",
+   "request_id": "req_6b154d57470949018a2f1c2690fc854d",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1936,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 45,
+    "reasoning_tokens": 8
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0024923000000000002,
+   "decision": [
+    16,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 15,
+   "latency_s": 7.219,
+   "outcome": "reply",
+   "request_id": "req_fe1e35b2fa984095ac47f7a89adf5153",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 213,
+    "cache_read_input_tokens": 1936,
+    "input_tokens": 3,
+    "output_tokens": 372,
+    "reasoning_tokens": 86
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.004033,
+   "decision": [
+    17,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 16,
+   "latency_s": 1.922,
+   "outcome": "reply",
+   "request_id": "req_5f4ba8e00a1346e4aa569a5373855440",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1558,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 27,
+    "reasoning_tokens": 0
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 1,
+   "cost_usd_estimate": 0.0022909000000000002,
+   "decision": [
+    17,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 16,
+   "latency_s": 8.297,
+   "outcome": "reply",
+   "request_id": "req_3957a84a51ab467fa966802bdc7c04ae",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 92,
+    "cache_read_input_tokens": 1558,
+    "input_tokens": 3,
+    "output_tokens": 396,
+    "reasoning_tokens": 122
+   }
+  },
+  {
+   "attempt": 0,
+   "billed": "reported",
+   "call": 0,
+   "cost_usd_estimate": 0.003833,
+   "decision": [
+    18,
+    "single",
+    0,
+    "left"
+   ],
+   "error": null,
+   "event": 17,
+   "latency_s": 3.5,
+   "outcome": "reply",
+   "request_id": "req_744a0001f80b4d9ea025dc241ed410a1",
+   "served_model": "gpt-6.1-terra",
+   "status_code": null,
+   "usage": {
+    "cache_creation_input_tokens": 1266,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 133,
+    "reasoning_tokens": 35
+   }
+  }
+ ],
+ "skips_and_fallbacks": [],
+ "status": "PROCESS_PASS",
+ "switches": 7,
+ "tokens": 101524,
+ "unknown_usage": 0,
+ "worker_failures": [],
+ "workers_reaped": true
+}
