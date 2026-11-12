@@ -640,3 +640,103 @@ Mean difference (SE within) [SE between blocks], as in the sections above.
 - Limits: a check afterwards on the same walls, no new data; the 2 SE rules and the conclusions were first read on
   the grid; many numbers are read (4 renderings, 7 comparisons, 6 quantities) and only the four rows of the table
   give a verdict; Wang, `wang_safe` and `pick_safe` have one wall a block; 10 blocks of five seeds, `TH` scenes only.
+
+## Whole wall: where pick-4 leaves `pick_safe` on `TH_T80`, decision by decision (40 walls, free)
+The sections above put pick-4 below `pick_safe` on `TH_T80` (mean z −0.335, 3.8 SE; `F_LR` −0.874, 5.4 SE). This
+section reads where that comes from in the walls already built. At each of the 786 decisions of the 40 pick-4 walls
+(359 on `TH_T80`; 427 on `TH_T20`, listed as the contrast) the candidate `pick_safe` would place in the same state is
+recomputed from the traced scores and the traced `check_after` table: the highest LLC among the safe candidates,
+among all of them when none is safe, ties to the lowest id. The decision is then classed: same; unsafe (a safe
+candidate existed and the LLM placed an unsafe one); lower LLC; same LLC (another of the candidates the rule ranks
+first, so it differs from the rule only in the rule's tie-break). The LLC of a candidate is the wall's `F_LR` after
+placing it, rounded to one notch (0.1/μ = 0.172), so the LLC difference is what the decision gives up at once. This
+is a description afterwards with no pass or fail. The classes, four checks and four possible explanations were fixed
+before any number was computed; what was added after the first numbers is listed at the end of the plan. Nothing was
+built and no LLM was called. Plan: `docs/plans/th80-pick-safe-gap.md`; module `research/analysis/pick_safe_gap.py`;
+tables `research/studies/th80-pick-safe-gap/`.
+
+| 20 pick-4 walls a scene | `TH_T80` | `TH_T20` |
+| --- | --- | --- |
+| Decisions | 359 | 427 |
+| same | 90 | 119 |
+| same LLC | 164 | 217 |
+| lower LLC | 105 | 85 |
+| unsafe | 0 | 6 |
+| LLC given up at the lower LLC decisions, summed (a wall) | −24.48 (−1.224) | −15.86 (−0.940) |
+| Change of `F_LR` at the lower LLC placements, of the change at all placements | −12.57 of −13.07 | −10.47 of −10.54 |
+| Final `F_LR` minus the `pick_safe` wall's, mean (walls below) | −0.131 (13) | −0.067 (14) |
+
+- Checks, all four passed before the reading: the rule recomputed on the 10 `pick_safe` walls places what each wall
+  placed at every decision; every pick-4 decision has as many candidates as were feasible and its recorded choice is
+  the stone placed; `F_LR` after every placement, rounded as LLC is, equals the LLC of the chosen candidate, and the
+  final one equals the recorded `F_LR` (largest deviation 2.2e-16); the LLM wall and the `pick_safe` wall of a block
+  have the same candidates and scores up to their first differing decision.
+- Where: on `TH_T80` 254 of the 359 decisions (71%) take a candidate the rule ranks first, 105 (29%) take a lower
+  LLC and none takes an unsafe candidate (all candidates were safe in 162 decisions, never none). Lower LLC decisions
+  a wall by seed: 313 2.5, 484 9.5, 717 3.5, 720 5.0, 761 5.75. By placement: 26 in placements 1 to 6 (−6.55 LLC),
+  57 in 7 to 12 (−13.45), 22 from 13 on (−4.48). By size: one notch 73, two 27, three 5.
+- What `F_LR` does at the placement: 96% of the net fall of `F_LR` along the 20 walls happens at the lower LLC
+  placements (−12.57 of −13.07; same −0.04, same LLC −0.45). Of the 102 lower LLC decisions with an `F_LR` before
+  them (3 are a wall's first placement), the LLM's candidate lowers `F_LR` in 65, where the rule's candidate would
+  have kept it in 58, raised it in 5 and lowered it too in 2; it keeps `F_LR` in 33 and raises it in 4 where the
+  rule's candidate would have raised it (more). Over all 339 `TH_T80` decisions with an `F_LR` before, the best
+  candidate on offer lowers `F_LR` in 11 only. All to one LLC notch.
+- What the LLM took instead, by the scores it was shown: at the 105 lower LLC decisions its candidate is higher than
+  the rule's on NHR in 94, on GDS in 77, on IWR in 75 and on LFR in 88; higher on all four in 51, on three in 31, on
+  two in 14, on one in 9. It is the candidate of Wang's cascade in 34 of them; the rule's candidate is in 6.
+- What the LLM wrote: it asked `check_after` about the rule's candidate in 71 of the 105 and about at least one
+  candidate at the rule's LLC in 95; the rationale names the rule's candidate in 85 (by pose 65, by stone only 20)
+  and names a candidate at the rule's LLC by pose in 92. The LLC given up is the same whether the rule's candidate
+  was asked about or not (−0.228 a decision over 71, −0.243 over 34). In the 85 sentences about the rule's candidate,
+  what follows "but" or "though" is height in 57, the local void in 52, density in 45, interlocking in 44, next-step
+  poses in 26 and LLC in 3 (keyword tags, a rough aid). A `TH_T80` decision has 15.0 candidates on average and the
+  LLM asks about 7.2 of them.
+- Ten decisions read by hand (examples, not statistics): the 5 that give up three notches and, of the 27 that give
+  up two, the 5 with the largest fall of `F_LR`. Seed 717 wall 4 placement 16 (S15 at 0°, LLC 0.172, against the
+  rule's S1 at 270°, 0.690; `F_LR` 0.604 → 0.101); 484 walls 1 to 4 placement 6 (S17 at 90°, 0.517, against S18 at
+  0°, 1.034; 0.952 → 0.568); 313 wall 4 placement 10 (S3 at 180°, 0.517, against S4 at 0°, 0.862; 0.933 → 0.458);
+  720 wall 2 placement 8 (S6 at 270°, 0.345, against S13 at 180°, 0.690; 0.758 → 0.288); 720 walls 1 and 3
+  placement 11 (S14 at 90°, 0.517, against S8 at 0°, 0.862; 0.835 → 0.476); 761 wall 4 placement 12 (S5 at 180°,
+  0.345, against S4 at 0°, 0.690; 0.745 → 0.407). In all ten the rationale states the lower LLC as a cost it accepts
+  for the balance of the other scores ("moderate LLC", "Its cost is LLC 0.345", "accepting the lower immediate load
+  score", "rather than prioritizing LLC or interlocking alone"). In all ten the rule's candidate has GDS 0 and a
+  lower NHR than the LLM's. A candidate at the rule's LLC was asked about and named by pose in all ten (the rule's
+  own in 2) and set aside for a weak score (in seed 484, S13 at 0° with LLC 1.034 for its NHR of −3.556).
+- After the placement the count of such decisions does not order the walls. Spearman of a wall's summed LLC given up
+  and its final `F_LR` difference is +0.44 on `TH_T80` (p 0.053) and −0.56 on `TH_T20` (p 0.010): opposite signs.
+  By seed on `TH_T80`, final `F_LR` of the four LLM walls (mean) against the `pick_safe` wall's: 313 0.394 against
+  0.652; 484 0.372 against 0.669; 717 0.254 against 0.301; 720 0.327 against 0.181; 761 0.301 against 0.500. The LLM
+  walls end between 0.25 and 0.39 in every seed; what varies is where the `pick_safe` wall ends. In 717 and 720 the
+  `pick_safe` wall falls at its own last stones (0.68 → 0.37 → 0.30, and 0.62 → 0.18), with the highest LLC it was
+  offered. Seed 313 has the fewest lower LLC decisions and the second largest gap: three of its walls take a lower
+  LLC at placements 9, 10 and 11 and the fourth at placement 10, `F_LR` goes from 0.82 or 0.93 to 0.46 and stays
+  there for the rest of the wall, while the `pick_safe` wall goes down slowly to 0.65.
+- From which placement the LLM wall stays below the `pick_safe` wall of its seed, `TH_T80`: 313 from placement 9
+  (three walls) and 10, 484 from 2 (four walls), 761 from 1 and 7, each a lower LLC decision; 761 from 5 and 16 and
+  717 wall 4 from 15, each a same decision; never in the other seven walls, which do not end below.
+- The last decision of a wall, `TH_T80`: lower LLC in 6 of the 20 walls (484 walls 1, 2 and 4 and 717 walls 2 and 3,
+  0.345 against 0.517; 761 wall 4, 0.172 against 0.517). In the other 14 the LLM took the rule's LLC (0.172 to
+  0.517), which in every such wall of seeds 313 and 484 is already below the final `F_LR` of the `pick_safe` wall
+  (0.65 and 0.67): by then the wall no longer offers that level.
+- `TH_T20` as the contrast: the same behaviour, 85 lower LLC and 6 unsafe decisions of 427 (21%), the LLM's candidate
+  higher on NHR in 81 of the 85, nearly all of the net fall of `F_LR` at those placements (−10.47 of −10.54), and a
+  final `F_LR` below the `pick_safe` wall's in 14 of 20 walls. The behaviour is not particular to `TH_T80`. What
+  differs: `TH_T80` offers more candidates (15.0 a decision against 8.8) and larger steps are given up there (two
+  notches or more in 32 of 105 against 7 of 85); and on `TH_T80` the other three metrics do not end above
+  `pick_safe` (`F_SF` −0.046, `F_AH` −0.272, `F_AV` −0.147, inside 2 SE, sections above), so the LLC given up is not
+  seen to be paid back there.
+- Against the four explanations fixed beforehand. Gives up LLC for the other scores: fits, by the classes, by the
+  scores of the two candidates and by the rationales. Takes unsafe candidates: no, none on `TH_T80`. Did not see the
+  candidate: mostly no; the LLC of every candidate is in the observation, a candidate at the rule's LLC is asked
+  about in 95 and named in 92 of the 105, and the loss is the same when the rule's candidate was not asked about;
+  the rule's own candidate is not named in 20. Not the choice at the step: no for where `F_LR` falls (96% at the
+  lower LLC placements), yes in that the number of such choices does not explain the seeds (720 has twice as many
+  a wall as 313 and ends above, because the `pick_safe` wall ends low there).
+- In line with the pick-5 section above: shown the list of the safe candidates with the highest LLC, the LLM's walls
+  gain `F_LR` (+0.49 z) and lose `F_AV` (−0.51 z).
+- Limits: no cause is shown. What a wall would be had the LLM taken the rule's candidate at one decision needs a new
+  wall, and none is built; from the first differing decision on, the two walls of a block are different walls. The
+  rationale is the LLM's own account, not necessarily why it chose. The keyword tags are rough. Only `F_LR` is
+  followed along the wall. 20 walls of five seeds a scene, and the four walls of a seed are not independent (some
+  are the same placement for placement over long stretches). Several tables were added after the first numbers were
+  seen (the plan lists them).
