@@ -2,6 +2,13 @@
 
 數字與表格都在 [`research/findings.md`](../../research/findings.md)，本文只寫結論，並註明出自哪一節。
 
+## 重點
+
+1. 讓 LLM 選整面牆的每一步，10 種牆況各蓋 4 面共 40 面，四項指標平均比 Wang 好，10 種裡 7 種領先；照論文的原解析度重算後仍然成立。
+2. 但 LLM 沒有贏過不用 LLM 的簡單規則 `pick_safe`（只在安全的候選裡選 LLC 最高的）：兩者四項平均打平，`F_LR` 還是 `pick_safe` 高。
+3. 多給 LLM 一份「安全而且 LLC 最高」的名單（pick-5）後，`F_LR` 上升，但 `F_AV` 下降，四項平均沒有變好，所以不採用。
+4. 限制：只做了 `TH` 牆、5 個種子，沒有保留新的種子來驗證；`AL` 牆還沒有結果。
+
 ## 最新結果：用論文的原解析度重算，三個結論都成立
 
 出處：findings.md 的「Whole wall: three conclusions recomputed at the original resolution」。
