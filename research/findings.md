@@ -531,10 +531,9 @@ it to other blocks would need. 18 overall comparisons, no correction for their n
   scenes only.
 
 ## Whole wall: the safe top-LLC list shown to the LLM (`TH_T80`, `TH_T20`, 40 walls, US$6.19)
-**Pending: the conclusion awaits confirmation by a recomputation at the original resolution (結論待原解析度重算確認).**
-Every `F_*` and z of this section, as of the sections above, is computed on the simulation grid (half resolution); the
-paper renders a wall at the stones' original resolution first, and `F_AH` and `F_AV` can differ between the two
-images. The finished walls are to be recomputed that way, free; until then the reading below is provisional.
+**Recomputed at the original resolution: the reading holds (last section).** Every `F_*` and z of this section, as of
+the sections above, is computed on the simulation grid (half resolution); the paper renders a wall at the stones'
+original resolution first.
 
 The whole-wall pick with one more piece of information (pick-5): at every decision the observation carries
 `safe_top_llc`, the ids of the safe candidates (no 0 in their `check_after` row) whose shown LLC equals the highest
@@ -586,3 +585,58 @@ at 2 SE. Plan: `docs/plans/llm-safe-top-hint.md`; tables `research/studies/safe-
 - Limits: the control (pick-4) was built earlier the same day, not interleaved with the new walls; 10 blocks of all
   five seeds, none held out; `pick_safe` has one wall a block; the list and the request to explain are one treatment
   and are not told apart; `TH` scenes only; grid metrics (see the note at the top of this section).
+
+## Whole wall: three conclusions recomputed at the original resolution (`TH_T80`, `TH_T20`, 1,300 walls, free)
+Every `F_SF`, `F_AH` and `F_AV` of the sections above is computed on the simulation grid (half resolution, 279 × 405);
+the paper draws the wall at the stones' original resolution with 02 first (559 × 810), and an independent check with
+Wang's own code (`docs/reviews/wall-pictures/metrics-check.md` at `e85b4ae`) found that `F_AH` and `F_AV` can differ
+a lot between the two images. The 1,300 finished walls of the 10 `TH` blocks (the 1,200 factorial walls for the z
+scale, 20 of `wang_safe` and `pick_safe`, the 40 pick-4 repeats, the 40 pick-5 walls) were measured again with
+`wall_metrics.wall_quality` in three renderings: A the author canvas (02 as it is: tops beyond row 400 cut, a stone
+that overlaps earlier ones by 200 px or more not drawn), B the corrected canvas (stones whole, the formal
+`wang-quality-v1`), C the corrected canvas with every stone drawn (sensitivity only). The z scores are rebuilt in
+each rendering from the block's 120 walls; the comparisons and standard errors are those of the sections above.
+Fixed before the measurement: a conclusion holds when A and B both meet its 2 SE rule; conclusions 1 and 2 are judged
+on pick-4. Nothing was built and no LLM was called. Plan: `docs/plans/original-resolution-recheck.md`; module
+`research/analysis/original_resolution.py`; tables `research/studies/original-resolution-recheck/`.
+
+| Conclusion and its rule, 10 blocks | Grid | A author | B corrected | C every stone | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1. pick-4 − Wang, mean z, ≥ 2 SE | +0.472 (7.8) [2.2] | +0.565 (9.8) [2.6] | +0.610 (10.8) [2.9] | +0.559 (9.7) [2.7] | holds |
+| 2. pick-4 − `pick_safe`, mean z, inside 2 SE | −0.067 (−1.1) [−0.3] | −0.066 (−1.2) [−0.3] | −0.111 (−1.97) [−0.5] | −0.086 (−1.5) [−0.4] | holds |
+| 3. pick-5 − pick-4, `F_AV` z, ≤ −2 SE | −0.509 (−2.8) [−1.7] | −0.382 (−2.02) [−1.1] | −0.436 (−2.5) [−1.4] | −0.483 (−2.6) [−1.5] | holds |
+| 3. pick-5 − pick-4, `F_LR` z | +0.494 (2.2) [1.8] | the same | the same | the same | not tested: no image in `F_LR` |
+
+Mean difference (SE within) [SE between blocks], as in the sections above.
+
+- Checks, all passed before the reading: the port against Wang's own code on the 7 walls of `e85b4ae`, largest
+  difference 3.6e-15; the grid values through the new path against the published tables, 1.1e-16 (with the z of the
+  rule walls rounded to 6 decimals as their source `runs/batch/whole-wall-rules.csv` has them; the reading is not
+  rounded); `F_LR` against the recorded one in every rendering, 9.7e-17; 1,300 walls evaluated, no metric missing.
+- All three conclusions hold in A and in B. Two sit on the line: conclusion 2 in B (−1.97 SE against a rule of
+  inside 2) and the `F_AV` fall in A (−2.02 SE against a rule of 2 or more).
+- Above Wang: larger on the paper's image, from `F_AH` (+0.838 z in A and +1.054 in B; grid +0.643). Positive on 7 of
+  the 10 blocks in every rendering. `TH_T80` is now outside the spread too: +0.392 (5.2 SE) in A and +0.422 (5.7) in
+  B, grid +0.170 (2.0); `TH_T20` +0.739 (8.4) and +0.798 (9.4), grid +0.773 (9.2). Not below Wang: 29 (A) and 28 (B)
+  of the 40 pick-4 walls, grid 26.
+- Level with `pick_safe` is the mean of two opposite scenes, as on the grid: `TH_T20` +0.256 (2.9 SE) in A and
+  +0.165 (2.0) in B; `TH_T80` −0.389 (−5.2) and −0.387 (−5.2); grid +0.201 (2.4) and −0.335 (−3.8). Positive on 4 of
+  the 10 blocks. `F_LR` stays −0.752 (−6.0).
+- Against `wang_safe` (described): pick-4 +0.282 (4.9 SE) in A and +0.293 (5.2) in B, grid +0.280 (4.6); on `TH_T80`
+  alone inside the spread in every rendering (−0.071 and −0.080).
+- pick-5 against pick-4, the other quantities (described): `F_AH` falls on the paper's image, −0.504 (−2.8 SE) in A
+  and −0.460 (−3.0) in B, grid −0.133 (−0.8); mean z −0.152 (−1.4) and −0.136 (−1.4), grid −0.081 (−0.8), still
+  inside 2 SE; `F_SF` −0.216 (−2.0) and −0.140 (−1.3). `F_AV` falls on 5 of the 10 blocks in A and in B (grid 8), and
+  per scene `TH_T20` −0.580 (−2.2) and −0.546 (−2.4), `TH_T80` −0.183 (−0.7) and −0.327 (−1.2). Not standardized:
+  `F_AV` −1.15 (A) and −1.32 (B), grid −1.71; `F_AH` +0.53 and +0.51, grid +0.15.
+- pick-5 against the opponents (described, does not change a verdict): above Wang +0.414 (4.7 SE) [2.4] in A and
+  +0.474 (5.8) [2.4] in B, grid +0.391 (4.8); below `pick_safe` beyond 2 SE on the paper's image, −0.218 (−2.5)
+  [−1.2] and −0.246 (−3.0) [−1.5], grid −0.147 (−1.8); against `wang_safe` +0.130 (1.5) and +0.158 (1.9), grid
+  +0.199 (2.4).
+- Stones 02 does not draw (the same walls in A and B, one stone each in these groups, all on `TH_T80`): 7 of the 40
+  pick-4 walls, 5 of the 40 pick-5, 2 of Wang's 10, 1 of `wang_safe`'s 10, none of `pick_safe`'s; 160 of the 1,200
+  factorial walls. With every stone drawn (C) the three verdicts are the same. The author canvas cuts 3,400 to 5,200
+  px a wall on average by group; the corrected canvas under 11.
+- Limits: a check afterwards on the same walls, no new data; the 2 SE rules and the conclusions were first read on
+  the grid; many numbers are read (4 renderings, 7 comparisons, 6 quantities) and only the four rows of the table
+  give a verdict; Wang, `wang_safe` and `pick_safe` have one wall a block; 10 blocks of five seeds, `TH` scenes only.
